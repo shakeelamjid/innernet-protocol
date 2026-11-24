@@ -1,0 +1,13 @@
+# OPTIONAL v0.5.0 isolated mailbox research container; never used by existing Coolify services.
+FROM python:3.12-slim
+WORKDIR /app
+COPY pyproject.toml LICENSE README.md ./
+COPY innernet2 ./innernet2
+RUN python -m pip install --no-cache-dir . \
+    && groupadd -g 10001 innernet \
+    && useradd -u 10001 -g 10001 --no-create-home innernet \
+    && mkdir -p /var/lib/innernet-mailbox \
+    && chmod 0700 /var/lib/innernet-mailbox \
+    && chown 10001:10001 /var/lib/innernet-mailbox
+USER 10001:10001
+ENTRYPOINT ["python", "-m", "innernet2.mailbox"]

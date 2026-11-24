@@ -1,0 +1,10 @@
+{
+  "nodes": [
+    {
+      "id": "node-contabo-01",
+      "url": "https://node1.innernetcorp.com",
+      "public_key": "d3a94de447f66d67b3e202df9c24ad93615ef2bf96225acb10a16f51f6a0a4b0",
+      "failure_domain": "contabo-vmi3351204"
+    }
+  ]
+}

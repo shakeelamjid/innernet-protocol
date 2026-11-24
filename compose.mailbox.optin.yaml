@@ -1,0 +1,42 @@
+# ADDITIONAL optional research container. NOT connected to existing Coolify.
+# Host port is 127.0.0.1 by default; no public exposure without a separately
+# audited firewall/pinning/operations plan. SYNTHETIC DATA ONLY.
+services:
+  mailbox-v050:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.mailbox
+    command:
+      - serve
+      - --identity
+      - /var/lib/innernet-mailbox/server.key
+      - --db
+      - /var/lib/innernet-mailbox/messages.sqlite
+      - --allow-client
+      - ${INN_MAILBOX_SENDER_PUB:?Provide pinned test sender Ed25519 public key}
+      - --allow-client
+      - ${INN_MAILBOX_RECIPIENT_PUB:?Provide pinned test recipient Ed25519 public key}
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "29411"
+      - --max-seconds
+      - "600"
+      - --acknowledge-public-udp
+      - --legacy-plaintext
+    ports:
+      - "${INN_MAILBOX_BIND_IP:-127.0.0.1}:29411:29411/udp"
+    volumes:
+      - mailbox_v050_private:/var/lib/innernet-mailbox
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    restart: "no"
+volumes:
+  mailbox_v050_private:

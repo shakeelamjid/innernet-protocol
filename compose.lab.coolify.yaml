@@ -1,0 +1,39 @@
+# OPTIONAL SECOND Coolify resource, NOT a replacement for the live v0.2/v0.3 node1 app.
+# 9 logical nodes on ONE Contabo server: process-failure testing only.
+# Security: private write APIs are bound on the VPS LOOPBACK; no Coolify domains.
+services:
+  lab:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    command: ["python", "-m", "deploy.lab_mesh"]
+    environment:
+      INN_LAB_DATA: /var/lib/innernet-lab/mesh
+    volumes:
+      - innernet_lab_data:/var/lib/innernet-lab
+    ports:
+      - "127.0.0.1:19401:19401"
+      - "127.0.0.1:19402:19402"
+      - "127.0.0.1:19403:19403"
+      - "127.0.0.1:19404:19404"
+      - "127.0.0.1:19405:19405"
+      - "127.0.0.1:19406:19406"
+      - "127.0.0.1:19407:19407"
+      - "127.0.0.1:19408:19408"
+      - "127.0.0.1:19409:19409"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:19401/.well-known/innernet-node', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+volumes:
+  innernet_lab_data:

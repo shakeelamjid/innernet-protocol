@@ -1,0 +1,58 @@
+{
+  "warning": "All keys here are public test material; never use for real storage.",
+  "vector_version": 2,
+  "root_secret_hex": "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f",
+  "root_capability": "inn2_AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "root_lookup_id": "98d11fe32b927affe8969e596e127b8bf06c4d2d3d561c9280145c67f758e4d6",
+  "root_ed25519_public_key": "4086f29ff3467042bbd184c02ec158973c3f7cc6785241f0a00f8ba85c5554b2",
+  "object_id": "000102030405060708090a0b0c0d0e0f",
+  "input_size": 16384,
+  "input_sha256": "a1f259d4365ed4320c377ce26f5c8c56dcdc9a89e7b641bfd8eabfbbeac86654",
+  "ciphertext_length": 16400,
+  "ciphertext_sha256": "b80471c97d0ddc6847b6d04b805c94e5059213739c45d3d10232dd14f1d34588",
+  "ciphertext_first_32_hex": "b72340d712329fd9f22c6d26dc4aceb5870ac756491b73593b3f8b06d2c3529b",
+  "mixed_length": 20480,
+  "mixed_sha256": "975bf1f18cfc5f122917fba5aac47b443ba22af01628a5b17ca1b53cdce705a1",
+  "data_shard_sha256": [
+    "b11b3c2a83411fbb5c6b3f295bd56b2fdf903d930c43f5218a0aeffe2f3f6189",
+    "8b3c3a4483f31e598e8079ebdb039d6898acb329ec9317e1c757e5f47a09b95b",
+    "a53d993e669eeeac5a86b972bb5f2c043ec763a99db9dbb20e25155b50f0eb15",
+    "bc42eda84f4350433eff7274d1600d69e8c5796998b40e515635865b32a4920a",
+    "aeab08a3da4e89ca0e2ddf3de3f5b2a89d667e73820b6629d005305c5d0d7c7d",
+    "3491a7bdd5a2ea2995e83eb683c1f051681f65cc50edb5f1247b693127471c4f"
+  ],
+  "metadata_ciphertext_length": 946,
+  "metadata_ciphertext_sha256": "202ace5eda3307663acc4a9b8b9bdf3f29779a4fb3552b5a280c941921da3796",
+  "metadata_shard_sha256": [
+    "7688d184f005048d89cd1138d0941360c790848addebe372e1c1d35497da27ee",
+    "ddff63a79f750792a0d412099fcd5e9110094159fae55b56ff8aade872e182c7",
+    "5ff6b4f41e2b00b38bba3b9f19ab9c57428b5397b416338c17c80cc18bf8cd90"
+  ],
+  "signed_root_record": {
+    "protocol_version": 2,
+    "sequence": 0,
+    "cipher_length": 946,
+    "index_cell": 64,
+    "index_k": 2,
+    "index_n": 3,
+    "fragments": [
+      {
+        "node": "node-07",
+        "sha256": "7688d184f005048d89cd1138d0941360c790848addebe372e1c1d35497da27ee",
+        "bytes": 480
+      },
+      {
+        "node": "node-08",
+        "sha256": "ddff63a79f750792a0d412099fcd5e9110094159fae55b56ff8aade872e182c7",
+        "bytes": 480
+      },
+      {
+        "node": "node-09",
+        "sha256": "5ff6b4f41e2b00b38bba3b9f19ab9c57428b5397b416338c17c80cc18bf8cd90",
+        "bytes": 480
+      }
+    ],
+    "public_key": "4086f29ff3467042bbd184c02ec158973c3f7cc6785241f0a00f8ba85c5554b2",
+    "signature": "e554d0b5badcbcdb2e46c792bd1ac9a57e8778eb6ffbb2988113bbd1ae81617e05227f0fc4b9486682bb9df8055c246dbacee05c31024a15da5683fc904a950b"
+  }
+}

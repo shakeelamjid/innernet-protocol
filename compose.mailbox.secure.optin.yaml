@@ -1,0 +1,43 @@
+# INNERnet v0.6.0-alpha: OPTIONAL, independent research mailbox service.
+# Host binds only 127.0.0.1 by default. This does NOT edit Coolify or old Compose.
+# Requires IE60 authenticated recipient-only ciphertext; synthetic data only.
+# A 600-second listener lifetime means this is NOT a production deployment.
+services:
+  secure-mailbox-v060:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.mailbox
+    command:
+      - serve
+      - --identity
+      - /var/lib/innernet-mailbox/server.key
+      - --db
+      - /var/lib/innernet-mailbox/messages.sqlite
+      - --allow-client
+      - ${INN_V060_SENDER_PUB:?Supply a pinned disposable sender Ed25519 public key}
+      - --allow-client
+      - ${INN_V060_RECIPIENT_PUB:?Supply a pinned disposable recipient Ed25519 public key}
+      - --require-e2ee
+      - --bind
+      - 0.0.0.0
+      - --port
+      - "29412"
+      - --max-seconds
+      - "600"
+      - --acknowledge-public-udp
+    ports:
+      - "127.0.0.1:29412:29412/udp"
+    volumes:
+      - secure_mailbox_v060:/var/lib/innernet-mailbox
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+    restart: "no"
+volumes:
+  secure_mailbox_v060:

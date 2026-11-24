@@ -1,0 +1,35 @@
+# OPTIONAL ADDITIONAL resource. Not connected to existing Coolify node, gateway,
+# or 9-node lab. Binds VPS loopback by default; NEVER publish without explicit
+# authorization, independent pinned client identities, and firewall review.
+services:
+  live-udp-alpha:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.native_udp
+    command:
+      - sh
+      - -c
+      - >-
+        exec python -m innernet2.native_udp serve
+        --identity /var/lib/innernet-native/server.key
+        --allow-client "$${INN_NATIVE_CLIENT_PUB}"
+        --bind 0.0.0.0 --port 29410 --max-seconds 3600
+        --acknowledge-public-udp
+    environment:
+      INN_NATIVE_CLIENT_PUB: ${INN_NATIVE_CLIENT_PUB:?Set your pinned 64-character client public key}
+    ports:
+      - "${INN_NATIVE_BIND_IP:-127.0.0.1}:29410:29410/udp"
+    volumes:
+      - native_alpha_identity:/var/lib/innernet-native
+    restart: "no"
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 32
+    mem_limit: 128m
+volumes:
+  native_alpha_identity:

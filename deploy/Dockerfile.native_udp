@@ -1,0 +1,14 @@
+# v0.4.1 EXPERIMENTAL native UDP sidecar, isolated from existing Coolify apps.
+FROM python:3.12-slim
+ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 PIP_NO_CACHE_DIR=1
+WORKDIR /app
+COPY pyproject.toml LICENSE README.md ./
+COPY innernet2 ./innernet2
+RUN python -m pip install --no-cache-dir . \
+ && groupadd -g 10001 innernet \
+ && useradd -u 10001 -g 10001 --no-create-home innernet \
+ && mkdir -p /var/lib/innernet-native \
+ && chown 10001:10001 /var/lib/innernet-native
+USER 10001:10001
+EXPOSE 29410/udp
+CMD ["python", "-m", "innernet2.native_udp", "local-qualify"]

@@ -1,0 +1,58 @@
+# INNERnet optional HTTP storage research pilot: PUBLIC READ-ONLY GATEWAY, PRIVATE WRITABLE NODE.
+# This profile is NOT part of the supported ST81/OB80-2/R90/UV10 scoped core.
+# Do not publish the 'node' service as a Coolify domain or publish its host port.
+services:
+  node:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      INN_NODE_ID: ${INN_NODE_ID:-node-contabo-01}
+      INN_PUBLIC_URL: ${INN_PUBLIC_URL:?Set_INN_PUBLIC_URL_in_Coolify}
+      INN_CAPACITY_BYTES: ${INN_CAPACITY_BYTES:-268435456}
+      INN_NODE_DATA: /var/lib/innernet/node
+    volumes:
+      - innernet_node_data:/var/lib/innernet
+    expose:
+      - "9400"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9400/.well-known/innernet-node', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 60s
+  gateway:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.gateway
+    depends_on:
+      node:
+        condition: service_healthy
+    expose:
+      - "8080"
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /var/cache/nginx
+      - /var/run
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+volumes:
+  innernet_node_data:
