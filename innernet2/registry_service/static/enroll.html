@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Add a passkey · INNERnet providers</title>
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/enroll.js" defer></script>
+</head>
+<body>
+  <header class="top"><div class="wrap"><a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a></div></header>
+  <section class="center">
+    <div class="panel frame">
+      <h1>Add a passkey</h1>
+      <p id="intro">A passkey lets you open your provider dashboard from any device, without your provider key. It cannot sign anything for the network.</p>
+      <label for="pk-name">Name for this passkey</label>
+      <input id="pk-name" maxlength="40" autocomplete="off" placeholder="e.g. Laptop, Phone">
+      <button class="btn btn-light" id="enroll-btn">Create passkey</button>
+      <p class="msg" id="enroll-msg" role="status"></p>
+    </div>
+  </section>
+</body>
+</html>

@@ -16,7 +16,7 @@ Windows (PowerShell):
 irm https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.ps1 | iex
 ```
 
-The installers download the build for your system from the latest `provider-v*` GitHub release and refuse to install if its SHA-256 does not match `SHA256SUMS` in the same release. Signed releases (so a compromised GitHub account cannot ship a bad binary) are planned. You can also build from source with Go 1.23+: `cd provider && go build -o innernet-provider .`
+The installers find the newest `provider-v*` release through the GitHub API, or, when that is unavailable or rate-limited, from `provider/LATEST` in the repository (update that file with every release). They download the build for your system and refuse to install if its SHA-256 does not match `SHA256SUMS` in the same release. Signed releases (so a compromised GitHub account cannot ship a bad binary) are planned. You can also build from source with Go 1.23+: `cd provider && go build -o innernet-provider .`
 
 ## Set up, step by step
 
@@ -78,4 +78,4 @@ Never put the contents of `identity.key`, a wallet seed phrase or any private ke
 
 ## Status of this tool
 
-Draft. The registry endpoints (`/apply`, `/providers/<id>/status`, `/login`) are not live yet; `apply` keeps your signed form and tells you so. The provider service daemon that actually serves storage, relay and compute arrives with M1 part 2.
+Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_REGISTRY_SERVICE.md`); until it is deployed, `apply` keeps your signed form and tells you so. The provider service daemon that actually serves storage, relay and compute arrives with M1 part 2.

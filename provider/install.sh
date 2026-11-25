@@ -30,9 +30,14 @@ esac
 
 tag="${INNERNET_VERSION:-}"
 if [ -z "$tag" ]; then
-  tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" \
+  # GitHub API first; it allows only 60 unauthenticated requests per hour per IP,
+  # so fall back to provider/LATEST in the repository.
+  tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
     | grep -o '"tag_name": *"provider-v[^"]*"' | head -n 1 | sed 's/.*"\(provider-v[^"]*\)"/\1/') || true
-  [ -n "$tag" ] || die "no provider release published yet"
+  if [ -z "$tag" ]; then
+    tag=$(curl -fsSL "https://raw.githubusercontent.com/$REPO/main/provider/LATEST" 2>/dev/null | tr -d ' \r\n') || true
+  fi
+  [ -n "$tag" ] || die "could not find the latest release; set INNERNET_VERSION=provider-vX.Y.Z"
 fi
 case "$tag" in provider-v*) ;; *) die "bad version tag: $tag" ;; esac
 

@@ -2,6 +2,16 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Registry service and dashboard (M1b part 2)
+
+- `innernet2/registry_service`: FastAPI + SQLite service. `apply`, `status`, CLI `login`, signed `registry.json`, `registry-key`. Accepts only networks with a configured fee wallet, checks payout addresses are contracts, rejects payout contracts shared between providers.
+- Provider dashboard at `/registry/dashboard`: status, reachability (24 h / 7 d / 30 d), activity per service, 30-day and all-time earnings with the 1% fee, daily chart, every payment with its split and explorer link, offer, passkeys (add, rename, remove), signed-in devices (sign out), activity log. Public page per provider.
+- Passkey login (WebAuthn, discoverable credentials) bootstrapped by `innernet-provider login`; one-time link token in the URL fragment; `__Host-` session cookies; CSRF header and Origin checks; strict CSP with nothing inline; per-IP rate limits.
+- Payments read from USDC `Transfer` events on Base Sepolia (cursor per payout contract, 5 confirmations). Reachability probes with automatic suspension below 95% over 7 days. Operator commands (`list`, `approve`, `suspend`, `remove`).
+- `deploy/Dockerfile.registry`, `docs/IRM1_REGISTRY_SERVICE.md` (Coolify path route `https://innernetcorp.com:8080/registry`). Signing key created on first start in the private volume.
+- `tests/test_registry_service.py`: 10 tests, including a software passkey driving real WebAuthn verification, a fake chain, probe suspension, a signed document checked with `verify_registry`, and the Go CLI (`apply`, `status`, `login`) against a live server.
+- Installers fall back to `provider/LATEST` when the GitHub API is unavailable or rate-limited.
+
 ### Provider CLI (M1b part 1)
 
 - `provider/`: `innernet-provider`, a Go command-line tool with no third-party dependencies, for Linux, macOS and Windows. Commands: `init` (step by step, or `--yes` with flags), `show`, `wallet set`, `apply`, `status`, `login`, `backup`, `restore`, `version`.

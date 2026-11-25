@@ -1,0 +1,21 @@
+# INNERnet provider registry and dashboard (IRM-1 draft, testnet first).
+# Coolify: Dockerfile build pack, this file, port 8080, domain https://innernetcorp.com:8080/registry,
+# persistent volume at /var/lib/innernet-registry, health check path /registry/healthz.
+FROM python:3.12-slim
+WORKDIR /app
+COPY pyproject.toml LICENSE README.md ./
+COPY innernet2 ./innernet2
+RUN python -m pip install --no-cache-dir ".[registry]" \
+    && groupadd -g 10001 innernet \
+    && useradd -u 10001 -g 10001 --no-create-home innernet \
+    && mkdir -p /var/lib/innernet-registry \
+    && chmod 0700 /var/lib/innernet-registry \
+    && chown 10001:10001 /var/lib/innernet-registry
+USER 10001:10001
+ENV INNERNET_REGISTRY_DB=/var/lib/innernet-registry/registry.db \
+    INNERNET_REGISTRY_KEY_FILE=/var/lib/innernet-registry/registry_ed25519 \
+    PYTHONUNBUFFERED=1
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/registry/healthz', timeout=4).status == 200 else 1)"
+ENTRYPOINT ["python", "-m", "innernet2.registry_service"]

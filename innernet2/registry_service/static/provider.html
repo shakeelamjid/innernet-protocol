@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Provider · INNERnet</title>
+  <link rel="stylesheet" href="../static/registry.css">
+  <script src="../static/provider.js" defer></script>
+</head>
+<body>
+  <header class="top"><div class="wrap"><a class="logo" href="/"><img src="../static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a><span class="spacer"></span><a class="btn btn-sm" href="../dashboard">Provider log in</a></div></header>
+  <main>
+    <div class="wrap">
+      <div class="head">
+        <div><h1 id="name">Provider</h1><p class="mono" id="pid"></p></div>
+        <span class="state" id="state"></span>
+      </div>
+      <p class="msg error" id="err" hidden></p>
+      <div class="grid" id="body" hidden>
+        <section class="card frame span-6"><h2>Offer</h2><dl class="kv" id="offer"></dl></section>
+        <section class="card frame span-6"><h2>Status</h2><dl class="kv" id="status"></dl></section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

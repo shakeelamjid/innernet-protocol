@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Provider dashboard · INNERnet</title>
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/dashboard.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a>
+      <span class="spacer"></span>
+      <span class="who" id="who"></span>
+      <button class="btn btn-sm" id="logout" hidden>Log out</button>
+    </div>
+  </header>
+
+  <section id="login" class="center" hidden>
+    <div class="panel frame">
+      <h1>Log in</h1>
+      <p>Use the passkey you added for your provider.</p>
+      <button class="btn btn-light" id="login-btn">Log in with a passkey</button>
+      <p class="msg" id="login-msg" role="status"></p>
+      <p class="note">No passkey yet, or lost it? On the machine with your provider key, run:</p>
+      <div class="terminal">innernet-provider login</div>
+    </div>
+  </section>
+
+  <main id="dash" hidden>
+    <div class="wrap">
+      <div class="head">
+        <div>
+          <h1 id="name"></h1>
+          <p class="mono" id="pid"></p>
+        </div>
+        <span class="state" id="state"></span>
+      </div>
+
+      <div class="grid">
+        <section class="card frame span-4">
+          <h2>Status</h2>
+          <dl class="kv">
+            <dt>State</dt><dd id="state-text"></dd>
+            <dt>Note</dt><dd id="reason"></dd>
+            <dt>Applied</dt><dd id="applied"></dd>
+            <dt>Listed</dt><dd id="listed"></dd>
+            <dt>Last check</dt><dd id="checked"></dd>
+          </dl>
+        </section>
+
+        <section class="card frame span-8">
+          <h2>Earnings, last 30 days</h2>
+          <div class="nums">
+            <div><span>Paid by clients</span><strong id="e-gross"></strong></div>
+            <div><span id="e-fee-label">Network fee</span><strong id="e-fee"></strong></div>
+            <div><span>To you</span><strong id="e-net"></strong></div>
+          </div>
+          <div class="bars" id="bars" aria-label="Daily earnings to you, last 30 days"></div>
+          <div class="bars-legend"><span id="bars-from"></span><span id="bars-to"></span></div>
+          <p class="sub" id="e-all"></p>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Health</h2>
+          <table>
+            <thead><tr><th>Window</th><th class="num">Reachable</th><th class="num">Checks</th></tr></thead>
+            <tbody id="health"></tbody>
+          </table>
+          <p class="sub">Listed providers are suspended automatically when reachability over 7 days drops below 95%.</p>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Activity</h2>
+          <table><tbody id="activity"></tbody></table>
+          <p class="sub">Leases, relayed traffic and compute jobs appear here once the provider service runs on your machine.</p>
+        </section>
+
+        <section class="card frame span-12">
+          <h2>Payments and splits</h2>
+          <div class="scroll">
+            <table>
+              <thead><tr><th>Time (UTC)</th><th>Network</th><th class="num">Paid</th><th class="num">To you</th><th class="num">Fee</th><th>Transaction</th></tr></thead>
+              <tbody id="splits"></tbody>
+            </table>
+          </div>
+          <p class="empty" id="splits-empty" hidden>No payments yet. They show up here a few minutes after they settle on-chain.</p>
+          <p class="sub">Read from public USDC transfers to your payout contract. Check any row on the block explorer.</p>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Offer</h2>
+          <dl class="kv" id="offer"></dl>
+          <p class="note">To change prices, capacity or services, run <code>innernet-provider init --force</code> and then <code>innernet-provider apply</code> on your machine. The dashboard cannot sign for you.</p>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Passkeys</h2>
+          <table><tbody id="passkeys"></tbody></table>
+          <button class="btn btn-sm" id="add-passkey">Add a passkey</button>
+          <p class="msg" id="passkey-msg" role="status"></p>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Signed-in devices</h2>
+          <table><tbody id="sessions"></tbody></table>
+        </section>
+
+        <section class="card frame span-6">
+          <h2>Activity log</h2>
+          <div class="scroll"><table><tbody id="audit"></tbody></table></div>
+        </section>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

@@ -327,8 +327,11 @@ Each milestone needs test vectors, CI coverage and an update to `docs/RELEASE_GA
 | `INNERNET_FEE_BPS` | Network fee in basis points | `100` (1%) |
 | `INNERNET_FEE_PAYTO_BASE` | Fee wallet on Base mainnet | `0x…` |
 | `INNERNET_FEE_PAYTO_BASE_SEPOLIA` | Fee wallet on Base Sepolia | `0x…` |
-| `INNERNET_REGISTRY_KEY_FILE` | Path to the active registry signing key (mounted secret, never an env value) | `/run/secrets/registry_ed25519` |
+| `INNERNET_REGISTRY_KEY_FILE` | Path to the active registry signing key (mounted secret or private volume, never an env value; created on first start if missing) | `/var/lib/innernet-registry/registry_ed25519` |
 | `INNERNET_SPLIT_CODEHASH` | Accepted split-contract code hash(es), comma separated | `0x…` |
+| `INNERNET_RPC_BASE_SEPOLIA`, `INNERNET_RPC_BASE` | JSON-RPC endpoints used to read payments and check payout contracts | `https://sepolia.base.org` |
+| `INNERNET_REGISTRY_ORIGIN`, `INNERNET_REGISTRY_RP_ID` | Dashboard origin and passkey domain | `https://innernetcorp.com`, `innernetcorp.com` |
+| `INNERNET_REGISTRY_DB` | SQLite database path (persistent volume) | `/var/lib/innernet-registry/registry.db` |
 
 Private keys MUST be mounted as files or secrets, never placed in environment variable values or the repository.
 

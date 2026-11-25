@@ -13,9 +13,15 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $tag = $env:INNERNET_VERSION
 if (-not $tag) {
-  $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
-  $tag = ($releases | Where-Object { $_.tag_name -like "provider-v*" } | Select-Object -First 1).tag_name
-  if (-not $tag) { throw "no provider release published yet" }
+  # GitHub API first (60 requests per hour per IP), then provider/LATEST in the repository.
+  try {
+    $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
+    $tag = ($releases | Where-Object { $_.tag_name -like "provider-v*" } | Select-Object -First 1).tag_name
+  } catch { $tag = $null }
+  if (-not $tag) {
+    try { $tag = (Invoke-RestMethod "https://raw.githubusercontent.com/$Repo/main/provider/LATEST").Trim() } catch { $tag = $null }
+  }
+  if (-not $tag) { throw "could not find the latest release; set `$env:INNERNET_VERSION = 'provider-vX.Y.Z'" }
 }
 if ($tag -notlike "provider-v*") { throw "bad version tag: $tag" }
 
