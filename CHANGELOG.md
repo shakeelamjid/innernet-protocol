@@ -2,6 +2,11 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Passkeys: set up again on the same device, lost passkeys
+
+- Website setup on a device that already holds a passkey for the machine no longer fails ("This device already has a passkey"): the page confirms the existing passkey instead (`claim-login` flow; a passkey of another machine is refused). A device without one adds a new passkey as before.
+- `start` lists the passkeys that already exist. New `innernet-provider passkeys [remove NAME]`, signed by the machine key (`passkey-list`, `passkey-remove` intents with a `target`); removing logs out every web session.
+
 ### Provider 0.3.0: background service, home networks, presence, hours, states, new terminal
 
 - **Background service:** `service install|status|uninstall` (systemd user or system unit, launchd agent, Task Scheduler); offered at the end of `start` (`--service` with `--yes`).
