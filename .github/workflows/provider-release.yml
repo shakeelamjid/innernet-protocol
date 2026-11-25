@@ -40,7 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* \
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exec gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* --clobber; gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* \
             --title "innernet-provider ${GITHUB_REF_NAME#provider-v}" \
             --notes "IRM-1 draft provider CLI (testnet). Verify downloads against SHA256SUMS." \
             --prerelease
