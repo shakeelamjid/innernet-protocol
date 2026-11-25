@@ -408,14 +408,29 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         """pause, resume, leave or reinstate, signed by the machine's key."""
         ip = client_ip(request)
         limiter.check("intent", ip, 20, 600)
+        record = await body_json(request)
         try:
-            prov, action, nonce = reg.verify_intent(await body_json(request))
+            prov, action, nonce = reg.verify_intent(record)
         except BulkError as exc:
             raise HTTPException(422, str(exc))
         if prov.hex() != pid:
             raise HTTPException(422, "intent is for another provider")
         if store.one("SELECT 1 FROM audit WHERE provider=? AND detail LIKE ?", (pid, f"%nonce {nonce}%")):
             raise HTTPException(409, "intent already used")
+        if action == "passkey-list":
+            store.audit(pid, "passkeys-listed", f"machine, nonce {nonce}", ip)
+            return {"passkeys": passkey_list(pid)}
+        if action == "passkey-remove":
+            target = reg.intent_target(record)
+            row = store.one("SELECT * FROM passkeys WHERE provider=? AND (cred_id=? OR name=?) ORDER BY created_at LIMIT 1",
+                            (pid, target, target))
+            if row is None:
+                raise HTTPException(404, "no passkey with that name or id")
+            with store.tx() as db:
+                db.execute("DELETE FROM passkeys WHERE cred_id=?", (row["cred_id"],))
+                db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (pid,))   # log out every web session
+            store.audit(pid, "passkey-removed", f"{row['name']} by machine, nonce {nonce}", ip)
+            return {"removed": row["name"], "passkeys": passkey_list(pid), "sessions_revoked": True}
         try:
             out = presence.apply_intent(store, pid, action, via=f"machine, nonce {nonce}", ip=ip)
         except BulkError as exc:
@@ -457,7 +472,11 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 (token_hash(code), token_hash(poll), pid, json.dumps(detected), now, now + CLAIM_TTL))
         store.audit(pid, "machine-connected", f"{detected.get('os', '')}/{detected.get('arch', '')}", ip)
         return {"code": code, "poll": poll, "expires_at": now + CLAIM_TTL,
-                "url": f"{settings.origin}{P}/claim#code={code}"}
+                "url": f"{settings.origin}{P}/claim#code={code}", "passkeys": passkey_list(pid)}
+
+    def passkey_list(pid: str) -> list[dict]:
+        return [{"id": r["cred_id"], "name": r["name"], "created_at": r["created_at"], "last_used": r["last_used"]}
+                for r in store.q("SELECT * FROM passkeys WHERE provider=? ORDER BY created_at", (pid,))]
 
     def claim_by_poll(request: Request) -> dict:
         poll = request.headers.get("x-poll-token", "")
@@ -709,8 +728,17 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.PREFERRED))
         flow = new_flow("claim", options.challenge, pid, None)
         store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], flow))
-        return {"flow": flow, "options": json.loads(options_to_json(options)), "name": name,
-                "machine": {k: detected.get(k) for k in ("host", "os", "arch")}}
+        out = {"flow": flow, "options": json.loads(options_to_json(options)), "name": name,
+               "machine": {k: detected.get(k) for k in ("host", "os", "arch")}}
+        if existing:
+            # This machine already has passkeys (it was set up before). If this device holds one of them,
+            # the browser refuses to make a second; the page then signs in with it instead.
+            login = generate_authentication_options(rp_id=settings.rp_id, allow_credentials=existing,
+                                                    user_verification=UserVerificationRequirement.PREFERRED)
+            lflow = new_flow("claim-login", login.challenge, pid, None)
+            store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], lflow))
+            out.update(login_flow=lflow, login_options=json.loads(options_to_json(login)))
+        return out
 
     @app.post(P + "/api/claim/verify")
     async def claim_verify(request: Request):
@@ -718,6 +746,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         ip = client_ip(request)
         limiter.check("claim", ip, 20, 600)
         data = await body_json(request)
+        if data.get("login"):
+            return claim_with_existing_passkey(request, data, ip)
         f = take_flow(data.get("flow", ""), "claim")
         try:
             v = verify_registration_response(credential=data.get("credential"), expected_challenge=f["challenge"],
@@ -735,6 +765,33 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                         str(data.get("name") or "Passkey").strip()[:40] or "Passkey", now))
         store.audit(f["provider"], "machine-claimed", "passkey added", ip)
         response = JSONResponse({"ok": True})
+        start_session(request, f["provider"], response)
+        return response
+
+    def claim_with_existing_passkey(request: Request, data: dict, ip: str):
+        """Claim the code by signing in with a passkey this machine already has."""
+        f = take_flow(data.get("flow", ""), "claim-login")
+        cred = data.get("credential") or {}
+        row = store.one("SELECT * FROM passkeys WHERE cred_id=? AND provider=?",
+                        (str(cred.get("rawId", cred.get("id", ""))), f["provider"]))
+        if row is None:
+            raise HTTPException(401, "That passkey belongs to a different machine.")
+        try:
+            v = verify_authentication_response(
+                credential=cred, expected_challenge=f["challenge"], expected_rp_id=settings.rp_id,
+                expected_origin=settings.origin, credential_public_key=row["public_key"],
+                credential_current_sign_count=row["sign_count"])
+        except Exception as exc:
+            raise HTTPException(401, f"passkey was not accepted: {exc}") from None
+        now = int(time.time())
+        with store.tx() as db:
+            cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
+                             "AND expires_at>?", (now, f["token_hash"], now))
+            if cur.rowcount != 1:
+                raise HTTPException(409, "This code was already used or has expired.")
+            db.execute("UPDATE passkeys SET sign_count=?, last_used=? WHERE cred_id=?", (v.new_sign_count, now, row["cred_id"]))
+        store.audit(f["provider"], "machine-claimed", f"signed in with passkey {row['name']}", ip)
+        response = JSONResponse({"ok": True, "existing": True})
         start_session(request, f["provider"], response)
         return response
 
