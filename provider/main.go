@@ -1,0 +1,569 @@
+// innernet-provider: register this machine's spare storage, bandwidth or
+// compute with the INNERnet resource market (IRM-1 DRAFT, testnet first).
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"crypto/ed25519"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"os/exec"
+	"regexp"
+	"runtime"
+	"strconv"
+	"strings"
+	"time"
+)
+
+var version = "0.1.0-draft" // set at build time with -ldflags "-X main.version=..."
+
+const defaultRegistry = "https://innernetcorp.com/registry/v1"
+
+func main() {
+	if len(os.Args) < 2 {
+		usage()
+		os.Exit(2)
+	}
+	cmd, args := os.Args[1], os.Args[2:]
+	var err error
+	switch cmd {
+	case "init":
+		err = cmdInit(args)
+	case "show":
+		err = cmdShow()
+	case "wallet":
+		err = cmdWallet(args)
+	case "apply":
+		err = cmdApply(args)
+	case "status":
+		err = cmdStatus()
+	case "login":
+		err = cmdLogin(args)
+	case "backup":
+		err = cmdBackup(args)
+	case "restore":
+		err = cmdRestore(args)
+	case "version", "--version", "-v":
+		fmt.Println("innernet-provider", version, runtime.GOOS+"/"+runtime.GOARCH)
+	case "help", "--help", "-h":
+		usage()
+	default:
+		fmt.Fprintf(os.Stderr, "unknown command %q\n\n", cmd)
+		usage()
+		os.Exit(2)
+	}
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "error:", err)
+		os.Exit(1)
+	}
+}
+
+func usage() {
+	fmt.Print(`innernet-provider ` + version + ` - rent out storage, bandwidth or compute on INNERnet (IRM-1 draft, testnet)
+
+Setup
+  init                 step-by-step setup: identity key, what you offer, prices
+  wallet set 0x...     set your payout split contract address
+  show                 print your provider details (safe to share)
+  backup FILE          write a passphrase-encrypted backup of your identity key
+  restore FILE         restore your identity key on this machine
+
+Registry
+  apply [--dry-run]    send your signed provider form to the registry
+  status               show your listing status (applied, testing, listed, removed)
+  login                get a one-time link to the web dashboard (add a passkey there)
+
+Other
+  version, help
+
+Files live in ~/.innernet/provider (override with INNERNET_HOME).
+`)
+}
+
+// ---------------- prompts ----------------
+
+var stdin = bufio.NewReader(os.Stdin)
+
+func ask(question, def string) string {
+	if def != "" {
+		fmt.Printf("%s [%s]: ", question, def)
+	} else {
+		fmt.Printf("%s: ", question)
+	}
+	line, _ := stdin.ReadString('\n')
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return def
+	}
+	return line
+}
+
+func askInt(question string, def int) int {
+	for {
+		v, err := strconv.Atoi(ask(question, strconv.Itoa(def)))
+		if err == nil && v >= 0 {
+			return v
+		}
+		fmt.Println("  please enter a whole number (0 or more)")
+	}
+}
+
+func askYes(question string, def bool) bool {
+	d := "n"
+	if def {
+		d = "y"
+	}
+	return strings.HasPrefix(strings.ToLower(ask(question+" (y/n)", d)), "y")
+}
+
+func readPassphrase(prompt string) (string, error) {
+	if p := os.Getenv("INNERNET_BACKUP_PASSPHRASE"); p != "" {
+		return p, nil
+	}
+	fmt.Print(prompt)
+	if runtime.GOOS != "windows" {
+		off := exec.Command("stty", "-echo")
+		off.Stdin = os.Stdin
+		if off.Run() == nil {
+			defer func() {
+				on := exec.Command("stty", "echo")
+				on.Stdin = os.Stdin
+				_ = on.Run()
+				fmt.Println()
+			}()
+		}
+	}
+	line, err := stdin.ReadString('\n')
+	if err != nil && line == "" {
+		return "", errors.New("no passphrase entered")
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+// ---------------- commands ----------------
+
+func cmdInit(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	yes := fs.Bool("yes", false, "non-interactive: take every value from flags")
+	c := &Config{Version: "1", Registry: defaultRegistry, Network: "base-sepolia", Port: 9443,
+		CPUs: 1, MemMiB: 512, Prices: map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100"}}
+	fs.StringVar(&c.Name, "name", "", "provider name")
+	fs.StringVar(&c.Region, "region", "", "region label, e.g. asia-south")
+	fs.StringVar(&c.Host, "host", "", "public DNS name or IP")
+	fs.IntVar(&c.Port, "port", c.Port, "public port")
+	fs.StringVar(&c.Network, "network", c.Network, "base-sepolia or base")
+	fs.StringVar(&c.Registry, "registry", c.Registry, "registry URL")
+	fs.IntVar(&c.Storage, "storage-gib", 0, "storage to offer in GiB (0 = none)")
+	fs.IntVar(&c.RelayCap, "relay-gib", 0, "relay bandwidth per month in GiB (0 = none)")
+	fs.BoolVar(&c.Compute, "compute", false, "offer sandboxed compute")
+	fs.IntVar(&c.CPUs, "cpus", c.CPUs, "max CPUs for compute jobs")
+	fs.IntVar(&c.MemMiB, "memory-mib", c.MemMiB, "max memory for compute jobs")
+	ps, pr, pc := fs.String("price-storage", c.Prices["STO-1"], "USDC per GiB-day"),
+		fs.String("price-relay", c.Prices["RLY-1"], "USDC per GiB"),
+		fs.String("price-compute", c.Prices["CMP-1"], "USDC per billion instructions")
+	force := fs.Bool("force", false, "overwrite an existing config (the identity key is kept)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if _, err := os.Stat(configPath()); err == nil && !*force {
+		return errors.New("already set up here; use --force to redo the setup (your key is kept)")
+	}
+	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc}
+
+	if !*yes {
+		fmt.Println("INNERnet provider setup. Press Enter to accept the value in [brackets].")
+		fmt.Println("This runs on TESTNET (Base Sepolia). No real money moves yet.")
+		fmt.Println()
+		hostname, _ := os.Hostname()
+		c.Name = strings.ToLower(ask("Provider name (lowercase, shown publicly)", orDefault(c.Name, sanitize(hostname))))
+		c.Region = strings.ToLower(ask("Region label (e.g. asia-south, eu-central)", orDefault(c.Region, "asia-south")))
+		fmt.Println()
+		fmt.Println("Other machines must be able to reach this one directly.")
+		fmt.Println("Home PCs behind a router can join once relay mode ships; for now use a public address.")
+		c.Host = ask("Public host name or IP", c.Host)
+		c.Port = askInt("Public port", c.Port)
+		fmt.Println()
+		c.Storage = askInt("Storage to offer, in GiB (0 = none)", orInt(c.Storage, 50))
+		if c.Storage > 0 {
+			c.Prices["STO-1"] = ask("  Price, USDC per GiB per day", c.Prices["STO-1"])
+		}
+		c.RelayCap = askInt("Bandwidth to relay per month, in GiB (0 = none)", c.RelayCap)
+		if c.RelayCap > 0 {
+			fmt.Println("  Check that your internet plan allows reselling bandwidth.")
+			c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
+		}
+		c.Compute = askYes("Offer sandboxed compute? Jobs run with no network or file access", c.Compute)
+		if c.Compute {
+			c.CPUs = askInt("  Max CPUs per job", c.CPUs)
+			c.MemMiB = askInt("  Max memory per job, MiB", c.MemMiB)
+			c.Prices["CMP-1"] = ask("  Price, USDC per billion instructions", c.Prices["CMP-1"])
+		}
+	}
+	if err := c.validate(false); err != nil {
+		return err
+	}
+	priv, err := loadKey()
+	if err != nil {
+		if priv, err = newKey(); err != nil {
+			return err
+		}
+		fmt.Println("Created a new identity key:", keyPath())
+	}
+	c.Created = time.Now().UTC().Format(time.RFC3339)
+	if err := saveConfig(c); err != nil {
+		return err
+	}
+	if err := writeDetails(c, providerID(priv)); err != nil {
+		return err
+	}
+	fmt.Println()
+	fmt.Println("Setup saved.")
+	fmt.Println("  Provider id:", providerID(priv))
+	fmt.Println("  Details:    ", detailsPath())
+	fmt.Println()
+	fmt.Println("Next: innernet-provider backup ~/innernet-provider-backup.json")
+	return nil
+}
+
+func orDefault(v, d string) string {
+	if v != "" {
+		return v
+	}
+	return d
+}
+
+func orInt(v, d int) int {
+	if v != 0 {
+		return v
+	}
+	return d
+}
+
+var unsafeName = regexp.MustCompile(`[^a-z0-9._-]+`)
+
+func sanitize(s string) string {
+	s = unsafeName.ReplaceAllString(strings.ToLower(s), "-")
+	s = strings.Trim(s, "-._")
+	if s == "" {
+		return "provider"
+	}
+	if len(s) > 64 {
+		s = s[:64]
+	}
+	return s
+}
+
+func cmdShow() error {
+	raw, err := os.ReadFile(detailsPath())
+	if err != nil {
+		return errors.New("nothing set up here yet; run: innernet-provider init")
+	}
+	fmt.Print(string(raw))
+	return nil
+}
+
+func cmdWallet(args []string) error {
+	if len(args) != 2 || args[0] != "set" {
+		return errors.New("usage: innernet-provider wallet set 0x<payout split contract>")
+	}
+	if !reEVM.MatchString(args[1]) {
+		return errors.New("that is not an EVM address (0x followed by 40 hex characters)")
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return err
+	}
+	c.Payout = args[1]
+	if err := saveConfig(c); err != nil {
+		return err
+	}
+	fmt.Println("Payout contract set to", c.Payout, "on", c.Network)
+	fmt.Println("The registry will check that this contract is locked and sends the 1% network fee automatically.")
+	return writeDetails(c, providerID(priv))
+}
+
+func registryURL(c *Config) string {
+	if r := os.Getenv("INNERNET_REGISTRY"); r != "" {
+		return strings.TrimRight(r, "/")
+	}
+	return strings.TrimRight(c.Registry, "/")
+}
+
+func buildDescriptor(c *Config, priv ed25519.PrivateKey) (map[string]any, error) {
+	if err := c.validate(true); err != nil {
+		return nil, err
+	}
+	payload := map[string]any{"version": "REG-1-DESCRIPTOR", "provider": c.descriptorEntry(providerID(priv))}
+	sig, err := signCanonical(priv, descriptorDomain, payload)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"payload": payload, "signature": sig}, nil
+}
+
+var httpClient = &http.Client{Timeout: 20 * time.Second}
+
+func cmdApply(args []string) error {
+	fs := flag.NewFlagSet("apply", flag.ContinueOnError)
+	dry := fs.Bool("dry-run", false, "only write descriptor.json, do not send it")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return err
+	}
+	desc, err := buildDescriptor(c, priv)
+	if err != nil {
+		return err
+	}
+	raw, _ := json.MarshalIndent(desc, "", "  ")
+	if err := os.WriteFile(descPath(), append(raw, '\n'), 0o644); err != nil {
+		return err
+	}
+	fmt.Println("Signed provider form written to", descPath())
+	if *dry {
+		return nil
+	}
+	resp, err := httpClient.Post(registryURL(c)+"/apply", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("could not reach the registry (%v); the signed form is saved, try again later", err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	if resp.StatusCode == http.StatusNotFound {
+		return errors.New("the registry is not accepting applications yet; your signed form is saved")
+	}
+	if resp.StatusCode/100 != 2 {
+		return fmt.Errorf("registry refused the application (%s): %s", resp.Status, strings.TrimSpace(string(body)))
+	}
+	fmt.Println("Application received. The registry now tests your machine; check with: innernet-provider status")
+	return nil
+}
+
+func cmdStatus() error {
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Get(registryURL(c) + "/providers/" + providerID(priv) + "/status")
+	if err != nil {
+		return fmt.Errorf("could not reach the registry: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		fmt.Println("Status: not applied yet (or the registry is not live yet).")
+		return nil
+	}
+	var s statusReply
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&s); err != nil {
+		return fmt.Errorf("unexpected registry reply: %v", err)
+	}
+	printStatus(os.Stdout, &s)
+	return nil
+}
+
+// loginRecord signs a registry-issued challenge. The registry verifies it and
+// returns a one-time link where the provider can add a passkey for the web dashboard.
+func loginRecord(priv ed25519.PrivateKey, challenge, registryHost string, expires int64) (map[string]any, error) {
+	if b, err := hex.DecodeString(challenge); err != nil || len(b) != 32 {
+		return nil, errors.New("registry sent an invalid login challenge")
+	}
+	payload := map[string]any{"version": "REG-1-LOGIN", "provider": providerID(priv), "challenge": challenge,
+		"registry": registryHost, "expires_at": expires}
+	sig, err := signCanonical(priv, loginDomain, payload)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"payload": payload, "signature": sig}, nil
+}
+
+func cmdLogin(args []string) error {
+	fs := flag.NewFlagSet("login", flag.ContinueOnError)
+	offline := fs.String("sign-challenge", "", "advanced: sign this challenge offline and print the record")
+	host := fs.String("registry-host", "innernetcorp.com", "advanced: registry host for --sign-challenge")
+	exp := fs.Int64("expires", 0, "advanced: expiry for --sign-challenge")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return err
+	}
+	if *offline != "" {
+		rec, err := loginRecord(priv, *offline, *host, *exp)
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(rec)
+		fmt.Println(string(raw))
+		return nil
+	}
+	c, err := loadConfig()
+	if err != nil {
+		return err
+	}
+	base := registryURL(c)
+	u, err := url.Parse(base)
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Get(base + "/login/challenge?provider=" + providerID(priv))
+	if err != nil {
+		return fmt.Errorf("could not reach the registry: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return errors.New("the registry dashboard is not live yet")
+	}
+	var ch struct {
+		Challenge string `json:"challenge"`
+		ExpiresAt int64  `json:"expires_at"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&ch); err != nil {
+		return fmt.Errorf("unexpected registry reply: %v", err)
+	}
+	rec, err := loginRecord(priv, ch.Challenge, u.Host, ch.ExpiresAt)
+	if err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(rec)
+	resp2, err := httpClient.Post(base+"/login", "application/json", bytes.NewReader(raw))
+	if err != nil {
+		return fmt.Errorf("could not reach the registry: %v", err)
+	}
+	defer resp2.Body.Close()
+	var out struct {
+		URL string `json:"url"`
+	}
+	if resp2.StatusCode/100 != 2 || json.NewDecoder(io.LimitReader(resp2.Body, 8<<10)).Decode(&out) != nil || out.URL == "" {
+		return fmt.Errorf("registry refused the login (%s)", resp2.Status)
+	}
+	fmt.Println("Open this one-time link within 10 minutes to reach your dashboard and add a passkey:")
+	fmt.Println(out.URL)
+	return nil
+}
+
+func cmdBackup(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: innernet-provider backup FILE")
+	}
+	if _, err := os.Stat(args[0]); err == nil {
+		return errors.New("that file already exists; choose a new name")
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return err
+	}
+	pass, err := readPassphrase("Choose a backup passphrase (12+ characters): ")
+	if err != nil {
+		return err
+	}
+	if os.Getenv("INNERNET_BACKUP_PASSPHRASE") == "" {
+		again, err := readPassphrase("Type it again: ")
+		if err != nil {
+			return err
+		}
+		if again != pass {
+			return errors.New("passphrases do not match")
+		}
+	}
+	raw, err := sealBackup(priv.Seed(), pass)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(args[0], append(raw, '\n'), 0o600); err != nil {
+		return err
+	}
+	fmt.Println("Encrypted backup written to", args[0])
+	fmt.Println("Keep it offline (USB stick, password manager). Without it and the passphrase, a lost key cannot be recovered.")
+	return nil
+}
+
+func cmdRestore(args []string) error {
+	if len(args) != 1 {
+		return errors.New("usage: innernet-provider restore FILE")
+	}
+	if _, err := os.Stat(keyPath()); err == nil {
+		return fmt.Errorf("an identity key already exists at %s; move it away first", keyPath())
+	}
+	raw, err := os.ReadFile(args[0])
+	if err != nil {
+		return err
+	}
+	pass, err := readPassphrase("Backup passphrase: ")
+	if err != nil {
+		return err
+	}
+	seed, err := openBackup(raw, pass)
+	if err != nil {
+		return err
+	}
+	if err := writeKey(seed); err != nil {
+		return err
+	}
+	fmt.Println("Identity restored. Provider id:", providerID(ed25519.NewKeyFromSeed(seed)))
+	fmt.Println("Run innernet-provider init --force to set up this machine's offer.")
+	return nil
+}
+
+// statusReply is the registry's public+private summary; the web dashboard shows the same data.
+type statusReply struct {
+	State     string `json:"state"`
+	Reason    string `json:"reason"`
+	CheckedAt int64  `json:"checked_at"`
+	Health    *struct {
+		Uptime7d    string `json:"uptime_7d"`
+		ChallengeOK string `json:"challenge_pass_7d"`
+	} `json:"health"`
+	Earnings *struct {
+		Asset string `json:"asset"`
+		Gross string `json:"gross_30d"`
+		Fee   string `json:"fee_30d"`
+		Net   string `json:"net_30d"`
+	} `json:"earnings"`
+	Activity map[string]string `json:"activity"`
+}
+
+func printStatus(w io.Writer, s *statusReply) {
+	fmt.Fprintln(w, "Status:", s.State)
+	if s.Reason != "" {
+		fmt.Fprintln(w, "Reason:", s.Reason)
+	}
+	if s.CheckedAt > 0 {
+		fmt.Fprintln(w, "Last checked:", time.Unix(s.CheckedAt, 0).UTC().Format(time.RFC3339))
+	}
+	if s.Health != nil {
+		fmt.Fprintf(w, "Health (7 days): uptime %s, storage challenges passed %s\n", s.Health.Uptime7d, s.Health.ChallengeOK)
+	}
+	for _, k := range []string{"STO-1", "RLY-1", "CMP-1"} {
+		if v, ok := s.Activity[k]; ok {
+			fmt.Fprintf(w, "Activity %s: %s\n", k, v)
+		}
+	}
+	if s.Earnings != nil {
+		fmt.Fprintf(w, "Earnings (30 days): %s %s paid, %s network fee, %s to you\n",
+			s.Earnings.Gross, s.Earnings.Asset, s.Earnings.Fee, s.Earnings.Net)
+		fmt.Fprintln(w, "Every payment and split, with transaction links: innernet-provider login, then open the dashboard")
+	}
+}

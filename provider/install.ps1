@@ -1,0 +1,48 @@
+# Install innernet-provider on Windows (PowerShell 5.1+).
+#   irm https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.ps1 | iex
+# Optional: $env:INNERNET_VERSION = "provider-v0.1.0"
+$ErrorActionPreference = "Stop"
+$Repo = "shakeelamjid/innernet-protocol"
+$BinDir = if ($env:INNERNET_BIN_DIR) { $env:INNERNET_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "innernet\bin" }
+
+$arch = switch ($env:PROCESSOR_ARCHITECTURE) {
+  "AMD64" { "amd64" }
+  "ARM64" { "arm64" }
+  default { throw "unsupported CPU $($env:PROCESSOR_ARCHITECTURE)" }
+}
+
+$tag = $env:INNERNET_VERSION
+if (-not $tag) {
+  $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
+  $tag = ($releases | Where-Object { $_.tag_name -like "provider-v*" } | Select-Object -First 1).tag_name
+  if (-not $tag) { throw "no provider release published yet" }
+}
+if ($tag -notlike "provider-v*") { throw "bad version tag: $tag" }
+
+$asset = "innernet-provider-windows-$arch.exe"
+$base = "https://github.com/$Repo/releases/download/$tag"
+$tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
+New-Item -ItemType Directory $tmp | Out-Null
+try {
+  Write-Host "Downloading $asset ($tag)"
+  Invoke-WebRequest "$base/$asset" -OutFile (Join-Path $tmp $asset) -UseBasicParsing
+  Invoke-WebRequest "$base/SHA256SUMS" -OutFile (Join-Path $tmp "SHA256SUMS") -UseBasicParsing
+  $line = Get-Content (Join-Path $tmp "SHA256SUMS") | Where-Object { $_ -match " $([regex]::Escape($asset))$" }
+  if (-not $line) { throw "no checksum listed for $asset" }
+  $expected = ($line -split "\s+")[0].ToLower()
+  $actual = (Get-FileHash (Join-Path $tmp $asset) -Algorithm SHA256).Hash.ToLower()
+  if ($expected -ne $actual) { throw "checksum mismatch: expected $expected, got $actual" }
+  Write-Host "Checksum OK"
+  New-Item -ItemType Directory -Force $BinDir | Out-Null
+  Copy-Item (Join-Path $tmp $asset) (Join-Path $BinDir "innernet-provider.exe") -Force
+} finally {
+  Remove-Item -Recurse -Force $tmp
+}
+
+$userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+if (($userPath -split ";") -notcontains $BinDir) {
+  [Environment]::SetEnvironmentVariable("Path", "$userPath;$BinDir", "User")
+  Write-Host "Added $BinDir to your PATH. Open a new terminal."
+}
+Write-Host "Installed $(Join-Path $BinDir 'innernet-provider.exe')"
+Write-Host "Next:  innernet-provider init"

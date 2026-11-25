@@ -1,0 +1,130 @@
+{
+  "warning": "Synthetic IRM-1 DRAFT vectors. Keys are public test keys; never use them.",
+  "vector_version": "IRM1-DRAFT-1",
+  "now": 1764000000,
+  "keys": {
+    "registry_public": "b6235e9ce86a5134671f311c0969c8592004165b6589b2ba211c3d2cf5be8471",
+    "registry_backup_public": "26c3bdf3f7ebdd229e95b23701680c1332a8277476cf8d4b69d76273519ce9b3",
+    "provider_public": "085721d57a75e99007e3660a1fd2ac2ee5d4521bfab023fa4a17e3e76770aa1f",
+    "client_public": "49a91c3aa38193f17a446fd00a77657525ba1646ba46bc7560cb4c3ddea331c4"
+  },
+  "registry_document": {
+    "payload": {
+      "version": "REG-1",
+      "sequence": 7,
+      "issued_at": 1764000000,
+      "expires_at": 1764003600,
+      "fee_bps": 100,
+      "fee_payto": {
+        "eip155:84532": "0xfefefefefefefefefefefefefefefefefefefefe"
+      },
+      "providers": [
+        {
+          "id": "085721d57a75e99007e3660a1fd2ac2ee5d4521bfab023fa4a17e3e76770aa1f",
+          "name": "vector-provider",
+          "region": "eu-central",
+          "endpoints": [
+            {
+              "host": "provider.example.test",
+              "port": 9443
+            }
+          ],
+          "services": [
+            "STO-1"
+          ],
+          "payto": {
+            "eip155:84532": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+          },
+          "prices": {
+            "STO-1": {
+              "asset": "USDC",
+              "unit": "GiB-day",
+              "amount": "0.0010"
+            }
+          },
+          "listed_at": 1764000000
+        }
+      ]
+    },
+    "registry_key": "b6235e9ce86a5134671f311c0969c8592004165b6589b2ba211c3d2cf5be8471",
+    "signature": "2b203690beecb6ff1b0ba8d9ef0278d1454f9879a9e81bd814354f4fd6f835f225ff4dea7cdd20d4b50b28004fba1dabb6b5fdd3ddaaeec7454002493c298901"
+  },
+  "rotation_record": {
+    "payload": {
+      "version": "REG-1-ROTATE",
+      "new_key": "34800ff93e6804e080ca59300d9d526f71b6e0fd8109dcf5a15a14d5277515af",
+      "sequence": 1,
+      "issued_at": 1764000000
+    },
+    "signatures": {
+      "backup": "475295ca337bce219f114bfbd228f9bebd99342dbad7fa69c91721120ccdf7b5abe0f2d1343918b2a58c54de9579c84c11a877573a4238e5a6abc8ef9b474107",
+      "old": "5516f4718014215e8459186ecbbbc3a4fd9cb7d03827cb27521494df15436804c50aa88be316bd760101bbdacc546b38f8f2de7dfc29a664653c770b0e04650b"
+    }
+  },
+  "descriptor": {
+    "payload": {
+      "version": "REG-1-DESCRIPTOR",
+      "provider": {
+        "id": "085721d57a75e99007e3660a1fd2ac2ee5d4521bfab023fa4a17e3e76770aa1f",
+        "name": "vector-provider",
+        "region": "eu-central",
+        "endpoints": [
+          {
+            "host": "provider.example.test",
+            "port": 9443
+          }
+        ],
+        "services": [
+          "STO-1"
+        ],
+        "payto": {
+          "eip155:84532": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a"
+        },
+        "prices": {
+          "STO-1": {
+            "asset": "USDC",
+            "unit": "GiB-day",
+            "amount": "0.0010"
+          }
+        }
+      }
+    },
+    "signature": "8eb348174e2583964fec13c1f4922a298f85c00f491edbd8801f033998ebb09d54f24a26bffe68923d234074f9774bd4d509c76cfa98fb450e0cce9aafa17001"
+  },
+  "service_ticket": {
+    "payload": {
+      "client": "49a91c3aa38193f17a446fd00a77657525ba1646ba46bc7560cb4c3ddea331c4",
+      "service": "STO-1",
+      "lease": "abababababababababababababababab",
+      "units": "10.0",
+      "unit": "GiB-day",
+      "payment_tx": "0x1111111111111111111111111111111111111111111111111111111111111111",
+      "expires_at": 1764000600,
+      "version": "PAY-1-TICKET",
+      "provider": "085721d57a75e99007e3660a1fd2ac2ee5d4521bfab023fa4a17e3e76770aa1f"
+    },
+    "signature": "65b574229801a35599ec3849e58b675465bb6fad3cf0870faacc27dbdcb93c48f0fc30dab4e706d06a4de7e4d6dd378b75c34a84151d9217d25f818a6fef920c"
+  },
+  "storage_proof": {
+    "block_size": 1024,
+    "chunk_sha256": "2bd3e9821350038ac979369241c3daeeae8e34e63a8094be91fff11dc153eaa2",
+    "chunk_length": 65552,
+    "chunk_generator": "concatenate SHA-256('IRM1-VECTOR-DATA/chunk/<i>') for i=0,1,2,... and truncate",
+    "root": "50e7caada43b1b571c218172d86cc4e1fb617854f80059e66acfb8368b352570",
+    "block_count": 65,
+    "challenge": {
+      "chunk": 0,
+      "block": 13
+    },
+    "block_sha256": "e725902c216ac3c3788289fe444ff1c2b03d87cae918ba55384724be2dd6c563",
+    "path": [
+      "258a654f78faddfda734c5b4b24b15c198d360cdd66678df5a08f8239a955483",
+      "b876065ce00d69d13f26451fddd926bb136220a040f0ad8200a7319d882cd63b",
+      "6ede075c3bf1dfacb596d70480deeba6339fa89d9cc0bac01e399103a2fc8a31",
+      "500066f38c5c4d43d5ed1fd5bd59f57bbb1179a46241797a728fba893dcca450",
+      "dadbef00088abaef95b00d7f59cdad556775b1455af13ccc69c5fcba93a3e9de",
+      "5cdfad13fdf86a838ad97468ce998ad5bbe04ea16cec74b711295e46a66b7df8",
+      "2b6c7c98ceaa10286d43596c15035e8caccdcea4d9e3d356cd40e95052b31c3f"
+    ]
+  }
+}

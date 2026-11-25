@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
+
+### Provider CLI (M1b part 1)
+
+- `provider/`: `innernet-provider`, a Go command-line tool with no third-party dependencies, for Linux, macOS and Windows. Commands: `init` (step by step, or `--yes` with flags), `show`, `wallet set`, `apply`, `status`, `login`, `backup`, `restore`, `version`.
+- Provider key in `identity.key` (0600, folder 0700); shareable `PROVIDER-DETAILS.txt` holds no secret; encrypted backup with PBKDF2-HMAC-SHA256 (600,000 rounds) and AES-256-GCM.
+- `innernet2/irm_registry.py`: `make_login_challenge` and `verify_login` (`REG-1-LOGIN`) for the dashboard passkey bootstrap.
+- `tests/test_provider_cli.py`: the Python reference verifies descriptors and login records signed by Go and decrypts Go backups.
+- `provider/install.sh`, `provider/install.ps1`: install from GitHub releases with SHA-256 check. `.github/workflows/provider-release.yml` builds six targets on `provider-v*` tags.
+- IRM-1 spec: provider portal (section 3.6: status, health, activity, earnings, splits, passkeys, team access) and candidate future services (section 9: MBX-1 mailbox, WIT-1 witness, GW-1 gateway, ARC-1 archive).
+- `docs/IRM1_PROVIDER_CLI.md`.
+
+Draft only. Nothing below is part of the v1.0.0 core or a compatibility promise.
+
+- `docs/IRM1_RESOURCE_MARKET_SPEC.md`: draft spec for paid storage, relaying and compute from registered providers over x402, with a non-custodial 1% network fee paid through immutable split contracts.
+- `innernet2/irm_registry.py`: REG-1 signed provider registry (pinned keys, ≤24 h validity, anti-rollback via `SequenceStore`, fee-wallet rules), registry key rotation (backup key required), self-signed provider descriptors, quoted-price and payTo checks, PAY-1 signed service tickets. Offline only: no network, payment or chain access.
+- `innernet2/irm_storage.py`: STO-1 proof of storage. RFC 6962-style Merkle tree over 1 KiB blocks of each ciphertext chunk; the stored root also commits to the block count. Challenge, answer and check helpers.
+- `docs/TEST_VECTORS_IRM1_DRAFT.json` + `tools/create_irm1_vectors.py`: deterministic vectors from fixed synthetic keys.
+- `interop/go/irm1verify`: independent Go (standard library only) verifier that re-derives the canonical JSON, all four signature types and the STO-1 root and inclusion proof from the vectors.
+- `tests/test_irm1_draft.py`: 29 tests, including the Go cross-check accepting the vectors and rejecting four kinds of tampering.
+- Not yet built (M1b): registry HTTP service, provider daemon, x402 payment flow, split-contract verification on Base Sepolia.
+
 ## 1.0.0 — pre-tag hardening (2026-11-25, unreleased)
 
 These changes apply to the still-untagged `v1.0.0` core source. They must pass CI on the exact `main` commit before the tag is created (see RELEASE_GATES.md).

@@ -1,0 +1,383 @@
+"""IRM-1 draft: REG-1 signed provider registry, provider descriptors,
+price checks and PAY-1 service tickets.
+
+Status: DRAFT reference implementation of docs/IRM1_RESOURCE_MARKET_SPEC.md.
+Not part of the v1.0.0 core and not a compatibility promise. Offline only:
+no network, no payments, no chain access happen in this module.
+
+Signing follows the R90 pattern: Ed25519 over a domain string plus the
+canonical JSON of the payload.
+"""
+from __future__ import annotations
+
+import re
+import time
+from decimal import Decimal, InvalidOperation
+
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
+
+from .bulk_v080 import BulkError, _bytes
+from .mailbox_e2ee import canonical
+from .native_udp import pub_bytes
+from .routing_v090 import SequenceStore
+
+REGISTRY_DOMAIN = b"INNERnet/REG-1/provider-registry\x00"
+ROTATION_DOMAIN = b"INNERnet/REG-1/registry-key-rotation\x00"
+DESCRIPTOR_DOMAIN = b"INNERnet/REG-1/provider-descriptor\x00"
+TICKET_DOMAIN = b"INNERnet/PAY-1/service-ticket\x00"
+
+VERSION = "REG-1"
+ROTATION_VERSION = "REG-1-ROTATE"
+DESCRIPTOR_VERSION = "REG-1-DESCRIPTOR"
+TICKET_VERSION = "PAY-1-TICKET"
+
+SERVICES = frozenset({"STO-1", "RLY-1", "CMP-1"})
+ASSETS = frozenset({"USDC"})
+MAX_SEQUENCE = 2**63 - 1
+MAX_PROVIDERS = 10_000
+MAX_WINDOW = 86_400          # registry documents live at most 24 h (spec 3.1)
+MIN_WINDOW = 60
+FUTURE_SKEW = 300
+
+_CAIP2_EVM = re.compile(r"^eip155:[1-9][0-9]{0,15}$")
+_EVM_ADDR = re.compile(r"^0x[0-9a-fA-F]{40}$")
+_HEX32 = re.compile(r"^[0-9a-f]{64}$")
+_DECIMAL = re.compile(r"^(0|[1-9][0-9]{0,17})(\.[0-9]{1,18})?$")
+_NAME = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+_HOST = re.compile(r"^[A-Za-z0-9.-]{1,253}$")
+_UNIT = re.compile(r"^[A-Za-z0-9-]{1,24}$")
+_REGION = re.compile(r"^[a-z0-9-]{1,32}$")
+
+
+def _int(value, lo: int, hi: int, label: str) -> int:
+    if type(value) is not int or not lo <= value <= hi:
+        raise BulkError(f"invalid {label}")
+    return value
+
+
+def _exact_keys(obj, required: set[str], optional: set[str] = frozenset(), label: str = "object") -> None:
+    if not isinstance(obj, dict):
+        raise BulkError(f"malformed {label}")
+    keys = set(obj)
+    if not required <= keys or not keys <= required | optional:
+        raise BulkError(f"malformed {label}")
+
+
+def _decimal(value, label: str) -> Decimal:
+    if not isinstance(value, str) or not _DECIMAL.match(value):
+        raise BulkError(f"invalid {label}")
+    try:
+        return Decimal(value)
+    except InvalidOperation as exc:  # pragma: no cover - regex already guards
+        raise BulkError(f"invalid {label}") from exc
+
+
+def _payto_map(value, label: str) -> dict:
+    if not isinstance(value, dict) or not value or len(value) > 16:
+        raise BulkError(f"invalid {label}")
+    for network, address in value.items():
+        if not isinstance(network, str) or not _CAIP2_EVM.match(network):
+            raise BulkError(f"invalid {label} network")
+        if not isinstance(address, str) or not _EVM_ADDR.match(address):
+            raise BulkError(f"invalid {label} address")
+    return value
+
+
+def _validate_provider(entry: dict, *, registry: bool) -> None:
+    required = {"id", "name", "region", "endpoints", "services", "payto", "prices"}
+    optional = {"limits"} | ({"listed_at", "reputation"} if registry else set())
+    _exact_keys(entry, required, optional, "provider entry")
+    if not isinstance(entry["id"], str) or not _HEX32.match(entry["id"]):
+        raise BulkError("invalid provider id")
+    if not isinstance(entry["name"], str) or not _NAME.match(entry["name"]):
+        raise BulkError("invalid provider name")
+    if not isinstance(entry["region"], str) or not _REGION.match(entry["region"]):
+        raise BulkError("invalid provider region")
+    endpoints = entry["endpoints"]
+    if not isinstance(endpoints, list) or not 1 <= len(endpoints) <= 8:
+        raise BulkError("invalid provider endpoints")
+    for ep in endpoints:
+        _exact_keys(ep, {"host", "port"}, label="provider endpoint")
+        if not isinstance(ep["host"], str) or not _HOST.match(ep["host"]):
+            raise BulkError("invalid endpoint host")
+        _int(ep["port"], 1, 65535, "endpoint port")
+    services = entry["services"]
+    if (not isinstance(services, list) or not services or len(set(services)) != len(services)
+            or not set(services) <= SERVICES):
+        raise BulkError("invalid provider services")
+    _payto_map(entry["payto"], "provider payto")
+    prices = entry["prices"]
+    if not isinstance(prices, dict) or set(prices) != set(services):
+        raise BulkError("provider must price exactly the services it lists")
+    for service, price in prices.items():
+        _exact_keys(price, {"asset", "unit", "amount"}, label="price")
+        if price["asset"] not in ASSETS:
+            raise BulkError("unsupported price asset")
+        if not isinstance(price["unit"], str) or not _UNIT.match(price["unit"]):
+            raise BulkError("invalid price unit")
+        _decimal(price["amount"], "price amount")
+    if "limits" in entry:
+        limits = entry["limits"]
+        if not isinstance(limits, dict) or not set(limits) <= set(services):
+            raise BulkError("invalid provider limits")
+        for service_limits in limits.values():
+            if not isinstance(service_limits, dict) or len(service_limits) > 16:
+                raise BulkError("invalid provider limits")
+            for k, v in service_limits.items():
+                if not isinstance(k, str) or not _UNIT.match(k.replace("_", "-")):
+                    raise BulkError("invalid provider limit name")
+                _int(v, 0, 2**53, "provider limit value")
+    if registry:
+        if "listed_at" in entry:
+            _int(entry["listed_at"], 0, 2**53, "provider listed_at")
+        if "reputation" in entry:
+            rep = entry["reputation"]
+            if not isinstance(rep, dict) or len(rep) > 16:
+                raise BulkError("invalid provider reputation")
+            for k, v in rep.items():
+                if not isinstance(k, str) or not _UNIT.match(k.replace("_", "-")):
+                    raise BulkError("invalid reputation name")
+                _decimal(v, "reputation value")
+
+
+def validate_registry_payload(payload: dict, instant: int) -> None:
+    _exact_keys(payload, {"version", "sequence", "issued_at", "expires_at", "fee_bps", "fee_payto", "providers"},
+                label="registry payload")
+    if payload["version"] != VERSION:
+        raise BulkError("unsupported registry version")
+    _int(payload["sequence"], 0, MAX_SEQUENCE, "registry sequence")
+    issued = _int(payload["issued_at"], 0, 2**53, "issued_at")
+    expires = _int(payload["expires_at"], 0, 2**53, "expires_at")
+    if not MIN_WINDOW <= expires - issued <= MAX_WINDOW:
+        raise BulkError("registry validity window out of bounds")
+    if issued > instant + FUTURE_SKEW:
+        raise BulkError("registry issued in the future")
+    if instant > expires:
+        raise BulkError("registry expired")
+    _int(payload["fee_bps"], 0, 10_000, "fee_bps")
+    fee_payto = _payto_map(payload["fee_payto"], "fee_payto")
+    providers = payload["providers"]
+    if not isinstance(providers, list) or len(providers) > MAX_PROVIDERS:
+        raise BulkError("invalid provider list")
+    seen = set()
+    for entry in providers:
+        _validate_provider(entry, registry=True)
+        if entry["id"] in seen:
+            raise BulkError("duplicate provider id")
+        seen.add(entry["id"])
+        # A provider may only take payment on networks where a fee wallet exists.
+        if not set(entry["payto"]) <= set(fee_payto):
+            raise BulkError("provider payto network has no fee wallet")
+
+
+def sign_registry(payload: dict, registry_key: Ed25519PrivateKey, *, now: int | None = None) -> dict:
+    validate_registry_payload(payload, int(time.time()) if now is None else now)
+    return {"payload": payload, "registry_key": pub_bytes(registry_key).hex(),
+            "signature": registry_key.sign(REGISTRY_DOMAIN + canonical(payload)).hex()}
+
+
+def verify_registry(document: dict, pinned_keys: list[bytes], *, now: int | None = None,
+                    sequence_store: SequenceStore | None = None) -> dict:
+    """Return the verified payload, or raise BulkError. Fails closed."""
+    _exact_keys(document, {"payload", "registry_key", "signature"}, label="registry document")
+    key = _bytes(document["registry_key"], 32, "registry key")
+    if key not in {bytes(k) for k in pinned_keys}:
+        raise BulkError("registry key not pinned")
+    try:
+        Ed25519PublicKey.from_public_bytes(key).verify(
+            _bytes(document["signature"], 64, "registry signature"),
+            REGISTRY_DOMAIN + canonical(document["payload"]))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("registry signature invalid") from exc
+    payload = document["payload"]
+    validate_registry_payload(payload, int(time.time()) if now is None else now)
+    if sequence_store is not None:
+        sequence_store.check_and_update("reg1:" + document["registry_key"], payload["sequence"])
+    return payload
+
+
+# ---- registry key rotation (spec 3.5) -------------------------------------
+
+def sign_rotation(new_key: bytes, sequence: int, *, backup_key: Ed25519PrivateKey,
+                  old_key: Ed25519PrivateKey | None = None, now: int | None = None) -> dict:
+    payload = {"version": ROTATION_VERSION, "new_key": bytes(new_key).hex(), "sequence": sequence,
+               "issued_at": int(time.time()) if now is None else now}
+    _int(sequence, 0, MAX_SEQUENCE, "rotation sequence")
+    signatures = {"backup": backup_key.sign(ROTATION_DOMAIN + canonical(payload)).hex()}
+    if old_key is not None:
+        signatures["old"] = old_key.sign(ROTATION_DOMAIN + canonical(payload)).hex()
+    return {"payload": payload, "signatures": signatures}
+
+
+def verify_rotation(record: dict, *, active_key: bytes, backup_key: bytes,
+                    sequence_store: SequenceStore | None = None) -> bytes:
+    """Return the new active registry key. The pinned backup key MUST sign.
+    The old key's signature is checked when present; a backup-only (emergency)
+    rotation is accepted but still has to move the sequence forward."""
+    _exact_keys(record, {"payload", "signatures"}, label="rotation record")
+    payload = record["payload"]
+    _exact_keys(payload, {"version", "new_key", "sequence", "issued_at"}, label="rotation payload")
+    if payload["version"] != ROTATION_VERSION:
+        raise BulkError("unsupported rotation version")
+    new_key = _bytes(payload["new_key"], 32, "rotation new key")
+    _int(payload["sequence"], 0, MAX_SEQUENCE, "rotation sequence")
+    _int(payload["issued_at"], 0, 2**53, "rotation issued_at")
+    sigs = record["signatures"]
+    if not isinstance(sigs, dict) or "backup" not in sigs or not set(sigs) <= {"backup", "old"}:
+        raise BulkError("rotation must be signed by the backup key")
+    message = ROTATION_DOMAIN + canonical(payload)
+    try:
+        Ed25519PublicKey.from_public_bytes(backup_key).verify(_bytes(sigs["backup"], 64, "backup signature"), message)
+        if "old" in sigs:
+            Ed25519PublicKey.from_public_bytes(active_key).verify(_bytes(sigs["old"], 64, "old signature"), message)
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("rotation signature invalid") from exc
+    if new_key in (bytes(active_key), bytes(backup_key)):
+        raise BulkError("rotation must introduce a new key")
+    if sequence_store is not None:
+        sequence_store.check_and_update("reg1-rotate:" + bytes(backup_key).hex(), payload["sequence"])
+    return new_key
+
+
+# ---- provider self-signed descriptor (spec 3.3) ---------------------------
+
+def sign_descriptor(entry: dict, provider_key: Ed25519PrivateKey) -> dict:
+    if entry.get("id") != pub_bytes(provider_key).hex():
+        raise BulkError("descriptor id must be the signing provider key")
+    _validate_provider(entry, registry=False)
+    payload = {"version": DESCRIPTOR_VERSION, "provider": entry}
+    return {"payload": payload, "signature": provider_key.sign(DESCRIPTOR_DOMAIN + canonical(payload)).hex()}
+
+
+def verify_descriptor(record: dict) -> dict:
+    _exact_keys(record, {"payload", "signature"}, label="descriptor")
+    payload = record["payload"]
+    _exact_keys(payload, {"version", "provider"}, label="descriptor payload")
+    if payload["version"] != DESCRIPTOR_VERSION:
+        raise BulkError("unsupported descriptor version")
+    entry = payload["provider"]
+    _validate_provider(entry, registry=False)
+    try:
+        Ed25519PublicKey.from_public_bytes(_bytes(entry["id"], 32, "provider id")).verify(
+            _bytes(record["signature"], 64, "descriptor signature"), DESCRIPTOR_DOMAIN + canonical(payload))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("descriptor signature invalid") from exc
+    return entry
+
+
+# ---- client-side helpers --------------------------------------------------
+
+def find_provider(payload: dict, provider_id: bytes) -> dict:
+    hex_id = bytes(provider_id).hex()
+    for entry in payload["providers"]:
+        if entry["id"] == hex_id:
+            return entry
+    raise BulkError("provider not listed")
+
+
+def check_quoted_price(entry: dict, service: str, *, asset: str, amount: str, unit: str) -> Decimal:
+    """Spec 4.4: refuse any 402 quote above the signed registry price."""
+    price = entry["prices"].get(service)
+    if price is None:
+        raise BulkError("provider does not offer this service")
+    if asset != price["asset"] or unit != price["unit"]:
+        raise BulkError("quote asset or unit differs from registry")
+    quoted = _decimal(amount, "quoted amount")
+    if quoted > Decimal(price["amount"]):
+        raise BulkError("quote exceeds signed registry price")
+    return quoted
+
+
+def check_payto(payload: dict, entry: dict, network: str, pay_to: str) -> None:
+    """The 402's payTo must be the provider's registered split contract."""
+    registered = entry["payto"].get(network)
+    if registered is None or registered.lower() != str(pay_to).lower():
+        raise BulkError("payTo is not the provider's registered split contract")
+    if network not in payload["fee_payto"]:
+        raise BulkError("no fee wallet for this network")
+
+
+# ---- PAY-1 service tickets (spec 4.1) -------------------------------------
+
+def sign_ticket(fields: dict, provider_key: Ed25519PrivateKey) -> dict:
+    payload = dict(fields, version=TICKET_VERSION, provider=pub_bytes(provider_key).hex())
+    _validate_ticket(payload)
+    return {"payload": payload, "signature": provider_key.sign(TICKET_DOMAIN + canonical(payload)).hex()}
+
+
+def _validate_ticket(payload: dict) -> None:
+    _exact_keys(payload, {"version", "provider", "client", "service", "lease", "units", "unit",
+                          "payment_tx", "expires_at"}, label="service ticket")
+    if payload["version"] != TICKET_VERSION:
+        raise BulkError("unsupported ticket version")
+    for k in ("provider", "client"):
+        if not isinstance(payload[k], str) or not _HEX32.match(payload[k]):
+            raise BulkError(f"invalid ticket {k}")
+    if payload["service"] not in SERVICES:
+        raise BulkError("invalid ticket service")
+    if not isinstance(payload["lease"], str) or not re.match(r"^[0-9a-f]{32}$", payload["lease"]):
+        raise BulkError("invalid ticket lease id")
+    _decimal(payload["units"], "ticket units")
+    if not isinstance(payload["unit"], str) or not _UNIT.match(payload["unit"]):
+        raise BulkError("invalid ticket unit")
+    if not isinstance(payload["payment_tx"], str) or not re.match(r"^0x[0-9a-fA-F]{64}$", payload["payment_tx"]):
+        raise BulkError("invalid ticket payment transaction")
+    _int(payload["expires_at"], 0, 2**53, "ticket expires_at")
+
+
+def verify_ticket(record: dict, provider_id: bytes, *, now: int | None = None) -> dict:
+    _exact_keys(record, {"payload", "signature"}, label="ticket record")
+    payload = record["payload"]
+    _validate_ticket(payload)
+    if payload["provider"] != bytes(provider_id).hex():
+        raise BulkError("ticket from a different provider")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider_id).verify(
+            _bytes(record["signature"], 64, "ticket signature"), TICKET_DOMAIN + canonical(payload))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("ticket signature invalid") from exc
+    if (int(time.time()) if now is None else now) > payload["expires_at"]:
+        raise BulkError("ticket expired")
+    return payload
+
+
+# ---- provider login (web dashboard bootstrap) ------------------------------
+# The CLI proves it holds the provider key by signing a one-time challenge.
+# The registry then hands out a short-lived link where the provider can
+# register a WebAuthn passkey for the web dashboard. The passkey never signs
+# protocol messages; only the provider key does.
+
+LOGIN_DOMAIN = b"INNERnet/REG-1/provider-login\x00"
+LOGIN_VERSION = "REG-1-LOGIN"
+LOGIN_TTL = 300
+
+
+def make_login_challenge(*, now: int | None = None) -> dict:
+    import secrets
+    instant = int(time.time()) if now is None else now
+    return {"challenge": secrets.token_hex(32), "expires_at": instant + LOGIN_TTL}
+
+
+def verify_login(record: dict, *, expected_challenge: str, registry_host: str,
+                 now: int | None = None) -> bytes:
+    """Return the provider id (32 bytes) if the record answers our challenge."""
+    _exact_keys(record, {"payload", "signature"}, label="login record")
+    payload = record["payload"]
+    _exact_keys(payload, {"version", "provider", "challenge", "registry", "expires_at"}, label="login payload")
+    if payload["version"] != LOGIN_VERSION:
+        raise BulkError("unsupported login version")
+    if payload["challenge"] != expected_challenge or not re.match(r"^[0-9a-f]{64}$", str(expected_challenge)):
+        raise BulkError("login challenge mismatch")
+    if payload["registry"] != registry_host:
+        raise BulkError("login was signed for a different registry")
+    expires = _int(payload["expires_at"], 0, 2**53, "login expires_at")
+    if (int(time.time()) if now is None else now) > expires:
+        raise BulkError("login challenge expired")
+    provider = _bytes(payload["provider"], 32, "provider id")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider).verify(
+            _bytes(record["signature"], 64, "login signature"), LOGIN_DOMAIN + canonical(payload))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("login signature invalid") from exc
+    return provider
