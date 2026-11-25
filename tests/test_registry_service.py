@@ -361,6 +361,14 @@ def test_pages_and_headers(env):
         assert r.headers["x-frame-options"] == "DENY"
         assert "style=" not in r.text and "<script>" not in r.text      # nothing inline under the strict CSP
     assert client.get(P + "/static/registry.css").status_code == 200
+    # Pages pin each script to its content hash, so browsers never mix an old script with a new server.
+    import hashlib, re
+    from pathlib import Path
+    html = client.get(P + "/claim").text
+    v = re.search(r'static/claim\.js\?v=([0-9a-f]{12})"', html).group(1)
+    assert v == hashlib.sha256((Path(__file__).parents[1] / "innernet2/registry_service/static/claim.js").read_bytes()).hexdigest()[:12]
+    assert "immutable" in client.get(P + "/static/claim.js?v=" + v).headers["cache-control"]
+    assert client.get(P + "/static/claim.js").headers["cache-control"] == "no-cache"
     assert client.get(P + "/static/dashboard.html").status_code == 404
     assert client.get(P + "/static/..%2Fapp.py").status_code == 404
 

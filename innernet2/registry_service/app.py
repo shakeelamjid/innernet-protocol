@@ -1,6 +1,7 @@
 """HTTP service: REG-1 registry API, provider dashboard and passkey login."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import re
@@ -610,8 +611,17 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return doc
 
     # ---- pages ---------------------------------------------------------
-    def page(name: str) -> FileResponse:
-        return FileResponse(STATIC / name, media_type="text/html", headers={"Cache-Control": "no-cache"})
+    def asset_version(name: str) -> str:
+        f = STATIC / name
+        return hashlib.sha256(f.read_bytes()).hexdigest()[:12] if f.is_file() else "0"
+
+    def page(name: str) -> Response:
+        # Every script and stylesheet link carries the file's hash, so a browser never runs an old copy
+        # against a newer server (an hour-old claim.js broke resuming a claim in Safari).
+        html = (STATIC / name).read_text(encoding="utf-8")
+        html = re.sub(r'(static/[A-Za-z0-9_.-]+\.(?:js|css))"',
+                      lambda m: f'{m.group(1)}?v={asset_version(m.group(1)[7:])}"', html)
+        return Response(html, media_type="text/html", headers={"Cache-Control": "no-cache"})
 
     @app.get(P + "/dashboard")
     def dashboard_page():
@@ -626,14 +636,15 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return page("provider.html")
 
     @app.get(P + "/static/{name}")
-    def static(name: str):
+    def static(name: str, request: Request):
         path = (STATIC / name).resolve()
         if path.parent != STATIC.resolve() or not path.is_file() or path.suffix == ".html":
             raise HTTPException(404)
         types = {".css": "text/css", ".js": "text/javascript", ".woff2": "font/woff2", ".svg": "image/svg+xml",
                  ".json": "application/json"}
         return FileResponse(path, media_type=types.get(path.suffix, "application/octet-stream"),
-                            headers={"Cache-Control": "public, max-age=3600"})
+                            headers={"Cache-Control": "public, max-age=31536000, immutable"
+                                     if request.query_params.get("v") else "no-cache"})
 
     # ---- passkeys (WebAuthn) ------------------------------------------
     def new_flow(kind: str, challenge: bytes, provider: str | None, token: str | None) -> str:
