@@ -1,0 +1,91 @@
+name: CI
+
+# Release gate CI for the scoped core (ST81 / OB80-2 / R90 / UV10).
+# A green run on the EXACT `main` commit is required before tagging v1.0.0.
+# See docs/RELEASE_GATES.md. This does NOT establish an independent crypto
+# audit, an independent full implementation, or a provider-outage test.
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+
+      # Manifest first: stdlib only, before any install artifacts exist.
+      - name: Verify release manifest
+        run: python tools/check_release_manifest.py
+
+      - name: Set up Go (UV10 independent verifier)
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.23'
+
+      - name: Build UV10 Go verifier
+        working-directory: interop/go
+        run: go build ./uv10verify
+
+      - name: Install package and test deps
+        run: python -m pip install --upgrade pip && python -m pip install -e '.[test]'
+
+      # The Python suite itself shells out to `go run ./uv10verify`, so the
+      # Go UV10 interop is exercised here as long as Go is on PATH.
+      - name: Run test suite
+        run: python -m pytest -q
+
+  docker:
+    name: docker builds
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+
+      # All Dockerfiles use repo-root-relative COPY paths, so the build
+      # context is always the repository root.
+      - name: Build core image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile
+          push: false
+
+      - name: Build gateway image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.gateway
+          push: false
+
+      - name: Build mailbox image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.mailbox
+          push: false
+
+      - name: Build native-udp image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.native_udp
+          push: false
