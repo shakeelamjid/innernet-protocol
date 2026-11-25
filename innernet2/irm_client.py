@@ -1,23 +1,28 @@
 """IRM-1 client (draft): store files on paid providers, check them, pay them, repair them.
 
-What it does, end to end:
+How a file is stored (record version IRM1-CLIENT-2):
 
-* put     Encrypt a file chunk by chunk (the OB80-2 chunk cipher, a fresh object key),
-          pick 3 providers from the signed registry (different regions first),
-          upload every chunk to each, and check each provider computed the same
-          STO-1 Merkle root as we did.
-* get     Read each chunk from the first replica that answers and verify it against
-          the recorded root before decrypting. A dead provider is skipped (failover).
-* check   Ask every replica for random 1 KiB blocks with Merkle proofs (STO-1).
-          Passing replicas are marked healthy; failing ones record when they first failed.
-* pay     Pay only replicas that passed this epoch's check: units are GiB-days of
-          ciphertext held, sent as USDC to the provider's payout contract; the provider
-          checks the payment on-chain and returns a signed PAY-1 ticket, which we verify.
-* repair  Replace replicas that failed for longer than the grace period (default 24 h):
-          copy the chunks from a healthy replica, verify them, upload to a new provider.
+1. Cut     the file into 64 KiB chunks.
+2. Seal    each chunk for the owner with the OB80-2 chunk cipher (fresh object key).
+3. Mix     cut each sealed chunk into 4 KiB cells and shuffle them with a key derived
+           from the object key (keyed Fisher-Yates; an extra layer, not the encryption).
+4. Spread  Reed-Solomon over GF(256): 6 shards per chunk, any 4 rebuild it.
+5. Place   shard slot j of every chunk goes to one provider lease. Six slots across at
+           least 3 providers, at most 2 slots per provider, different regions first, so
+           losing any one provider still leaves 4 of 6. No provider holds a whole sealed chunk.
 
-The object key and the record of where every piece lives stay on this machine
-(~/.innernet/client, mode 0700/0600). Providers only ever see ciphertext.
+Then:
+
+* get     For each chunk, fetch shards (healthy holders first), verify each against its
+          recorded STO-1 root, stop at 4, rebuild, unshuffle, decrypt.
+* check   Ask every holder for random 1 KiB blocks with Merkle proofs (STO-1).
+* pay     Pay only holders that passed this epoch's check, for the GiB-days they hold;
+          the provider checks the USDC payment on-chain and returns a signed PAY-1 ticket.
+* repair  A holder failing longer than the grace period (default 24 h) is replaced: its
+          shards are rebuilt from any 4 verified shards and uploaded to another provider.
+
+The object key and the record of where every shard lives stay on this machine
+(~/.innernet/client, mode 0700/0600). Providers only ever see shards of ciphertext.
 """
 from __future__ import annotations
 
@@ -40,13 +45,16 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 
 from . import irm_storage
 from .bulk_v080 import BulkError
-from .crypto import decrypt_chunk, encrypt_chunk, new_root
+from . import codec
+from .crypto import decrypt_chunk, deinterleave, derive, encrypt_chunk, interleave, new_root
 from .irm_registry import verify_registry, verify_ticket
 
 CHUNK = 64 * 1024
 REQUEST_DOMAIN = b"INNERnet/STO-1/request\x00"
 RESPONSE_DOMAIN = b"INNERnet/STO-1/response\x00"
-REPLICAS = 3
+K, N = 4, 6               # any 4 of 6 shards rebuild a chunk
+CELL = 4096               # mixing cell size, bytes
+MAX_SLOTS_PER_PROVIDER = N - K
 GRACE = 24 * 3600
 EPOCH = 86400
 GIB = 1 << 30
@@ -217,66 +225,93 @@ class Client:
         return [json.loads(p.read_text()) for p in sorted(d.glob("*.json"))] if d.exists() else []
 
     # put
-    def put(self, data: bytes, name: str = "file", replicas: int = REPLICAS) -> dict:
+    def put(self, data: bytes, name: str = "file") -> dict:
         if not data:
             raise BulkError("empty file")
         root, obj = new_root(), secrets.token_bytes(16)
-        chunks, meta = [], []
+        meta, shards = [], []
         for i in range(0, len(data), CHUNK):
-            plain = data[i:i + CHUNK]
-            cipher = encrypt_chunk(root, obj, i // CHUNK, plain)
-            croot, blocks = irm_storage.chunk_root(cipher)
-            chunks.append(cipher)
-            meta.append({"index": i // CHUNK, "plain": len(plain), "bytes": len(cipher), "root": croot.hex(), "blocks": blocks})
-        rec = {"version": "IRM1-CLIENT-1", "object": obj.hex(), "name": name, "size": len(data), "key": root.hex(),
-               "created": int(self.now()), "chunks": meta, "replicas": [], "history": []}
+            index, plain = i // CHUNK, data[i:i + CHUNK]
+            cipher = encrypt_chunk(root, obj, index, plain)
+            mixed = interleave(cipher, _mix_key(root, index), CELL)
+            parts = codec.encode(mixed, K, N)
+            roots = [irm_storage.chunk_root(s) for s in parts]
+            shards.append(parts)
+            meta.append({"index": index, "plain": len(plain), "cipher": len(cipher), "mixed": len(mixed),
+                         "shard_bytes": len(parts[0]), "roots": [r.hex() for r, _ in roots], "blocks": [b for _, b in roots]})
+        rec = {"version": "IRM1-CLIENT-2", "object": obj.hex(), "name": name, "size": len(data), "key": root.hex(),
+               "k": K, "n": N, "cell": CELL, "created": int(self.now()), "chunks": meta, "holders": [], "history": []}
         candidates = self.providers()
-        tried: set[str] = set()
-        while len(rec["replicas"]) < replicas:
-            picks = choose(candidates, 1, tried | {r["provider"] for r in rec["replicas"]})
-            if not picks:
-                break
-            entry = picks[0]
-            tried.add(entry["id"])
-            try:
-                rec["replicas"].append(self._place(entry, rec, chunks))
-            except ProviderError as exc:
-                rec["history"].append({"time": int(self.now()), "event": "placement-failed", "provider": entry["id"], "detail": str(exc)})
-        if not rec["replicas"]:
-            raise BulkError("no provider accepted the file")
+        for slot in range(N):
+            holder = self._place_slot(candidates, rec, slot, [parts[slot] for parts in shards])
+            if holder is None:
+                for h in rec["holders"]:                       # do not leave half a file behind
+                    try:
+                        self.provider(h["entry"]).delete(h["lease"])
+                    except ProviderError:
+                        pass
+                raise BulkError(f"could not place shard slot {slot}: need at least {math.ceil(N / MAX_SLOTS_PER_PROVIDER)} "
+                                "working providers")
+            rec["holders"].append(holder)
         self.save(rec)
         return rec
 
-    def _place(self, entry: dict, rec: dict, chunks: list[bytes]) -> dict:
+    def _place_slot(self, candidates: list[dict], rec: dict, slot: int, shards: list[bytes],
+                    avoid: set[str] = frozenset()) -> dict | None:
+        """Upload one slot to the best provider that still has room for it. Returns the holder or None."""
+        tried: set[str] = set(avoid)
+        while True:
+            entry = _pick(candidates, rec["holders"], tried)
+            if entry is None:
+                return None
+            tried.add(entry["id"])
+            try:
+                return self._upload(entry, rec, slot, shards)
+            except ProviderError as exc:
+                rec["history"].append({"time": int(self.now()), "event": "placement-failed", "provider": entry["id"],
+                                       "slot": slot, "detail": str(exc)})
+
+    def _upload(self, entry: dict, rec: dict, slot: int, shards: list[bytes]) -> dict:
         p, lease = self.provider(entry), secrets.token_hex(16)
-        for m, cipher in zip(rec["chunks"], chunks):
-            ack = p.put_chunk(lease, rec["object"], m["index"], cipher)
-            if ack.get("root") != m["root"] or ack.get("blocks") != m["blocks"]:
-                raise ProviderError(f"{entry['name']}: stored chunk {m['index']} does not match")
+        for m, shard in zip(rec["chunks"], shards):
+            ack = p.put_chunk(lease, rec["object"], m["index"], shard)
+            if ack.get("root") != m["roots"][slot] or ack.get("blocks") != m["blocks"][slot]:
+                raise ProviderError(f"{entry['name']}: stored shard {m['index']}/{slot} does not match")
         network = next(iter(entry["payto"]))
-        return {"provider": entry["id"], "name": entry["name"], "region": entry["region"], "entry": entry, "lease": lease,
-                "network": network, "payto": entry["payto"][network], "price": entry["prices"]["STO-1"]["amount"],
-                "since": int(self.now()), "status": "ok", "first_failure": None, "last_check": None,
-                "paid_epochs": [], "tickets": []}
+        return {"slot": slot, "provider": entry["id"], "name": entry["name"], "region": entry["region"], "entry": entry,
+                "lease": lease, "network": network, "payto": entry["payto"][network],
+                "price": entry["prices"]["STO-1"]["amount"], "since": int(self.now()), "status": "ok",
+                "first_failure": None, "last_check": None, "paid_epochs": [], "tickets": []}
 
     # get
+    def _shards(self, rec: dict, m: dict, holders: list[dict], want: int = K) -> dict[int, bytes]:
+        """Fetch verified shards of one chunk, healthy holders first, until `want` are in hand."""
+        got: dict[int, bytes] = {}
+        for h in sorted(holders, key=lambda h: h["status"] != "ok"):
+            if len(got) >= want:
+                break
+            try:
+                s = self.provider(h["entry"]).get_chunk(h["lease"], rec["object"], m["index"])
+            except ProviderError:
+                continue
+            if irm_storage.chunk_root(s)[0].hex() == m["roots"][h["slot"]]:
+                got[h["slot"]] = s                             # wrong or corrupted shards are skipped
+        return got
+
+    def _mixed(self, rec: dict, m: dict, holders: list[dict]) -> bytes:
+        got = self._shards(rec, m, holders)
+        if len(got) < rec["k"]:
+            raise BulkError(f"chunk {m['index']}: only {len(got)} of {rec['n']} shards available, need {rec['k']}")
+        return codec.decode(got, rec["k"], rec["n"], m["mixed"])
+
     def get(self, obj: str) -> bytes:
         rec = self.load(obj)
         root, oid = bytes.fromhex(rec["key"]), bytes.fromhex(rec["object"])
-        order = sorted(rec["replicas"], key=lambda r: r["status"] != "ok")
         out = []
         for m in rec["chunks"]:
-            for r in order:
-                try:
-                    cipher = self.provider(r["entry"]).get_chunk(r["lease"], rec["object"], m["index"])
-                except ProviderError:
-                    continue
-                if irm_storage.chunk_root(cipher)[0].hex() != m["root"]:
-                    continue                                   # wrong or corrupted: try the next replica
-                out.append(decrypt_chunk(root, oid, m["index"], cipher, m["plain"]))
-                break
-            else:
-                raise BulkError(f"chunk {m['index']} is unavailable on every replica")
+            mixed = self._mixed(rec, m, rec["holders"])
+            cipher = deinterleave(mixed, _mix_key(root, m["index"]), rec["cell"], m["cipher"])
+            out.append(decrypt_chunk(root, oid, m["index"], cipher, m["plain"]))
         data = b"".join(out)
         if len(data) != rec["size"]:
             raise BulkError("recovered size does not match")
@@ -286,16 +321,16 @@ class Client:
     def check(self, obj: str, samples: int = 3, rng=secrets.SystemRandom()) -> dict:
         rec = self.load(obj)
         result = {}
-        for r in rec["replicas"]:
+        for h in rec["holders"]:
             ok, why = True, ""
-            p = self.provider(r["entry"])
+            p = self.provider(h["entry"])
             for _ in range(samples):
                 m = rec["chunks"][rng.randrange(len(rec["chunks"]))]
-                block = rng.randrange(m["blocks"])
+                block = rng.randrange(m["blocks"][h["slot"]])
                 try:
-                    ans = p.challenge(r["lease"], rec["object"], m["index"], block)
+                    ans = p.challenge(h["lease"], rec["object"], m["index"], block)
                     good = (ans.get("index") == m["index"] and ans.get("block") == block and irm_storage.verify(
-                        bytes.fromhex(m["root"]), m["blocks"], block, bytes.fromhex(ans["data"]),
+                        bytes.fromhex(m["roots"][h["slot"]]), m["blocks"][h["slot"]], block, bytes.fromhex(ans["data"]),
                         [bytes.fromhex(x) for x in ans["path"]]))
                 except (ProviderError, KeyError, ValueError, TypeError) as exc:
                     good, why = False, str(exc)
@@ -303,41 +338,42 @@ class Client:
                     ok, why = False, why or "proof did not verify"
                     break
             now = int(self.now())
-            r["last_check"] = now
+            h["last_check"] = now
             if ok:
-                r["status"], r["first_failure"] = "ok", None
+                h["status"], h["first_failure"] = "ok", None
             else:
-                r["status"] = "failing"
-                r["first_failure"] = r["first_failure"] or now
-                rec["history"].append({"time": now, "event": "check-failed", "provider": r["provider"], "detail": why})
-            result[r["provider"]] = {"ok": ok, "detail": why}
+                h["status"] = "failing"
+                h["first_failure"] = h["first_failure"] or now
+                rec["history"].append({"time": now, "event": "check-failed", "provider": h["provider"],
+                                       "slot": h["slot"], "detail": why})
+            result[_key(h)] = {"ok": ok, "detail": why, "provider": h["provider"], "slot": h["slot"]}
         self.save(rec)
         return result
 
     # pay
     def pay(self, obj: str, payer: Payer, epoch: int | None = None) -> dict:
-        """Pay each replica that passed its latest check for `epoch` (default: the current day)."""
+        """Pay each holder that passed its latest check in `epoch` (default: today) for the shards it holds."""
         rec = self.load(obj)
         epoch = int(self.now() // EPOCH) if epoch is None else epoch
-        stored = sum(m["bytes"] for m in rec["chunks"])
+        stored = sum(m["shard_bytes"] for m in rec["chunks"])          # bytes per slot
         units = (Decimal(stored) / GIB).quantize(Decimal("0.000001"), rounding=ROUND_CEILING)
         units = max(units, Decimal("0.000001"))
         out = {}
-        for r in rec["replicas"]:
-            if epoch in r["paid_epochs"]:
-                out[r["provider"]] = "already paid"
+        for h in rec["holders"]:
+            if epoch in h["paid_epochs"]:
+                out[_key(h)] = "already paid"
                 continue
-            if r["status"] != "ok" or r["last_check"] is None or r["last_check"] // EPOCH != epoch:
-                out[r["provider"]] = "not paid: no passing check this epoch"
+            if h["status"] != "ok" or h["last_check"] is None or h["last_check"] // EPOCH != epoch:
+                out[_key(h)] = "not paid: no passing check this epoch"
                 continue
-            amount = int((units * Decimal(r["price"]) * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
+            amount = int((units * Decimal(h["price"]) * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
             amount = max(amount, 1)
-            tx = payer(r["network"], r["payto"], amount)
-            ticket = self.provider(r["entry"]).pay(r["lease"], format(units, "f"), tx)
-            verify_ticket(ticket, bytes.fromhex(r["provider"]), now=int(self.now()))
-            r["paid_epochs"].append(epoch)
-            r["tickets"].append(ticket)
-            out[r["provider"]] = f"paid {amount} base units, ticket verified"
+            tx = payer(h["network"], h["payto"], amount)
+            ticket = self.provider(h["entry"]).pay(h["lease"], format(units, "f"), tx)
+            verify_ticket(ticket, bytes.fromhex(h["provider"]), now=int(self.now()))
+            h["paid_epochs"].append(epoch)
+            h["tickets"].append(ticket)
+            out[_key(h)] = f"paid {amount} base units, ticket verified"
         self.save(rec)
         return out
 
@@ -345,52 +381,63 @@ class Client:
     def repair(self, obj: str, grace: int = GRACE, force: bool = False) -> list[dict]:
         rec = self.load(obj)
         now = int(self.now())
-        bad = [r for r in rec["replicas"] if r["status"] != "ok" and (force or now - (r["first_failure"] or now) >= grace)]
+        bad = [h for h in rec["holders"] if h["status"] != "ok" and (force or now - (h["first_failure"] or now) >= grace)]
         if not bad:
             return []
-        healthy = [r for r in rec["replicas"] if r["status"] == "ok"]
-        if not healthy:
-            raise BulkError("no healthy replica to repair from")
-        chunks = []
+        healthy = [h for h in rec["holders"] if h["status"] == "ok"]
+        if len(healthy) < rec["k"]:
+            raise BulkError(f"only {len(healthy)} healthy shard holders; need {rec['k']} to rebuild")
+        rebuilt: dict[int, list[bytes]] = {h["slot"]: [] for h in bad}
         for m in rec["chunks"]:
-            for r in healthy:
-                try:
-                    c = self.provider(r["entry"]).get_chunk(r["lease"], rec["object"], m["index"])
-                except ProviderError:
-                    continue
-                if irm_storage.chunk_root(c)[0].hex() == m["root"]:
-                    chunks.append(c)
-                    break
-            else:
-                raise BulkError(f"chunk {m['index']} could not be read from a healthy replica")
+            parts = codec.encode(self._mixed(rec, m, healthy), rec["k"], rec["n"])
+            for slot in rebuilt:
+                if irm_storage.chunk_root(parts[slot])[0].hex() != m["roots"][slot]:
+                    raise BulkError(f"rebuilt shard {m['index']}/{slot} does not match its recorded root")
+                rebuilt[slot].append(parts[slot])
         changes = []
         candidates = self.providers()
-        for r in bad:
-            used = {x["provider"] for x in rec["replicas"]}
-            tried: set[str] = set()
-            new = None
-            while True:
-                picks = choose(candidates, 1, used | tried)
-                if not picks:
-                    break
-                tried.add(picks[0]["id"])
-                try:
-                    new = self._place(picks[0], rec, chunks)
-                    break
-                except ProviderError as exc:
-                    rec["history"].append({"time": now, "event": "placement-failed", "provider": picks[0]["id"], "detail": str(exc)})
+        failing = {h["provider"] for h in bad}
+        for h in bad:
+            others = [x for x in rec["holders"] if x is not h]
+            view = dict(rec, holders=others)
+            new = self._place_slot(candidates, view, h["slot"], rebuilt[h["slot"]], avoid=failing)
+            rec["history"] = view["history"]
             if new is None:
-                changes.append({"replaced": r["provider"], "with": None})
+                changes.append({"slot": h["slot"], "replaced": h["provider"], "with": None})
                 continue
             try:
-                self.provider(r["entry"]).delete(r["lease"])     # best effort; the old provider may be gone
+                self.provider(h["entry"]).delete(h["lease"])     # best effort; the old provider may be gone
             except ProviderError:
                 pass
-            rec["replicas"][rec["replicas"].index(r)] = new
-            rec["history"].append({"time": now, "event": "repaired", "provider": r["provider"], "detail": new["provider"]})
-            changes.append({"replaced": r["provider"], "with": new["provider"]})
+            rec["holders"][rec["holders"].index(h)] = new
+            rec["history"].append({"time": now, "event": "repaired", "provider": h["provider"], "slot": h["slot"],
+                                   "detail": new["provider"]})
+            changes.append({"slot": h["slot"], "replaced": h["provider"], "with": new["provider"]})
         self.save(rec)
         return changes
+
+
+def _key(h: dict) -> str:
+    return f"{h['provider']}#{h['slot']}"
+
+
+def _mix_key(root: bytes, index: int) -> bytes:
+    return derive(root, f"irm/sto-1/mix/{index}")
+
+
+def _pick(candidates: list[dict], holders: list[dict], exclude: set[str]) -> dict | None:
+    """Next provider for a shard slot: fewest slots already held, then a region not yet used,
+    then the `choose` order (most reachable, cheapest). Never more than MAX_SLOTS_PER_PROVIDER."""
+    count: dict[str, int] = {}
+    for h in holders:
+        count[h["provider"]] = count.get(h["provider"], 0) + 1
+    full = {pid for pid, c in count.items() if c >= MAX_SLOTS_PER_PROVIDER}
+    pool = choose(candidates, len(candidates), set(exclude) | full)
+    if not pool:
+        return None
+    regions = {h["region"] for h in holders}
+    order = {e["id"]: i for i, e in enumerate(pool)}
+    return min(pool, key=lambda e: (count.get(e["id"], 0), e["region"] in regions, order[e["id"]]))
 
 
 # ---- command line -----------------------------------------------------------
@@ -406,7 +453,7 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--registry-key", default=os.environ.get("INNERNET_REGISTRY_KEY", ""),
                     help="pinned registry public key (hex); see /registry/v1/registry-key")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    s = sub.add_parser("put"); s.add_argument("file"); s.add_argument("--replicas", type=int, default=REPLICAS)
+    s = sub.add_parser("put"); s.add_argument("file")
     s = sub.add_parser("get"); s.add_argument("object"); s.add_argument("out")
     s = sub.add_parser("check"); s.add_argument("object")
     s = sub.add_parser("pay"); s.add_argument("object")
@@ -418,23 +465,24 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     c = Client(registry_url=args.registry, pinned=[bytes.fromhex(args.registry_key)])
     if args.cmd == "put":
-        rec = c.put(Path(args.file).read_bytes(), Path(args.file).name, args.replicas)
-        print(rec["object"], "stored on", ", ".join(r["name"] for r in rec["replicas"]))
+        rec = c.put(Path(args.file).read_bytes(), Path(args.file).name)
+        print(rec["object"], "stored as 6 shards (any 4 rebuild it) on",
+              ", ".join(f"{h['name']}[{h['slot']}]" for h in rec["holders"]))
     elif args.cmd == "get":
         Path(args.out).write_bytes(c.get(args.object))
         print("written", args.out)
     elif args.cmd == "check":
-        for pid, res in c.check(args.object).items():
-            print(pid[:12], "ok" if res["ok"] else "FAILED " + res["detail"])
+        for res in c.check(args.object).values():
+            print(res["provider"][:12], "shard", res["slot"], "ok" if res["ok"] else "FAILED " + res["detail"])
     elif args.cmd == "pay":
-        for pid, res in c.pay(args.object, _manual_payer).items():
-            print(pid[:12], res)
+        for key, res in c.pay(args.object, _manual_payer).items():
+            print(key[:12], "shard", key.split("#")[1], res)
     elif args.cmd == "repair":
         for ch in c.repair(args.object, force=args.now):
-            print("replaced", ch["replaced"][:12], "with", (ch["with"] or "nobody (no free provider)")[:12])
+            print("shard", ch["slot"], "moved from", ch["replaced"][:12], "to", (ch["with"] or "nobody (no free provider)")[:12])
     else:
         for rec in c.list():
-            print(rec["object"], rec["name"], rec["size"], "bytes,", ", ".join(f"{r['name']}:{r['status']}" for r in rec["replicas"]))
+            print(rec["object"], rec["name"], rec["size"], "bytes,", ", ".join(f"{h['name']}[{h['slot']}]:{h['status']}" for h in rec["holders"]))
     return 0
 
 
