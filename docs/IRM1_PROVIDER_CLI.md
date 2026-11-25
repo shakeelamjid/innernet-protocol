@@ -65,6 +65,8 @@ On Linux a normal user gets a user unit plus lingering (so it keeps running afte
 
 The same buttons are on the dashboard. Only the operator can reinstate a provider removed for abuse.
 
+**Passkeys are logins; the machine key is the master.** A passkey lives on your device (iCloud Keychain, Google Password Manager, a security key); the registry only keeps its public half, so nobody can show it to you. `start` lists the passkeys that already exist for this machine. On the website, a device that still has one just confirms it; a device without one (new, or the passkey was lost) adds a new one, because the code from the terminal proves you hold the machine. `innernet-provider passkeys` lists them and `innernet-provider passkeys remove NAME` deletes a lost or stolen one, signed by the machine key; removing also logs out every web session.
+
 `uninstall` removes the background service and the program; `uninstall --all` also deletes the key, settings and stored pieces after asking.
 
 Output: colours, spinner and boxes on a terminal; plain text in a pipe or with `NO_COLOR` (or `INNERNET_PLAIN=1`); `status --json` for scripts.
