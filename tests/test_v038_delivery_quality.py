@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -118,7 +119,7 @@ def test_qualification_local_probe_does_not_add_remote_writes(tmp_path, monkeypa
 
 
 def test_local_immediate_probe_cli_runs_without_config_directory(tmp_path):
-    proc = subprocess.run(["python", "-m", "innernet2.remote_lab", "--dir", str(tmp_path / "nonexistent"),
+    proc = subprocess.run([sys.executable, "-m", "innernet2.remote_lab", "--dir", str(tmp_path / "nonexistent"),
                            "immediate-probe", "--samples", "3"],
                           capture_output=True, text=True, timeout=15)
     assert proc.returncode == 0, proc.stderr

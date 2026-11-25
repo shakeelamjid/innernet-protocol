@@ -22,9 +22,11 @@ Input size 1..134,217,728 bytes, chunk size exactly 65,536 bytes, count ceil(siz
 
 One original sender, or explicitly trusted configured legacy-forwarding relay, may forward ciphertext to another allowlisted node. Storage commitment is not a delivery or durability guarantee. `get-range-v1` may reduce RPC count, but all ciphertext and all manifest checks remain mandatory. If the peer does not advertise it, clients may use individual `get` calls; malformed authenticated peer replies MUST fail over to the next **pinned** peer without weakening sender verification. Local resume checkpoint databases contain ciphertext only and are owner-private.
 
-## R90-ROUTE-1
+## R90-ROUTE-1 / R90-ROUTE-2
 
 A previously signed plan is still accepted until expiry even if the publisher issued a newer plan; R90-ROUTE-1 has no rollback-prevention state. Treat routes as availability/metadata hints, not revocable grants.
+
+**R90-ROUTE-2** is an additive profile that adds a mandatory monotonic `sequence` (unsigned 64-bit) field to the signed payload (`version="R90-ROUTE-2"`, field set `{version, sequence, issued_at, expires_at, nodes, routes}`). A verifier holding client-side per-publisher sequence state (`routing_v090.SequenceStore`) MUST reject any ROUTE-2 plan whose `sequence` is `<=` the highest previously accepted from that pinned publisher, preventing replay/rollback of an older unexpired plan over a compromised delivery channel. ROUTE-2 does not add revocation. ROUTE-1 remains valid for read/forward compatibility with no anti-rollback. See `MIGRATION_ROUTE2.md`.
 
 Route wrapper: `{"payload":..., "publisher":"<64 hex>", "signature":"<128 hex>"}`. Publisher signs `INNERnet/R90/signed-route-plan\0` + canonical payload JSON, and caller MUST verify an independently pinned publisher key. Payload has `version="R90-ROUTE-1"`, `issued_at`, `expires_at`, `nodes`, `routes`. Nodes: 1..32 unique `id`, `host`, `port` 1..65535, `public_ed25519`, and self-declared `failure_domain`. Routes: 1..128 entries of `recipient` (32-byte Ed25519 lowercase hex) and `ordered_nodes` (unique node IDs in preference order). Expiry required; 60..86400 second validity, future issuance tolerance <=300 seconds. Failure domains are **assertions**, not verified provider independence. Per-peer malformed responses are availability failures, not proof to accept unsigned content.
 

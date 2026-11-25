@@ -8,7 +8,7 @@ ST81 uses mutually pinned Ed25519 identities, fresh X25519 exchange, transcript 
 
 ## Known risks and unsupported guarantees
 
-1. **HTTP-v3 `inn3_` encryption requires a single-use root per object.** The high-level `MeshClient.upload_file` prevents external capability-pair reuse and generates a fresh pair on each upload. Low-level callers using `encrypt_chunk` / `encrypt_metadata` with the same root across different objects can reuse ChaCha20-Poly1305 key/nonce material and compromise confidentiality. HTTP-v3 is experimental and excluded from the candidate core.
+1. **HTTP-v3 `inn3_` chunk encryption (as of 1.0.1).** `encrypt_chunk`/`decrypt_chunk` now bind the AEAD key to the object ID (`HKDF(root, "data/aead/v2/"+object_id)`), so reusing a root across different objects no longer reuses chunk key+nonce material. `encrypt_metadata` is **not** yet object-bound: low-level callers that reuse a root across objects with the same metadata `sequence` can still reuse metadata key+nonce — use `MeshClient.upload_file`, which generates a fresh root per upload, and do not reuse roots. HTTP-v3 is experimental and excluded from the candidate core.
 2. **R90-ROUTE-1 does not support route revocation or anti-rollback.** A valid older route can be accepted until expiry. Signed plans are availability/metadata hints, not revocable authorization grants.
 3. **Unrestricted public ST81 listeners remain susceptible to resource-exhaustion/flooding.** Use provider and host firewalls/source-IP restrictions and isolated test nodes; do not claim DDoS resilience.
 4. **Long-term recipient key compromise may reveal historical OB80 payloads.** There is no independently established E2EE ratchet/key transparency.

@@ -162,13 +162,19 @@ def verify_directory(lookup: str, entry: dict) -> bool:
         return False
 
 
+def _chunk_key(root: bytes, object_id: bytes) -> bytes:
+    # Bind the AEAD key to the object ID so that a root accidentally reused
+    # across objects still yields a DISTINCT key per object. Combined with the
+    # per-index nonce this makes (key, nonce) reuse impossible without a
+    # 128-bit object-ID collision, closing the HTTP-v3 low-level reuse hole
+    # documented in SECURITY.md #1 rather than merely warning against it.
+    return derive(root, "data/aead/v2/" + object_id.hex())
+
+
 def encrypt_chunk(root: bytes, object_id: bytes, index: int, plaintext: bytes) -> bytes:
     if len(object_id) != 16 or not 0 <= index < 2**32 or len(plaintext) > 2**21:
         raise ValueError("invalid data chunk")
-    key = derive(root, "data/aead")
-    # IMPORTANT: this key is unique ONLY if `root` is used for one object.
-    # Never reuse a v2/v3 read root across objects. MeshClient.upload_file now
-    # generates a fresh root internally and no longer accepts a reusable pair.
+    key = _chunk_key(root, object_id)
     nonce = b"INN2" + index.to_bytes(8, "big")
     aad = DOMAIN + b"data/" + object_id + index.to_bytes(8, "big") + len(plaintext).to_bytes(4, "big")
     return ChaCha20Poly1305(key).encrypt(nonce, plaintext, aad)
@@ -179,7 +185,7 @@ def decrypt_chunk(root: bytes, object_id: bytes, index: int, ciphertext: bytes, 
         raise ValueError("invalid chunk envelope")
     nonce = b"INN2" + index.to_bytes(8, "big")
     aad = DOMAIN + b"data/" + object_id + index.to_bytes(8, "big") + expected_plain_size.to_bytes(4, "big")
-    return ChaCha20Poly1305(derive(root, "data/aead")).decrypt(nonce, ciphertext, aad)
+    return ChaCha20Poly1305(_chunk_key(root, object_id)).decrypt(nonce, ciphertext, aad)
 
 
 def encrypt_metadata(root: bytes, manifest: dict, sequence: int = 0) -> bytes:

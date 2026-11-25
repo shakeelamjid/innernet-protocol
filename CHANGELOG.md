@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.0.0 — pre-tag hardening (2026-11-25, unreleased)
+
+These changes apply to the still-untagged `v1.0.0` core source. They must pass CI on the exact `main` commit before the tag is created (see RELEASE_GATES.md).
+
+
+- **R90-ROUTE-2 (new profile, additive):** route plans may now carry a mandatory monotonic `sequence` field. A client that verifies with the new `routing_v090.SequenceStore` rejects any plan whose sequence is `<=` the highest already seen from that pinned publisher, giving client-side anti-rollback/replay protection. `R90-ROUTE-1` is retained unchanged for read/forward compatibility and still has **no** anti-rollback (as documented); asking for a `SequenceStore` while handed a ROUTE-1 plan is now an explicit error rather than silent non-protection. See `docs/MIGRATION_ROUTE2.md`.
+- **HTTP-v3 chunk key binding (SECURITY.md #1 closed in code):** `crypto.encrypt_chunk`/`decrypt_chunk` now derive the ChaCha20-Poly1305 key from `HKDF(root, "data/aead/v2/" + object_id)` instead of from `root` alone. Reusing a read root across different objects can no longer reuse key+nonce material; it would require a 128-bit object-ID collision. This changes the `inn3_` low-level chunk wire bytes — experimental profile only, excluded from the ST81/OB80-2/R90/UV10 core. `TEST_VECTORS_v0.2.json` regenerated accordingly. OB80-2 core objects are unaffected (they already bind the object ID into the key schedule salt).
+- **Test fix:** `tests/test_v038_delivery_quality.py` now launches the probe subprocess with `sys.executable` instead of a bare `python`, so the suite passes inside a virtualenv.
+- Release manifest regenerated.
+
 ## 1.0.0 — scoped protocol core software release (2026-11-24)
 
 - Release-supported core: ST81 mutual authentication, OB80-2 recipient-encrypted object transfer, R90-ROUTE-1 signed routing with bounded failover, UV10-1 application container format.
