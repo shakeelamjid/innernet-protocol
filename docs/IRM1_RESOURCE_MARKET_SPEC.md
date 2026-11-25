@@ -100,7 +100,7 @@ Rules:
 
 ### 3.3 Joining
 
-1. The provider installs the `innernet-provider` command-line tool (see `docs/IRM1_PROVIDER_CLI.md`) and runs `innernet-provider init`, which generates (or reuses) its Ed25519 provider key and asks step by step what to offer.
+1. The provider runs one installer command, which starts `innernet-provider start` (see `docs/IRM1_PROVIDER_CLI.md`). It generates (or reuses) the Ed25519 provider key, detects the machine's public address, reachability, resources and region, and lets the person finish either on the website (a one-time claim code bound to a signed `REG-1-CONNECT` record; the machine signs the final descriptor after the person confirms) or in the terminal.
 2. It deploys its payout split contract (section 4.3) and posts a **self-signed descriptor** (the provider entry above, minus `listed_at` and `reputation`, signed with its own key) to `POST https://innernetcorp.com/registry/v1/apply`.
 3. The registry checks, in order: the descriptor signature; that each endpoint answers an ST81 handshake with that key; that each `payto` is a valid split contract (section 4.3); and that the provider passes a probation run of real challenges for each listed service (section 3.4).
 4. Only then does the entry appear in the next signed document.
@@ -245,6 +245,20 @@ INNERnet does not count usage centrally. Both parties keep evidence that a third
 | CMP-1 | Instructions of a deterministic job (WASM metering) | Only for a result that verifies (section 7.3) | Job hash, result hash, PAY-1 ticket, on-chain payment |
 
 Every payment is a public on-chain transfer to the provider's split contract, and every service unit is covered by a PAY-1 ticket signed by the provider. A dispute therefore compares two signed records and the chain, not two people's word. The registry publishes each provider's reachability and, once the provider service ships, its proof pass rate, so clients can prefer reliable providers.
+
+### 5.9 HTTP binding (draft)
+
+Until STO-1 runs over ST81, providers serve it over HTTP on their listed endpoint (reference: `innernet-provider serve`; client: `innernet2/irm_client.py`).
+
+- **Requests** carry `X-Innernet-Client` (client Ed25519 public key, hex), `X-Innernet-Time` (Unix seconds), `X-Innernet-Nonce` (16 random bytes, hex) and `X-Innernet-Signature` over `"INNERnet/STO-1/request\x00" ‖ METHOD ‖ "\n" ‖ PATH ‖ "\n" ‖ hex(SHA-256(body)) ‖ "\n" ‖ time ‖ "\n" ‖ nonce`. Providers refuse requests more than 300 s from their clock and any signature seen before.
+- **Responses** with a JSON body carry `X-Innernet-Signature` by the provider key over `"INNERnet/STO-1/response\x00" ‖ body`. Clients verify it against the key in the signed registry entry.
+- **Leases** are 16 random bytes chosen by the client. The first client to write to a lease owns it; only the owner can read, challenge, pay for or delete it.
+- **Payment** (interim, before the x402 facilitator flow of section 4.1): the client sends USDC to the provider's split contract with an ordinary transfer and posts the transaction hash with the units it pays for. The provider reads the receipt from the chain, sums USDC `Transfer` logs to its split contract, requires at least `units × price` (rounded up to a base unit), credits each transaction once, and returns a PAY-1 ticket. This keeps the "pay after proof" order of section 5.3 and needs no facilitator.
+- Chunks are encrypted by the client with the OB80-2 chunk cipher before upload. The provider sees ciphertext only.
+
+### 5.10 Client behaviour (draft)
+
+The reference client places each file on 3 providers (one per region first, most reachable and cheapest first), checks each upload's STO-1 root, reads from the first replica that returns a chunk matching the recorded root, challenges random blocks daily, pays only replicas that passed the current epoch's check, and repairs replicas that have failed for longer than 24 h by copying verified chunks from a healthy replica to a new provider. Its record of where pieces live, and the object key, stay on the client machine (mode 0600). It refuses a registry document older than one it has already seen.
 
 ## 6. RLY-1: paid bandwidth (relaying)
 

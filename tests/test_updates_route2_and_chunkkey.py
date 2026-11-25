@@ -82,3 +82,24 @@ def test_legacy_route1_still_works_but_cannot_use_store(tmp_path):
     store = r90.SequenceStore(tmp_path / "seq" / "seen.json")
     with pytest.raises(BulkError):
         r90.verify_plan(p, pin, sequence_store=store)
+
+
+def test_sequence_store_reloads_after_update(tmp_path):
+    """Regression: the store must stay owner-only after an update, or it cannot be reopened."""
+    import os
+    from innernet2.routing_v090 import SequenceStore
+    d = tmp_path / "state"
+    d.mkdir(mode=0o700)
+    old = os.umask(0o022)
+    try:
+        s = SequenceStore(d / "seq.json")
+        s.check_and_update("aa" * 32, 5)
+        assert (d / "seq.json").stat().st_mode & 0o077 == 0
+        s2 = SequenceStore(d / "seq.json")
+        import pytest
+        from innernet2.bulk_v080 import BulkError
+        with pytest.raises(BulkError):
+            s2.check_and_update("aa" * 32, 5)
+        s2.check_and_update("aa" * 32, 6)
+    finally:
+        os.umask(old)

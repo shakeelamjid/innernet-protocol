@@ -215,6 +215,7 @@
       render(await I.api('/api/me'));
     } catch (err) {
       if (err.status === 401) showLogin();
+      else if (err.status === 409) location.replace(I.BASE + '/setup');
       else { $('login-msg').textContent = I.friendly(err); showLogin(); }
     }
   }

@@ -106,7 +106,12 @@ class SequenceStore:
             raise BulkError("route plan sequence rolled back or replayed")
         self._seen[publisher_hex]=sequence
         tmp=self.path.with_name(self.path.name+".tmp")
-        tmp.write_text(json.dumps(self._seen,sort_keys=True,separators=(",",":")))
+        # Keep the file owner-only: a plain write_text would create the temp file with the
+        # process umask (often 0644), and the next SequenceStore() would then refuse to load it.
+        fd=os.open(tmp,os.O_CREAT|os.O_TRUNC|os.O_WRONLY|getattr(os,"O_NOFOLLOW",0),0o600)
+        with os.fdopen(fd,"w") as fh:
+            fh.write(json.dumps(self._seen,sort_keys=True,separators=(",",":")))
+        os.chmod(tmp,0o600)
         os.replace(tmp,self.path)
 
 

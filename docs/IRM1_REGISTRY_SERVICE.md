@@ -20,6 +20,10 @@ It never holds funds or provider keys. Payments go from client to the provider's
 | `GET /registry/v1/login/challenge?provider=<id>` and `POST /registry/v1/login` | CLI `login` | Proves the provider key; returns a one-time link (10 minutes) to add a passkey |
 | `GET /registry/v1/registry.json` | Clients | Signed REG-1 document with every listed provider |
 | `GET /registry/v1/registry-key` | Anyone | The registry public key, for pinning |
+| `GET /registry/v1/whoami`, `POST /registry/v1/reachability` | `start` | The caller's public IP; dial back to the caller's own IP and port and read a nonce (never any other address) |
+| `POST /registry/v1/connect`, `GET /registry/v1/connect/status`, `POST /registry/v1/connect/finish` | `start` (website mode) | Signed `REG-1-CONNECT` record in, one-time claim code out (8 characters, 30 minutes, single use); the machine polls for the offer the person submits |
+| `GET /registry/v1/split?receiver=0x…` | `start`, `payout` | The payout contract the factory created for a wallet, if any |
+| `/registry/claim`, `/registry/setup` | People | Enter the code, add a passkey, choose the offer and create the payout contract |
 | `/registry/api/...` | Dashboard | Passkey enrolment and login (WebAuthn), dashboard data, passkey and session management |
 
 Browser API calls need the `X-Innernet: 1` header and a same-origin `Origin`; session cookies are `__Host-`, `HttpOnly`, `Secure`, `SameSite=Strict`, 12 hours. The one-time link carries its token in the URL fragment, so it never reaches server logs or `Referer` headers, and the page removes it from the address bar at once.

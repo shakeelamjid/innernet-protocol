@@ -1,7 +1,7 @@
 'use strict';
 // Shared helpers: API calls and WebAuthn JSON <-> ArrayBuffer conversion.
 (function () {
-  const BASE = location.pathname.replace(/\/(dashboard|enroll|providers\/[^/]*)\/?$/, '');
+  const BASE = location.pathname.replace(/\/(dashboard|enroll|claim|setup|payout|providers\/[^/]*)\/?$/, '');
 
   async function api(path, body) {
     const opts = { credentials: 'same-origin', headers: { 'X-Innernet': '1' } };

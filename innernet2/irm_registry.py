@@ -381,3 +381,46 @@ def verify_login(record: dict, *, expected_challenge: str, registry_host: str,
     except (ValueError, InvalidSignature) as exc:
         raise BulkError("login signature invalid") from exc
     return provider
+
+
+# ---- machine connect (web setup) --------------------------------------------
+# `innernet-provider start` signs what it detected on the machine with the
+# provider key. The registry answers with a one-time claim code. The person
+# enters the code on the website, adds a passkey and chooses the offer; the
+# machine then signs the final descriptor itself. The key never leaves it.
+
+CONNECT_DOMAIN = b"INNERnet/REG-1/provider-connect\x00"
+CONNECT_VERSION = "REG-1-CONNECT"
+_DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
+                  "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str}
+
+
+def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:
+    """Return (provider id, detected facts) for a fresh, correctly signed connect record."""
+    _exact_keys(record, {"payload", "signature"}, label="connect record")
+    payload = record["payload"]
+    _exact_keys(payload, {"version", "provider", "detected", "nonce", "issued_at"}, label="connect payload")
+    if payload["version"] != CONNECT_VERSION:
+        raise BulkError("unsupported connect version")
+    issued = _int(payload["issued_at"], 0, 2**53, "connect issued_at")
+    instant = int(time.time()) if now is None else now
+    if not instant - max_age <= issued <= instant + FUTURE_SKEW:
+        raise BulkError("connect record is stale")
+    if not isinstance(payload["nonce"], str) or not re.match(r"^[0-9a-f]{32}$", payload["nonce"]):
+        raise BulkError("invalid connect nonce")
+    detected = payload["detected"]
+    if not isinstance(detected, dict) or not set(detected) <= set(_DETECTED_KEYS):
+        raise BulkError("invalid detected facts")
+    for key, value in detected.items():
+        kind = _DETECTED_KEYS[key]
+        if kind is int:
+            _int(value, 0, 2**40, f"detected {key}")
+        elif type(value) is not kind or (kind is str and len(value) > 253):
+            raise BulkError(f"invalid detected {key}")
+    provider = _bytes(payload["provider"], 32, "provider id")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider).verify(
+            _bytes(record["signature"], 64, "connect signature"), CONNECT_DOMAIN + canonical(payload))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("connect signature invalid") from exc
+    return provider, detected

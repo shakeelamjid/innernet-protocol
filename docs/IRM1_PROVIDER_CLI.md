@@ -18,33 +18,49 @@ irm https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provid
 
 The installers find the newest `provider-v*` release through the GitHub API, or, when that is unavailable or rate-limited, from `provider/LATEST` in the repository (update that file with every release). They download the build for your system and refuse to install if its SHA-256 does not match `SHA256SUMS` in the same release. Signed releases (so a compromised GitHub account cannot ship a bad binary) are planned. You can also build from source with Go 1.23+: `cd provider && go build -o innernet-provider .`
 
-## Set up, step by step
+## Set up with one command
+
+The installer starts setup by itself (`INNERNET_NO_START=1` installs only). You can also run `innernet-provider start` any time.
+
+1. **Detection.** The tool creates this machine's provider key (it never leaves the machine), then finds out by itself: the public IP (as the registry sees it), whether the chosen port (9443 by default) is reachable from the internet (it listens, the registry connects back and must read a random nonce), free disk, CPUs, memory, region (from the time zone) and a name (from the host name).
+2. **Choice.** Website (recommended) or terminal.
+
+**Website.** The terminal prints a one-time code such as `K7QM-4XPA` and a link to `innernetcorp.com/registry/claim`. On the website the person enters the code, adds a passkey (this becomes their login), checks the detected values, picks services and prices, and creates the payout contract with their own wallet. The terminal then shows the final offer, including the payout contract, and asks for confirmation; the machine signs the descriptor and applies. The code is single-use, expires after 30 minutes, and is never the key: the website cannot sign anything, and a guessed code cannot change the payout without the person seeing it in their terminal.
+
+**Terminal.** The same questions with detected values pre-filled. Agents and scripts:
 
 ```sh
-innernet-provider init                                 # asks name, region, address, what to offer, prices
-innernet-provider backup ~/innernet-provider-backup.json
-innernet-provider wallet set 0x...                     # your payout contract, created at innernetcorp.com/registry/payout
-innernet-provider apply                                # sends the signed form to the registry
-innernet-provider status                               # applied, testing, listed; health; earnings
-innernet-provider login                                # one-time link to the web dashboard
+innernet-provider start --yes --wallet 0xYourWallet [--port 9443]
 ```
 
-On servers, `init` can run without questions:
+Only the wallet is required. `start` looks up the payout contract for that wallet through the registry; if there is none yet, it prints a one-click link to create it and waits. A machine that is already set up re-applies with its saved settings.
+
+After setup, keep the provider service running:
 
 ```sh
-innernet-provider init --yes --name lahore-box-1 --region asia-south --host node1.example.com \
-  --storage-gib 200 --relay-gib 500 --compute --cpus 4 --memory-mib 2048
+innernet-provider serve      # stores pieces, answers storage checks, issues payment receipts
+innernet-provider status
+innernet-provider login      # dashboard link for a new device
 ```
 
-What can be offered:
+Run `serve` under a service manager so it survives restarts, for example a systemd unit with `ExecStart=/home/you/.local/bin/innernet-provider serve` and `Restart=always`.
 
-| Service | Code | Price unit | Limits asked |
-|---|---|---|---|
-| Storage | STO-1 | USDC per GiB per day | GiB offered |
-| Bandwidth (relaying) | RLY-1 | USDC per GiB relayed | GiB per month |
-| Compute (sandboxed, no network or file access) | CMP-1 | USDC per billion instructions | CPUs and memory per job |
+Other commands: `init` (terminal questions only, also accepts every value as a flag), `payout 0xWALLET` (find or create the payout contract and save it), `wallet set 0xCONTRACT`, `apply [--dry-run]`, `show`, `backup FILE`, `restore FILE`, `version`.
 
-The machine must be reachable from the internet on the port you give. Home computers behind a router will be able to join once relay mode ships.
+### What `serve` does
+
+`serve` speaks the STO-1 HTTP binding (IRM-1 spec section 5.9) on the configured port:
+
+| Request | Purpose |
+|---|---|
+| `GET /sto/v1/info` | Public: provider id, prices, payout contract, free space |
+| `PUT /sto/v1/leases/<lease>/objects/<object>/chunks/<n>` | Store one ciphertext chunk; replies with its STO-1 root |
+| `GET …/chunks/<n>` | Return a chunk to the lease owner |
+| `POST /sto/v1/leases/<lease>/challenge` | Prove possession: one 1 KiB block plus its Merkle path |
+| `POST /sto/v1/leases/<lease>/pay` | Check a USDC payment to this provider's payout contract on-chain, return a signed PAY-1 ticket |
+| `DELETE /sto/v1/leases/<lease>` | Remove a lease |
+
+Every request is signed by the client's Ed25519 key over method, path, body hash, time and a random nonce; replays and requests more than 5 minutes off the clock are refused. The first client to write to a lease owns it. Every JSON reply is signed with the provider key, so both sides keep evidence. Each payment transaction can be credited once. `INNERNET_RPC` sets the JSON-RPC endpoint used to check payments (default `https://sepolia.base.org`).
 
 ## Files
 
@@ -72,10 +88,12 @@ The dashboard shows status, health, activity per service, earnings, the 2.5% net
 |---|---|
 | `INNERNET_HOME` | Where the provider files live |
 | `INNERNET_REGISTRY` | Registry URL (default `https://innernetcorp.com/registry/v1`) |
+| `INNERNET_RPC` | JSON-RPC endpoint `serve` uses to check payments |
+| `INNERNET_NO_START` | Installer: install only, do not start setup |
 | `INNERNET_BACKUP_PASSPHRASE` | Passphrase for `backup` / `restore` without a prompt (automation only; it ends up in your shell history and process list) |
 
 Never put the contents of `identity.key`, a wallet seed phrase or any private key in an environment variable, chat, GitHub or the dashboard.
 
 ## Status of this tool
 
-Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_REGISTRY_SERVICE.md`); until it is deployed, `apply` keeps your signed form and tells you so. The provider service daemon that actually serves storage, relay and compute arrives with M1 part 2.
+Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_REGISTRY_SERVICE.md`); until it is deployed, `apply` keeps your signed form and tells you so. `serve` implements storage (STO-1). Relay (RLY-1) and compute (CMP-1) serving follow; until then those offers are listed but not served.

@@ -23,6 +23,7 @@ innernet-qualify = "innernet2.qualify_v110:main"
 innernet-uv10 = "innernet2.universal_v1:main"
 innernet-universal = "innernet2.universal_transport_v1:main"
 innernet-qualify-v1 = "innernet2.qualify_v1:main"
+innernet-client = "innernet2.irm_client:main"
 
 [tool.setuptools]
 packages = ["innernet2", "innernet2.registry_service"]

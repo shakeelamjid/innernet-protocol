@@ -57,6 +57,13 @@ CREATE TABLE IF NOT EXISTS chain_cursor (
   network TEXT NOT NULL, payto TEXT NOT NULL, next_block INTEGER NOT NULL, PRIMARY KEY (network, payto)
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS claims (
+  code_hash TEXT PRIMARY KEY, poll_hash TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, detected TEXT NOT NULL,
+  created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,
+  status TEXT NOT NULL,            -- waiting | claimed | submitted | done
+  draft TEXT, claimed_at INTEGER, submitted_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS claims_by_provider ON claims(provider, created_at);
 """
 
 

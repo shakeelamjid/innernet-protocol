@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Set up your machine · INNERnet providers</title>
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/wallet.js" defer></script>
+  <script src="static/setup.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="dashboard">Dashboard</a>
+    </div>
+  </header>
+  <main>
+    <div class="wrap narrow">
+      <div class="head">
+        <div>
+          <h1>Set up your machine</h1>
+          <p>We filled in what your machine told us. Check it, choose what to offer, and create your payout contract. Your machine signs the result; nothing here can sign for it.</p>
+        </div>
+      </div>
+      <p class="msg error" id="err" hidden></p>
+
+      <form id="form" hidden novalidate>
+        <section class="card frame step">
+          <h2>Your machine</h2>
+          <dl class="kv" id="facts"></dl>
+          <p class="msg" id="reach"></p>
+          <div class="fields">
+            <label>Public name<input id="name" class="field" maxlength="64" autocomplete="off"></label>
+            <label>Region<input id="region" class="field" maxlength="32" autocomplete="off"></label>
+            <label>Public address<input id="host" class="field mono" maxlength="253" autocomplete="off"></label>
+            <label>Port<input id="port" class="field" type="number" min="1" max="65535"></label>
+          </div>
+        </section>
+
+        <section class="card frame step">
+          <h2>What you offer</h2>
+          <div class="offer">
+            <label class="toggle"><input type="checkbox" id="sto-on"> <span><strong>Storage</strong> Hold encrypted pieces.</span></label>
+            <div class="fields" data-for="sto-on">
+              <label>GiB to offer<input id="sto-gib" class="field" type="number" min="1"></label>
+              <label>USDC per GiB per day<input id="sto-price" class="field" inputmode="decimal"></label>
+            </div>
+            <label class="toggle"><input type="checkbox" id="rly-on"> <span><strong>Bandwidth</strong> Relay encrypted traffic. Check your internet plan allows it.</span></label>
+            <div class="fields" data-for="rly-on">
+              <label>GiB per month<input id="rly-gib" class="field" type="number" min="1"></label>
+              <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
+            </div>
+            <label class="toggle"><input type="checkbox" id="cmp-on"> <span><strong>Compute</strong> Run small sandboxed jobs.</span></label>
+            <div class="fields" data-for="cmp-on">
+              <label>Max CPUs per job<input id="cmp-cpus" class="field" type="number" min="1"></label>
+              <label>Max memory per job, MiB<input id="cmp-mem" class="field" type="number" min="64"></label>
+              <label>USDC per billion instructions<input id="cmp-price" class="field" inputmode="decimal"></label>
+            </div>
+          </div>
+        </section>
+
+        <section class="card frame step">
+          <h2>Your payout contract</h2>
+          <p>Clients pay this contract. It sends <strong id="share-you">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the network, and nobody can change that.</p>
+          <button class="btn" type="button" id="connect">Connect wallet and find or create it</button>
+          <label>Payout contract<input id="payout" class="field mono" maxlength="42" autocomplete="off" placeholder="0x…"></label>
+          <p class="msg" id="pay-msg" role="status"></p>
+        </section>
+
+        <section class="card frame step">
+          <h2>Send to your machine</h2>
+          <p>Your terminal will show this offer and ask you to confirm. Then it signs and applies.</p>
+          <button class="btn btn-light" type="submit" id="send">Send to my machine</button>
+          <p class="msg" id="send-msg" role="status"></p>
+        </section>
+      </form>
+    </div>
+  </main>
+</body>
+</html>

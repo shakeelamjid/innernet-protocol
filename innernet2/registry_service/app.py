@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import secrets
 import threading
 import time
@@ -21,8 +22,8 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
                                       ResidentKeyRequirement, UserVerificationRequirement)
 
 from ..bulk_v080 import BulkError
-from ..irm_registry import make_login_challenge, sign_registry, verify_descriptor, verify_login
-from . import chain, probe
+from ..irm_registry import make_login_challenge, sign_registry, verify_connect, verify_descriptor, verify_login
+from . import chain, offer as offers, probe
 from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
 
@@ -82,8 +83,39 @@ def pct(ratio: float | None) -> str:
     return "n/a" if ratio is None else f"{ratio * 100:.1f}%"
 
 
+CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I
+CLAIM_TTL = 30 * 60
+
+
+def new_claim_code() -> str:
+    raw = "".join(secrets.choice(CODE_ALPHABET) for _ in range(8))   # 40 bits
+    return raw[:4] + "-" + raw[4:]
+
+
+def norm_code(code: str) -> str:
+    c = "".join(ch for ch in str(code).upper() if ch in CODE_ALPHABET)
+    return c[:4] + "-" + c[4:] if len(c) == 8 else ""
+
+
+def nonce_check(host: str, port: int, nonce: str, timeout: float = 5.0) -> bool:
+    """Connect to host:port and expect the machine to send `nonce` first."""
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout) as sock:
+            sock.settimeout(timeout)
+            got = b""
+            while len(got) < len(nonce):
+                chunk = sock.recv(64)
+                if not chunk:
+                    break
+                got += chunk
+            return got[:len(nonce)] == nonce.encode()
+    except OSError:
+        return False
+
+
 def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http_rpc,
-               connect=probe.tcp_connect) -> FastAPI:
+               connect=probe.tcp_connect, reach=nonce_check) -> FastAPI:
     store = store or Store(settings.db_path)
     registry_key = load_registry_key(settings.key_file)
     if registry_key is not None:
@@ -316,6 +348,80 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return {"registry_key": registry_key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()}
 
+    # ---- machine setup helpers (used by `innernet-provider start`) ------------
+    @app.get(P + "/v1/whoami")
+    def whoami(request: Request):
+        return {"ip": client_ip(request)}
+
+    @app.post(P + "/v1/reachability")
+    async def reachability(request: Request):
+        """Dial back to the caller's own address only, so this cannot be used to probe others."""
+        ip = client_ip(request)
+        limiter.check("reach", ip, 10, 600)
+        data = await body_json(request)
+        port, nonce = data.get("port"), str(data.get("nonce", ""))
+        if type(port) is not int or not 1 <= port <= 65535 or not re.match(r"^[0-9a-f]{32}$", nonce):
+            raise HTTPException(400, "port and nonce required")
+        return {"ip": ip, "port": port, "reachable": bool(reach(ip, port, nonce))}
+
+    @app.get(P + "/v1/split")
+    def find_split(receiver: str, network: str = "eip155:84532"):
+        factory = settings.split_factory.get(network)
+        url = settings.rpc.get(network)
+        if not re.match(r"^0x[0-9a-fA-F]{40}$", receiver):
+            raise HTTPException(400, "receiver must be an EVM address")
+        if not factory or not url:
+            return {"factory": factory, "split": None, "ready": False}
+        try:
+            value = chain._call(rpc, url, factory, chain.SEL_SPLIT_OF, receiver)
+        except Exception:
+            raise HTTPException(503, "could not reach the chain; try again") from None
+        split = None if value == 0 else "0x" + f"{value:040x}"
+        return {"factory": factory, "split": split, "ready": True,
+                "create_url": f"{settings.origin}{P}/payout#receiver={receiver}"}
+
+    @app.post(P + "/v1/connect")
+    async def connect_machine(request: Request):
+        ip = client_ip(request)
+        limiter.check("connect", ip, 10, 3600)
+        record = await body_json(request)
+        pid, detected = verify_connect(record)
+        pid = pid.hex()
+        code, poll = new_claim_code(), secrets.token_urlsafe(24)
+        now = int(time.time())
+        store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status) "
+                "VALUES (?,?,?,?,?,?,'waiting')",
+                (token_hash(code), token_hash(poll), pid, json.dumps(detected), now, now + CLAIM_TTL))
+        store.audit(pid, "machine-connected", f"{detected.get('os', '')}/{detected.get('arch', '')}", ip)
+        return {"code": code, "poll": poll, "expires_at": now + CLAIM_TTL,
+                "url": f"{settings.origin}{P}/claim#code={code}"}
+
+    def claim_by_poll(request: Request) -> dict:
+        poll = request.headers.get("x-poll-token", "")
+        row = store.one("SELECT * FROM claims WHERE poll_hash=?", (token_hash(poll),))
+        if row is None:
+            raise HTTPException(404, "unknown setup session")
+        return dict(row)
+
+    @app.get(P + "/v1/connect/status")
+    def connect_status(request: Request):
+        c = claim_by_poll(request)
+        status = c["status"]
+        if status in ("waiting", "claimed") and c["expires_at"] < int(time.time()):
+            status = "expired"
+        out = {"status": status}
+        if c["draft"] and status == "submitted":
+            out["offer"] = json.loads(c["draft"])
+        return out
+
+    @app.post(P + "/v1/connect/finish")
+    def connect_finish(request: Request):
+        c = claim_by_poll(request)
+        if c["status"] != "submitted":
+            raise HTTPException(409, "nothing to finish")
+        store.x("UPDATE claims SET status='done' WHERE code_hash=?", (c["code_hash"],))
+        return {"ok": True}
+
     @app.get(P + "/v1/config")
     def public_config():
         """Public settings the payout page and clients need. Contains no secrets."""
@@ -330,6 +436,14 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     @app.get(P + "/payout")
     def payout_page():
         return page("payout.html")
+
+    @app.get(P + "/claim")
+    def claim_page():
+        return page("claim.html")
+
+    @app.get(P + "/setup")
+    def setup_page():
+        return page("setup.html")
 
     cached_doc: dict = {}
 
@@ -506,12 +620,108 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         response.delete_cookie(cookie_name, path="/", secure=settings.cookie_secure, httponly=True, samesite="strict")
         return response
 
+    # ---- claim a machine and set it up on the web -------------------------
+    def live_claim(code: str) -> dict:
+        row = store.one("SELECT * FROM claims WHERE code_hash=?", (token_hash(norm_code(code)),))
+        if row is None or row["expires_at"] < int(time.time()):
+            raise HTTPException(404, "This code is wrong or has expired. Run innernet-provider start again for a new one.")
+        if row["status"] != "waiting":
+            raise HTTPException(409, "This code was already used.")
+        return dict(row)
+
+    @app.post(P + "/api/claim/options")
+    async def claim_options(request: Request):
+        guard(request)
+        limiter.check("claim", client_ip(request), 20, 600)
+        c = live_claim((await body_json(request)).get("code", ""))
+        pid = c["provider"]
+        detected = json.loads(c["detected"])
+        name = detected.get("name") or "provider"
+        existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
+                    for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))]
+        options = generate_registration_options(
+            rp_id=settings.rp_id, rp_name="INNERnet providers", user_id=bytes.fromhex(pid),
+            user_name=name, user_display_name=f"{name} ({pid[:8]})", exclude_credentials=existing,
+            authenticator_selection=AuthenticatorSelectionCriteria(
+                resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.PREFERRED))
+        flow = new_flow("claim", options.challenge, pid, None)
+        store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], flow))
+        return {"flow": flow, "options": json.loads(options_to_json(options)), "name": name,
+                "machine": {k: detected.get(k) for k in ("host", "os", "arch")}}
+
+    @app.post(P + "/api/claim/verify")
+    async def claim_verify(request: Request):
+        guard(request)
+        ip = client_ip(request)
+        limiter.check("claim", ip, 20, 600)
+        data = await body_json(request)
+        f = take_flow(data.get("flow", ""), "claim")
+        try:
+            v = verify_registration_response(credential=data.get("credential"), expected_challenge=f["challenge"],
+                                             expected_origin=settings.origin, expected_rp_id=settings.rp_id)
+        except Exception as exc:
+            raise HTTPException(400, f"passkey was not accepted: {exc}") from None
+        now = int(time.time())
+        with store.tx() as db:
+            cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
+                             "AND expires_at>?", (now, f["token_hash"], now))
+            if cur.rowcount != 1:
+                raise HTTPException(409, "This code was already used or has expired.")
+            db.execute("INSERT INTO passkeys(cred_id, provider, public_key, sign_count, name, created_at) VALUES (?,?,?,?,?,?)",
+                       (bytes_to_base64url(v.credential_id), f["provider"], v.credential_public_key, v.sign_count,
+                        str(data.get("name") or "Passkey").strip()[:40] or "Passkey", now))
+        store.audit(f["provider"], "machine-claimed", "passkey added", ip)
+        response = JSONResponse({"ok": True})
+        start_session(request, f["provider"], response)
+        return response
+
+    def open_claim(pid: str) -> dict | None:
+        row = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('claimed','submitted') "
+                        "ORDER BY created_at DESC LIMIT 1", (pid,))
+        return dict(row) if row else None
+
+    @app.get(P + "/api/setup")
+    def setup_get(request: Request):
+        s = need_session(request)
+        pid = s["provider"]
+        c = open_claim(pid)
+        current = store.provider(pid)
+        if c is None:
+            raise HTTPException(404, "No machine is waiting for setup. Run innernet-provider start on it.")
+        detected = json.loads(c["detected"])
+        nets = [{"caip2": n, "name": NETWORK_NAMES.get(n, n), "factory": settings.split_factory.get(n)}
+                for n in settings.fee_payto]
+        return {"provider": pid, "status": c["status"], "detected": detected,
+                "draft": json.loads(c["draft"]) if c["draft"] else None,
+                "current": current["entry"] if current else None,
+                "defaults": {"prices": offers.DEFAULT_PRICES, "units": offers.UNITS},
+                "fee_bps": settings.fee_bps, "networks": nets}
+
+    @app.post(P + "/api/setup")
+    async def setup_post(request: Request):
+        guard(request)
+        s = need_session(request)
+        pid = s["provider"]
+        c = open_claim(pid)
+        if c is None:
+            raise HTTPException(404, "No machine is waiting for setup. Run innernet-provider start on it.")
+        o = offers.check_offer(await body_json(request), set(settings.fee_payto))
+        ok, why = chain.payout_check(settings, o["network"], o["payout"], rpc)
+        if not ok:
+            raise HTTPException(422, why)
+        store.x("UPDATE claims SET draft=?, status='submitted', submitted_at=? WHERE code_hash=?",
+                (json.dumps(o), int(time.time()), c["code_hash"]))
+        store.audit(pid, "offer-submitted", ", ".join(offers.to_entry(o, pid)["services"]), client_ip(request))
+        return {"ok": True, "note": why}
+
     # ---- dashboard data -------------------------------------------------
     @app.get(P + "/api/me")
     def me(request: Request):
         s = need_session(request)
         pid = s["provider"]
         p = store.provider(pid)
+        if p is None:
+            raise HTTPException(409, "setup")
         now = int(time.time())
         e30 = chain.earnings(store, pid, settings.fee_bps, since=now - 30 * DAY)
         eall = chain.earnings(store, pid, settings.fee_bps, since=0)

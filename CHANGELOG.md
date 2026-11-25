@@ -2,6 +2,18 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### One-command onboarding, provider service, client (consolidated)
+
+- **One command.** The installer now starts `innernet-provider start`: it creates the machine key, detects the public IP, tests that the port is reachable from the internet (registry dials back to the caller only and must read a random nonce), free disk, CPUs, memory, region (time zone) and name, then asks: website or terminal.
+  - Website: signed `REG-1-CONNECT` record → one-time claim code (8 characters, 30 min, single use). New pages `/registry/claim` (code + passkey) and `/registry/setup` (detected values, services, prices, payout contract via the person's wallet). The machine shows the final offer, the person confirms, the machine signs and applies. The web never holds the key.
+  - Terminal: same detection; `start --yes --wallet 0x…` for agents and scripts; looks up or waits for the payout contract.
+- **`innernet-provider serve`**: STO-1 over HTTP (spec 5.9). Signed requests with nonce and replay cache, one owner per lease, quota, STO-1 Merkle proofs (Go port, identical to the Python reference), signed JSON replies, on-chain USDC payment checks with single use per transaction, PAY-1 tickets.
+- **`innernet2/irm_client.py`** (`innernet-client`): put on 3 providers (region diversity), verified reads with failover, daily proofs, pay-after-proof per epoch with ticket verification, repair after 24 h from a healthy replica, registry rollback refusal.
+- Registry: `whoami`, `reachability`, `connect`, `connect/status`, `connect/finish`, `split`, claim and setup APIs; dashboard sends machines without an application to setup.
+- **Fix (v1.0.0 core):** `routing_v090.SequenceStore.check_and_update` wrote its state file with the process umask (often 0644); the next `SequenceStore()` then refused to load it as not owner-only. It now writes 0600. Regression test added.
+- Tests: `tests/test_irm_end_to_end.py` (4 real Go providers + client + fake chain: placement, failover, a provider going down, no payment for failed replicas, repair onto the spare, tampered chunk detection, owner/replay/payment-reuse checks); registry tests for connect/claim/setup and live Go `start` runs in website and agent mode with a real reachability dial-back.
+- Docs: spec 5.9 (HTTP binding) and 5.10 (client behaviour); CLI guide rewritten around `start` and `serve`; website guide rewritten around one command.
+
 ### Payout split contract, 2.5% fee, provider guide
 
 - **Network fee is now 2.5%** (`fee_bps` 250) everywhere: registry default, contract tests, docs, CLI text and website.

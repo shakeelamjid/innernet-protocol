@@ -50,5 +50,12 @@ if (($userPath -split ";") -notcontains $BinDir) {
   [Environment]::SetEnvironmentVariable("Path", "$userPath;$BinDir", "User")
   Write-Host "Added $BinDir to your PATH. Open a new terminal."
 }
-Write-Host "Installed $(Join-Path $BinDir 'innernet-provider.exe')"
-Write-Host "Next:  innernet-provider init"
+$exe = Join-Path $BinDir 'innernet-provider.exe'
+Write-Host "Installed $exe"
+# Start setup straight away unless INNERNET_NO_START is set (scripts) or the build predates "start".
+if (-not $env:INNERNET_NO_START -and ((& $exe help) -match ' start ')) {
+  Write-Host ""
+  & $exe start
+} else {
+  Write-Host "Next:  innernet-provider start"
+}

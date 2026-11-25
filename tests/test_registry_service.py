@@ -89,6 +89,7 @@ class FakeChain:
         self.head = 1000
         self.logs: list[dict] = []
         self.code = "0x6080"
+        self.splits: dict[str, str] = {}          # receiver -> split (lower-case)
 
     def __call__(self, url, method, params):
         if method == "eth_blockNumber":
@@ -97,6 +98,19 @@ class FakeChain:
             return self.code
         if method == "eth_getBlockByNumber":
             return {"timestamp": hex(int(time.time()) - 3600)}
+        if method == "eth_call":
+            to, data = params[0]["to"].lower(), params[0]["data"]
+            sel, arg = data[2:10], data[10:]
+            word = lambda v: "0x" + format(v, "064x")  # noqa: E731
+            if sel == chain.SEL_SPLIT_OF:
+                return word(int(self.splits.get("0x" + arg[-40:], "0x0"), 16))
+            if sel == chain.SEL_IS_SPLIT:
+                return word(1 if ("0x" + arg[-40:]) in self.splits.values() else 0)
+            if sel == chain.SEL_FEE_RECIPIENT:
+                return word(int(FEE_WALLET, 16))
+            if sel == chain.SEL_FEE_BPS:
+                return word(250)
+            raise AssertionError(sel)
         if method == "eth_getLogs":
             f = params[0]
             lo, hi = int(f["fromBlock"], 16), int(f["toBlock"], 16)
@@ -455,3 +469,203 @@ def test_contract_artifact_is_reproducible(tmp_path):
     (work / "node_modules").symlink_to((root / "node_modules").resolve())
     subprocess.run([node, str(work / "build.js"), str(work)], check=True, capture_output=True)
     assert (work / "build/contracts.json").read_text() == (root / "build/contracts.json").read_text()
+
+
+
+# ---- web and terminal setup (innernet-provider start) -------------------------
+
+from innernet2.irm_registry import CONNECT_DOMAIN, verify_connect  # noqa: E402
+from innernet2.registry_service.app import nonce_check, norm_code  # noqa: E402
+
+
+def connect_record(key, detected, now=None, nonce="ab" * 16):
+    payload = {"version": "REG-1-CONNECT", "provider": key.public_key().public_bytes_raw().hex(), "detected": detected,
+               "nonce": nonce, "issued_at": int(time.time()) if now is None else now}
+    return {"payload": payload, "signature": key.sign(CONNECT_DOMAIN + canonical(payload)).hex()}
+
+
+def test_connect_record_rules():
+    key = Ed25519PrivateKey.generate()
+    det = {"name": "box", "host": "1.2.3.4", "port": 9443, "cpus": 4, "reachable": True}
+    pid, d = verify_connect(connect_record(key, det))
+    assert pid == key.public_key().public_bytes_raw() and d == det
+    from innernet2.bulk_v080 import BulkError
+    with pytest.raises(BulkError, match="stale"):
+        verify_connect(connect_record(key, det, now=int(time.time()) - 3600))
+    with pytest.raises(BulkError):
+        verify_connect(connect_record(key, dict(det, password="x")))
+    rec = connect_record(key, det)
+    rec["payload"]["detected"]["host"] = "6.6.6.6"
+    with pytest.raises(BulkError, match="signature"):
+        verify_connect(rec)
+    assert norm_code("k7qm 4xpa") == "K7QM-4XPA" and norm_code("short") == ""
+
+
+def test_whoami_reachability_and_split(tmp_path):
+    fake = FakeChain()
+    calls = []
+    s = settings(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20})
+    app = create_app(s, rpc=fake, reach=lambda host, port, nonce: calls.append((host, port)) or True)
+    c = TestClient(app, base_url=ORIGIN)
+    ip = c.get(P + "/v1/whoami").json()["ip"]
+    r = c.post(P + "/v1/reachability", json={"port": 9443, "nonce": "cd" * 16}).json()
+    assert r["reachable"] and calls == [(ip, 9443)]                  # dials the caller only
+    assert c.post(P + "/v1/reachability", json={"port": 9443, "nonce": "zz"}).status_code == 400
+    wallet = "0x" + "77" * 20
+    assert c.get(P + "/v1/split", params={"receiver": wallet}).json()["split"] is None
+    fake.splits[wallet] = "0x" + "5b" * 20
+    out = c.get(P + "/v1/split", params={"receiver": wallet}).json()
+    assert out["split"] == "0x" + "5b" * 20 and out["ready"]
+
+
+def test_nonce_check_talks_to_a_real_listener():
+    srv = socket.socket()
+    srv.bind(("127.0.0.1", 0))
+    srv.listen(1)
+    port = srv.getsockname()[1]
+    nonce = "ef" * 16
+
+    def serve():
+        conn, _ = srv.accept()
+        conn.sendall(nonce.encode())
+        conn.close()
+    threading.Thread(target=serve, daemon=True).start()
+    assert nonce_check("127.0.0.1", port, nonce)
+    srv.close()
+    assert not nonce_check("127.0.0.1", port, nonce, timeout=0.5)
+
+
+def test_claim_and_setup_api(env):
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    pid = key.public_key().public_bytes_raw().hex()
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 500,
+           "cpus": 8, "memory_mib": 16384, "os": "linux", "arch": "amd64", "reachable": True, "version": "0.2.0"}
+    started = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    assert started["url"] == f"{ORIGIN}/registry/claim#code={started['code']}"
+    poll = {"X-Poll-Token": started["poll"]}
+    assert client.get(P + "/v1/connect/status", headers=poll).json() == {"status": "waiting"}
+    assert client.post(P + "/api/claim/options", json={"code": "AAAA-AAAA"}, headers=H).status_code == 404
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": started["code"].lower().replace("-", " ")}, headers=H).json()
+    v = client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]), "name": "Mac"}, headers=H)
+    assert v.status_code == 200
+    assert client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).status_code == 409
+    assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "claimed"
+    assert client.get(P + "/api/me").status_code == 409                      # not applied yet -> setup page
+    setup = client.get(P + "/api/setup").json()
+    assert setup["detected"]["host"] == "203.0.113.7" and setup["fee_bps"] == 250
+    offer = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_gib": 100,
+             "relay_gib": 0, "compute": True, "cpus": 4, "memory_mib": 2048,
+             "prices": {"STO-1": "0.0012", "CMP-1": "0.02"}, "network": SEPOLIA, "payout": "0x" + "ab" * 20}
+    bad = dict(offer, name="Bad Name!")
+    assert client.post(P + "/api/setup", json=bad, headers=H).status_code == 422
+    assert client.post(P + "/api/setup", json=dict(offer, storage_gib=0, compute=False), headers=H).status_code == 422
+    fake.code = "0x"
+    assert client.post(P + "/api/setup", json=offer, headers=H).status_code == 422   # payout is not a contract
+    fake.code = "0x6080"
+    assert client.post(P + "/api/setup", json=offer, headers=H).status_code == 200
+    st = client.get(P + "/v1/connect/status", headers=poll).json()
+    assert st["status"] == "submitted" and st["offer"]["prices"]["STO-1"] == "0.0012"
+    assert client.post(P + "/v1/connect/finish", headers=poll).json() == {"ok": True}
+    assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "done"
+    assert pid in {a["provider"] for a in [dict(r) for r in store.q("SELECT provider FROM audit")]}
+
+
+def live_registry(tmp_path, **kw):
+    import uvicorn
+    port = free_tcp_port()
+    fake = FakeChain()
+    s = settings(tmp_path, login_host=f"127.0.0.1:{port}", cookie_secure=False, **kw)
+    app = create_app(s, rpc=fake, connect=lambda h, p, t: 2.0)
+    server = uvicorn.Server(uvicorn.Config(app, host="127.0.0.1", port=port, log_level="error"))
+    th = threading.Thread(target=server.run, daemon=True)
+    th.start()
+    for _ in range(100):
+        if server.started:
+            break
+        time.sleep(0.05)
+    return server, th, port, fake, app.state.store
+
+
+def free_tcp_port():
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    p = s.getsockname()[1]
+    s.close()
+    return p
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_start_web_setup_end_to_end(tmp_path):
+    import httpx
+    server, th, port, fake, store = live_registry(tmp_path)
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        offer_port = free_tcp_port()
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "home"), "INNERNET_POLL_MS": "100",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1", "TZ": "Asia/Karachi"}
+        proc = subprocess.Popen([str(binary), "start", "--mode", "web", "--no-browser", "--port", str(offer_port)],
+                                env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        code, lines = None, []
+        while code is None:
+            line = proc.stdout.readline()
+            assert line, "".join(lines)
+            lines.append(line)
+            if line.strip().startswith("Code:"):
+                code = line.split(":", 1)[1].strip()
+        out = "".join(lines)
+        assert "Public IP    127.0.0.1" in out and "reachable from the internet" in out   # real dial-back test
+        web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
+        auth = SoftAuthenticator()
+        opt = web.post(P + "/api/claim/options", json={"code": code}).json()
+        assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])}).status_code == 200
+        det = web.get(P + "/api/setup").json()["detected"]
+        assert det["reachable"] is True and det["host"] == "127.0.0.1" and det["region"] == "asia-south" and det["cpus"] >= 1
+        payout = "0x" + "c3" * 20
+        offer = {"name": det["name"], "region": det["region"], "host": "node.example.test", "port": offer_port,
+                 "storage_gib": 10, "relay_gib": 0, "compute": False, "cpus": 1, "memory_mib": 512,
+                 "prices": {"STO-1": "0.0015"}, "network": SEPOLIA, "payout": payout}
+        assert web.post(P + "/api/setup", json=offer).status_code == 200
+        rest, _ = proc.communicate("y\nn\n", timeout=60)              # confirm on the machine, skip backup
+        assert proc.returncode == 0, out + rest
+        assert payout in rest and "Application received" in rest
+        pid = json.loads((tmp_path / "home" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        p = store.provider(pid)
+        assert p["state"] == "testing" and p["entry"]["prices"]["STO-1"]["amount"] == "0.0015"
+        assert p["entry"]["endpoints"] == [{"host": "node.example.test", "port": offer_port}]
+        assert web.get(P + "/api/me").status_code == 200                        # dashboard works now
+    finally:
+        server.should_exit = True
+        th.join(timeout=5)
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_start_terminal_for_agents(tmp_path):
+    server, th, port, fake, store = live_registry(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20})
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        wallet, split = "0x" + "44" * 20, "0x" + "5c" * 20
+        fake.splits[wallet] = split
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "agent"), "INNERNET_POLL_MS": "100",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
+        r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())],
+                           env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        assert r.returncode == 0, r.stdout + r.stderr
+        assert "Payout contract: " + split in r.stdout and "Application received" in r.stdout
+        pid = json.loads((tmp_path / "agent" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        assert store.provider(pid)["entry"]["payto"] == {SEPOLIA: split}
+        again = subprocess.run([str(binary), "start", "--yes", "--port", str(free_tcp_port())], env=env,
+                               capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        assert again.returncode == 0                                   # set-up machine re-applies, wallet kept
+        fresh = dict(env, INNERNET_HOME=str(tmp_path / "fresh"))
+        no = subprocess.run([str(binary), "start", "--yes", "--port", "9"], env=fresh, capture_output=True, text=True,
+                            stdin=subprocess.DEVNULL, timeout=60)
+        assert no.returncode != 0 and "--wallet" in no.stderr
+    finally:
+        server.should_exit = True
+        th.join(timeout=5)

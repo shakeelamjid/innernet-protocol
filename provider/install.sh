@@ -65,4 +65,13 @@ case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) say "Add it to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
-say "Next:  innernet-provider init"
+
+# Start setup straight away when a person is at the terminal (curl | sh leaves stdin on the
+# pipe, so read answers from /dev/tty). Skip with INNERNET_NO_START=1, e.g. in scripts.
+if [ -z "${INNERNET_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ] \
+   && "$BIN_DIR/innernet-provider" help 2>/dev/null | grep -q " start "; then
+  say ""
+  "$BIN_DIR/innernet-provider" start </dev/tty
+else
+  say "Next:  innernet-provider start"
+fi

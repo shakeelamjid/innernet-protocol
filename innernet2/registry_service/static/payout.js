@@ -86,7 +86,8 @@
       account = accounts[0];
       await ensureChain();
       say('connect-msg', 'Connected: ' + account);
-      $('receiver').value = account;
+      const pre = new URLSearchParams(location.hash.slice(1)).get('receiver');
+      $('receiver').value = pre && /^0x[0-9a-fA-F]{40}$/.test(pre) ? pre : account;
       $('step-create').hidden = !net.factory;
       $('operator').hidden = !(location.hash === '#operator' && !net.factory);
     } catch (err) { say('connect-msg', friendly(err), true); }

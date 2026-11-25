@@ -22,3 +22,23 @@ func TestPrintStatusFullReply(t *testing.T) {
 		}
 	}
 }
+
+func TestOwedRoundsUp(t *testing.T) {
+	for _, c := range []struct{ units, price, want string }{
+		{"1", "0.0010", "1000"}, {"2.5", "0.0010", "2500"}, {"1", "0.0000001", "1"}, {"0.5", "0.003", "1500"},
+	} {
+		got, err := owed(c.units, c.price)
+		if err != nil || got.String() != c.want {
+			t.Fatalf("owed(%s,%s)=%v %v want %s", c.units, c.price, got, err, c.want)
+		}
+	}
+}
+
+func TestRegionFor(t *testing.T) {
+	for tz, want := range map[string]string{"Asia/Karachi": "asia-south", "Europe/Berlin": "eu-central",
+		"America/Chicago": "us-central", "UTC": "global", "": "global"} {
+		if got := regionFor(tz); got != want {
+			t.Fatalf("regionFor(%q)=%q want %q", tz, got, want)
+		}
+	}
+}

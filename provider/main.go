@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-var version = "0.1.0-draft" // set at build time with -ldflags "-X main.version=..."
+var version = "0.2.0-draft" // set at build time with -ldflags "-X main.version=..."
 
 const defaultRegistry = "https://innernetcorp.com/registry/v1"
 
@@ -35,8 +35,12 @@ func main() {
 	cmd, args := os.Args[1], os.Args[2:]
 	var err error
 	switch cmd {
+	case "start":
+		err = cmdStart(args)
 	case "init":
 		err = cmdInit(args)
+	case "payout":
+		err = cmdPayout(args)
 	case "show":
 		err = cmdShow()
 	case "wallet":
@@ -45,6 +49,8 @@ func main() {
 		err = cmdApply(args)
 	case "status":
 		err = cmdStatus()
+	case "serve":
+		err = cmdServe(args)
 	case "login":
 		err = cmdLogin(args)
 	case "backup":
@@ -70,11 +76,16 @@ func usage() {
 	fmt.Print(`innernet-provider ` + version + ` - rent out storage, bandwidth or compute on INNERnet (IRM-1 draft, testnet)
 
 Setup
-  init                 step-by-step setup: identity key, what you offer, prices
+  start                one-command setup: checks this machine, then set up on the website or here
+  init                 step-by-step setup in the terminal: what you offer, prices
+  payout 0x...         find (or open the page to create) the payout contract for your wallet
   wallet set 0x...     set your payout split contract address
   show                 print your provider details (safe to share)
   backup FILE          write a passphrase-encrypted backup of your identity key
   restore FILE         restore your identity key on this machine
+
+Run
+  serve                serve clients: store encrypted pieces, answer storage checks, issue payment receipts
 
 Registry
   apply [--dry-run]    send your signed provider form to the registry
@@ -178,34 +189,15 @@ func cmdInit(args []string) error {
 	}
 	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc}
 
+	if !*yes || c.Host == "" || c.Name == "" || c.Region == "" {
+		d := detect(registryURL(c), c.Port, !*yes)
+		d.fill(c)
+	}
 	if !*yes {
 		fmt.Println("INNERnet provider setup. Press Enter to accept the value in [brackets].")
 		fmt.Println("This runs on TESTNET (Base Sepolia). No real money moves yet.")
 		fmt.Println()
-		hostname, _ := os.Hostname()
-		c.Name = strings.ToLower(ask("Provider name (lowercase, shown publicly)", orDefault(c.Name, sanitize(hostname))))
-		c.Region = strings.ToLower(ask("Region label (e.g. asia-south, eu-central)", orDefault(c.Region, "asia-south")))
-		fmt.Println()
-		fmt.Println("Other machines must be able to reach this one directly.")
-		fmt.Println("Home PCs behind a router can join once relay mode ships; for now use a public address.")
-		c.Host = ask("Public host name or IP", c.Host)
-		c.Port = askInt("Public port", c.Port)
-		fmt.Println()
-		c.Storage = askInt("Storage to offer, in GiB (0 = none)", orInt(c.Storage, 50))
-		if c.Storage > 0 {
-			c.Prices["STO-1"] = ask("  Price, USDC per GiB per day", c.Prices["STO-1"])
-		}
-		c.RelayCap = askInt("Bandwidth to relay per month, in GiB (0 = none)", c.RelayCap)
-		if c.RelayCap > 0 {
-			fmt.Println("  Check that your internet plan allows reselling bandwidth.")
-			c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
-		}
-		c.Compute = askYes("Offer sandboxed compute? Jobs run with no network or file access", c.Compute)
-		if c.Compute {
-			c.CPUs = askInt("  Max CPUs per job", c.CPUs)
-			c.MemMiB = askInt("  Max memory per job, MiB", c.MemMiB)
-			c.Prices["CMP-1"] = ask("  Price, USDC per billion instructions", c.Prices["CMP-1"])
-		}
+		askOffer(c)
 	}
 	if err := c.validate(false); err != nil {
 		return err
@@ -341,6 +333,10 @@ func cmdApply(args []string) error {
 	if *dry {
 		return nil
 	}
+	return postApplication(c, raw)
+}
+
+func postApplication(c *Config, raw []byte) error {
 	resp, err := httpClient.Post(registryURL(c)+"/apply", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return fmt.Errorf("could not reach the registry (%v); the signed form is saved, try again later", err)
@@ -353,7 +349,7 @@ func cmdApply(args []string) error {
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("registry refused the application (%s): %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	fmt.Println("Application received. The registry now tests your machine; check with: innernet-provider status")
+	fmt.Println("Application received. The registry now checks your machine; follow it with: innernet-provider status")
 	return nil
 }
 
@@ -565,5 +561,32 @@ func printStatus(w io.Writer, s *statusReply) {
 		fmt.Fprintf(w, "Earnings (30 days): %s %s paid, %s network fee, %s to you\n",
 			s.Earnings.Gross, s.Earnings.Asset, s.Earnings.Fee, s.Earnings.Net)
 		fmt.Fprintln(w, "Every payment and split, with transaction links: innernet-provider login, then open the dashboard")
+	}
+}
+
+// askOffer asks every setup question, with the current values as defaults.
+func askOffer(c *Config) {
+	c.Name = strings.ToLower(ask("Provider name (lowercase, shown publicly)", c.Name))
+	c.Region = strings.ToLower(ask("Region label (e.g. asia-south, eu-central)", c.Region))
+	fmt.Println()
+	fmt.Println("Other machines must be able to reach this one directly.")
+	fmt.Println("Home PCs behind a router can join once relay mode ships; for now use a public address.")
+	c.Host = ask("Public host name or IP", c.Host)
+	c.Port = askInt("Public port", c.Port)
+	fmt.Println()
+	c.Storage = askInt("Storage to offer, in GiB (0 = none)", c.Storage)
+	if c.Storage > 0 {
+		c.Prices["STO-1"] = ask("  Price, USDC per GiB per day", c.Prices["STO-1"])
+	}
+	c.RelayCap = askInt("Bandwidth to relay per month, in GiB (0 = none)", c.RelayCap)
+	if c.RelayCap > 0 {
+		fmt.Println("  Check that your internet plan allows reselling bandwidth.")
+		c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
+	}
+	c.Compute = askYes("Offer sandboxed compute? Jobs run with no network or file access", c.Compute)
+	if c.Compute {
+		c.CPUs = askInt("  Max CPUs per job", c.CPUs)
+		c.MemMiB = askInt("  Max memory per job, MiB", c.MemMiB)
+		c.Prices["CMP-1"] = ask("  Price, USDC per billion instructions", c.Prices["CMP-1"])
 	}
 }
