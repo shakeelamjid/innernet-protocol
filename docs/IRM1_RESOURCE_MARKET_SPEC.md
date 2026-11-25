@@ -11,7 +11,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 | Profile | What it adds | Builds on |
 |---|---|---|
 | `REG-1` | Signed provider registry published by innernetcorp.com | R90 signing and anti-rollback |
-| `PAY-1` | x402 payments with a non-custodial 1% network fee | x402 v2 |
+| `PAY-1` | x402 payments with a non-custodial 2.5% network fee | x402 v2 |
 | `STO-1` | Paid storage of OB80-2 pieces, with proof-of-storage challenges | OB80-2, ST81 |
 | `RLY-1` | Paid relaying between peers that cannot connect directly | ST81 |
 | `CMP-1` | Paid compute: deterministic jobs, verified by replication or hardware attestation | OB80-2, UV10 |
@@ -19,7 +19,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 ### 1.1 Principles
 
 1. **The protocol stays free.** Using your own servers, or any server you trust, needs no registry, no payment and no fee. IRM-1 only applies when a client chooses a *registered* provider.
-2. **No custody.** INNERnet never receives, holds or forwards a provider's money. The 1% fee is split on-chain at the moment of payment (section 4.3).
+2. **No custody.** INNERnet never receives, holds or forwards a provider's money. The 2.5% fee is split on-chain at the moment of payment (section 4.3).
 3. **No token.** Payments are in existing stablecoins (USDC first). IRM-1 creates no coin, share or governance right.
 4. **Fail closed.** A client that cannot verify the registry, a price, a proof or a payment requirement MUST NOT pay.
 5. **Honest limits.** Each service states what the provider can and cannot see (sections 5.6, 6.5, 7.6).
@@ -39,7 +39,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 | **Provider** | Anyone renting out capacity | Its ST81 identity key, service endpoints, a payout split contract |
 | **Registry** | innernetcorp.com | The registry signing key; publishes the signed provider list |
 | **Facilitator** | Any x402 facilitator the provider chooses | Verifies and settles x402 payments on-chain |
-| **Fee wallet** | The INNERnet project | Receives the 1% fee directly from split contracts |
+| **Fee wallet** | The INNERnet project | Receives the 2.5% fee directly from split contracts |
 
 A provider's identity **is** its ST81 Ed25519 key. The registry never issues identities; it only lists keys it has checked.
 
@@ -65,7 +65,7 @@ Canonical JSON, signed exactly like R90 plans, with its own domain string `INNER
     "sequence": 1842,
     "issued_at": 1764067200,
     "expires_at": 1764153600,
-    "fee_bps": 100,
+    "fee_bps": 250,
     "fee_payto": { "eip155:8453": "0x...fee wallet..." },
     "providers": [
       {
@@ -93,7 +93,7 @@ Canonical JSON, signed exactly like R90 plans, with its own domain string `INNER
 Rules:
 
 - Amounts are decimal strings, never floats.
-- `fee_bps` is basis points (100 = 1%). The registry reads it from its `INNERNET_FEE_BPS` environment variable at publish time.
+- `fee_bps` is basis points (250 = 2.5%). The registry reads it from its `INNERNET_FEE_BPS` environment variable at publish time.
 - `fee_payto` maps a CAIP-2 network id to the fee wallet. Base mainnet is `eip155:8453`; Base Sepolia testnet is `eip155:84532`. The registry reads it from `INNERNET_FEE_PAYTO_<NETWORK>` environment variables (for example `INNERNET_FEE_PAYTO_BASE`).
 - A provider MUST NOT appear unless every `payto` entry passed the split-contract check in section 4.3.
 - `reputation` values are informational, measured by the registry's own probes (section 3.4). Clients MAY ignore them.
@@ -128,7 +128,7 @@ Every provider has a page on the portal at `https://innernetcorp.com/providers/<
 | Status | `applied`, `testing`, `listed`, `suspended`, `removed`, with the reason and the time of the last check | Registry |
 | Health | Reachability, challenge pass rate, relay throughput and compute canary results over 24 h, 7 d and 30 d, against the delisting thresholds of section 3.4 | Registry probes |
 | Activity | Active storage leases (count, GiB held), relayed GiB, compute jobs run, per service and per day | Service tickets (section 4.1) and probes |
-| Earnings | Gross paid by clients, the 1% network fee and the provider's net, per service, per day and per month, in USDC | On-chain transfer events of the provider's split contract |
+| Earnings | Gross paid by clients, the 2.5% network fee and the provider's net, per service, per day and per month, in USDC | On-chain transfer events of the provider's split contract |
 | Splits | Every settlement with its transaction hash, the provider share, the fee share and a link to the block explorer | On-chain |
 | Settings | Prices, capacity limits and services, edited in the browser and applied after the provider confirms with `innernet-provider apply` (the web never holds the provider key, so it cannot sign a descriptor) | Registry |
 | Access | Passkeys (add, rename, revoke), active web sessions (revoke), team members (see below), audit log of every login and change | Registry |
@@ -160,15 +160,17 @@ The ticket is signed by the provider's ST81 key, so the client can later prove w
 - First network: **USDC on Base** (`eip155:8453`), with **Base Sepolia** (`eip155:84532`) for all development and the public test phase.
 - USDT and other networks MAY be added once a facilitator supports them for x402. Each addition needs its own split-contract check.
 
-### 4.3 The 1% fee: split contracts
+### 4.3 The 2.5% fee: split contracts
 
 x402 v2 pays exactly one `payTo` per request. To take a network fee without INNERnet ever holding funds, a registered provider's `payTo` MUST be a **split contract** with these properties:
 
 1. Two recipients only: the provider's payout address and the registry's `fee_payto` for that network.
-2. The fee recipient's share is at least `fee_bps`.
+2. The fee recipient's share equals the registry's `fee_bps` (default 250 = 2.5%). The provider's share is rounded down; the fee takes the remainder of a base unit.
 3. **Immutable**: no owner, no admin, no upgrade path, no way to change recipients or shares after deployment.
 4. Anyone can trigger distribution, so funds never depend on INNERnet acting.
-5. The contract's code matches a published, audited implementation whose code hash the registry checks.
+5. The contract was created by the published `INNERnetSplitFactory` for that network (`contracts/INNERnetSplit.sol`). The registry checks `factory.isSplit(payTo)`, then the split's `feeRecipient()` and `feeBps()`. A code-hash check alone cannot work, because each split's runtime code embeds its own immutable addresses.
+
+The factory fixes the fee wallet and fee share for every split it creates. Changing either means deploying a new factory; existing splits keep paying under the terms they were created with. Providers create their split from their own wallet at `https://innernetcorp.com/registry/payout`; the registry never signs transactions.
 
 The registry verifies all five on-chain before listing, and re-checks on every publish. Because payment goes to the split contract and the contract pays both parties, the client makes **one** standard x402 payment and INNERnet never takes custody.
 
@@ -221,6 +223,28 @@ Providers MUST keep pieces bit-exact, answer challenges within the advertised ti
 ### 5.6 What the provider can see
 
 The provider sees ciphertext sizes, object counts, the client's key, the client's IP address and access timing. It cannot see content or file names.
+
+### 5.7 When a provider goes down
+
+Storage never depends on one provider:
+
+1. **Replicas.** Every piece is placed on at least 3 providers with different operators, regions and networks where the registry allows (section 8). The R90 route plan lists all replicas in preference order.
+2. **Failover.** A read that fails or times out on one replica moves to the next immediately (R90, v1.0.0). Users see no error while one replica is alive.
+3. **Detection.** The client's daily challenge (section 5.4) also detects a dead or lossy provider. The registry's probes detect unreachable providers independently and suspend them (section 3.4), which removes them from new placements.
+4. **Repair.** When a replica fails its challenge, or stays unreachable for longer than the repair grace period (default 24 h), the client: fetches the affected pieces from a healthy replica, verifies them against the signed manifest, places them on a new provider chosen from the current registry document, opens a new lease there, and publishes a new route plan with a higher ROUTE-2 sequence number. The pieces stay encrypted to the recipient, so the new provider learns nothing more than the old one. Repair can be delegated to an always-on agent holding a repair-only key that can re-place ciphertext and publish route plans but cannot decrypt.
+5. **Payment stops with the service.** The failed lease earns nothing from the first failed epoch; rent for that replica moves to the replacement. The most a client can lose is one prepaid epoch on one replica.
+
+### 5.8 Fair metering
+
+INNERnet does not count usage centrally. Both parties keep evidence that a third party can check:
+
+| Service | What is counted | Paid when | Evidence |
+|---|---|---|---|
+| STO-1 | Bytes held per lease per epoch | After each epoch whose proof-of-storage verifies | Signed lease, challenge answers, PAY-1 ticket, on-chain payment |
+| RLY-1 | Bytes relayed, counted by both ends | In small prepaid blocks (default 100 MiB); the next block is paid only if the last one was delivered | Byte counters signed per block, PAY-1 ticket, on-chain payment |
+| CMP-1 | Instructions of a deterministic job (WASM metering) | Only for a result that verifies (section 7.3) | Job hash, result hash, PAY-1 ticket, on-chain payment |
+
+Every payment is a public on-chain transfer to the provider's split contract, and every service unit is covered by a PAY-1 ticket signed by the provider. A dispute therefore compares two signed records and the chain, not two people's word. The registry publishes each provider's reachability and, once the provider service ships, its proof pass rate, so clients can prefer reliable providers.
 
 ## 6. RLY-1: paid bandwidth (relaying)
 
@@ -324,11 +348,11 @@ Each milestone needs test vectors, CI coverage and an update to `docs/RELEASE_GA
 
 | Variable | Meaning | Example |
 |---|---|---|
-| `INNERNET_FEE_BPS` | Network fee in basis points | `100` (1%) |
+| `INNERNET_FEE_BPS` | Network fee in basis points | `250` (2.5%) |
 | `INNERNET_FEE_PAYTO_BASE` | Fee wallet on Base mainnet | `0x…` |
 | `INNERNET_FEE_PAYTO_BASE_SEPOLIA` | Fee wallet on Base Sepolia | `0x…` |
 | `INNERNET_REGISTRY_KEY_FILE` | Path to the active registry signing key (mounted secret or private volume, never an env value; created on first start if missing) | `/var/lib/innernet-registry/registry_ed25519` |
-| `INNERNET_SPLIT_CODEHASH` | Accepted split-contract code hash(es), comma separated | `0x…` |
+| `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA`, `INNERNET_SPLIT_FACTORY_BASE` | Address of the deployed `INNERnetSplitFactory` per network | `0x…` |
 | `INNERNET_RPC_BASE_SEPOLIA`, `INNERNET_RPC_BASE` | JSON-RPC endpoints used to read payments and check payout contracts | `https://sepolia.base.org` |
 | `INNERNET_REGISTRY_ORIGIN`, `INNERNET_REGISTRY_RP_ID` | Dashboard origin and passkey domain | `https://innernetcorp.com`, `innernetcorp.com` |
 | `INNERNET_REGISTRY_DB` | SQLite database path (persistent volume) | `/var/lib/innernet-registry/registry.db` |

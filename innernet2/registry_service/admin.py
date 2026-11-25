@@ -16,7 +16,7 @@ import time
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from ..native_udp import pub_bytes
-from . import probe
+from . import chain, probe
 from .config import Settings
 from .store import Store
 
@@ -32,6 +32,8 @@ def main(argv: list[str] | None = None) -> int:
         s.add_argument("provider")
         if name != "approve":
             s.add_argument("reason")
+        else:
+            s.add_argument("--force", action="store_true", help="approve even if the payout check fails")
     args = ap.parse_args(argv)
 
     if args.cmd == "keygen":
@@ -63,6 +65,14 @@ def main(argv: list[str] | None = None) -> int:
         if p["state"] == "removed":
             print("provider was removed; it must apply again under a new key", file=sys.stderr)
             return 1
+        settings = Settings.from_env()
+        for network, address in p["entry"]["payto"].items():
+            ok, why = chain.payout_check(settings, network, address)
+            if not ok and not args.force:
+                print(f"refusing: {why} (use --force to override)", file=sys.stderr)
+                return 1
+            if why:
+                print("note:", why)
         store.x("UPDATE providers SET state='listed', reason='', listed_at=COALESCE(listed_at, ?), updated_at=? WHERE id=?",
                 (now, now, p["id"]))
         store.audit(p["id"], "listed", "approved by operator")

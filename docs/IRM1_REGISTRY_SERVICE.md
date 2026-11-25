@@ -48,10 +48,10 @@ Re-applying with the same address and payout contract keeps a listed provider li
 |---|---|---|
 | `INNERNET_FEE_PAYTO_BASE_SEPOLIA` | your fee wallet's public address | Required: providers can only apply on networks with a fee wallet |
 | `INNERNET_RPC_BASE_SEPOLIA` | `https://sepolia.base.org` | Public RPC is rate-limited; a provider such as Alchemy or QuickNode is better once traffic grows |
-| `INNERNET_FEE_BPS` | `100` | 1% |
+| `INNERNET_FEE_BPS` | `250` | 2.5% |
 | `INNERNET_REGISTRY_ORIGIN` | `https://innernetcorp.com` | Must match the address bar exactly, or passkeys fail |
 | `INNERNET_REGISTRY_RP_ID` | `innernetcorp.com` | Passkeys are bound to this domain |
-| `INNERNET_SPLIT_CODEHASH` | leave empty for now | Once the split contract is chosen: its code hash, so only real split contracts are accepted |
+| `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA` | the factory address, once deployed | Deploy it once from your own wallet at `/registry/payout#operator`. Until set, payout contracts are accepted without the split check |
 | `INNERNET_FEE_PAYTO_BASE`, `INNERNET_RPC_BASE` | **do not set yet** | Mainnet stays off until the split contract is audited and you have legal advice |
 
 Never put a private key or seed phrase in these variables. The registry signing key is created on first start inside the volume (`registry_ed25519`, mode 0600).
@@ -59,13 +59,23 @@ Never put a private key or seed phrase in these variables. The registry signing 
 7. **Deploy.** The log prints `registry public key (pin this in clients): …`. Keep that value; client builds pin it. It is also at `https://innernetcorp.com/registry/v1/registry-key`.
 8. Redeploy the website too: it now redirects `/providers/<id>` and `/dashboard` to the registry and links the dashboard in the footer.
 
+## Payout contracts
+
+Every provider is paid through its own `INNERnetSplit` contract (`contracts/INNERnetSplit.sol`). Clients pay the contract; anyone can call `release(token)` to send the balance on, 97.5% to the provider and 2.5% to the fee wallet. The contract has no owner and nothing in it can change.
+
+**Once, as operator:** open `https://innernetcorp.com/registry/payout#operator`, connect your own wallet on Base Sepolia (a little test ETH from a faucet pays the gas) and press **Deploy factory**. The page shows the factory address. Set `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA` to it on the registry in Coolify and redeploy. From then on the registry accepts only payout contracts created by that factory, paying your fee wallet the configured share.
+
+**Each provider:** opens `https://innernetcorp.com/registry/payout`, connects their wallet, presses **Find or create my payout contract**, and runs the `innernet-provider wallet set 0x…` command the page shows. The same page has a **Collect now** button that calls `release` for USDC.
+
+Rebuild the contract artifact with `cd contracts && npm ci && node build.js .` (solc 0.8.28, optimizer 200 runs, EVM shanghai). `tests/test_split_contract.py` runs the contracts on a local EVM when `eth-tester`, `py-evm` and `web3` are installed; `tests/test_registry_service.py` checks the build is reproducible when solc is installed and that the selectors in the page and registry match the build.
+
 ## Operator commands
 
 Run in the registry container (Coolify → the app → Terminal):
 
 ```sh
 python -m innernet2.registry_service.admin list
-python -m innernet2.registry_service.admin approve <provider id>
+python -m innernet2.registry_service.admin approve <provider id>     # re-checks the payout contract; --force to override
 python -m innernet2.registry_service.admin suspend <provider id> "reason shown to the provider"
 python -m innernet2.registry_service.admin remove  <provider id> "reason shown to the provider"
 ```
@@ -73,6 +83,5 @@ python -m innernet2.registry_service.admin remove  <provider id> "reason shown t
 ## Not yet built
 
 - Storage challenges, relay tests and compute canaries (they need the provider service on the provider's machine); until then, probes are TCP reachability only and listing is approved by hand.
-- Split-contract verification by code hash (needs the chosen contract).
 - Team access with roles (IRM-1 section 3.6, milestone M3).
 - Alerts by e-mail or webhook.

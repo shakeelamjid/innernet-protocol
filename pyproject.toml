@@ -12,6 +12,7 @@ dependencies = ["cryptography>=42", "numpy>=1.26", "fastapi>=0.110", "uvicorn>=0
 [project.optional-dependencies]
 test = ["pytest>=8", "webauthn>=2.5,<3"]
 registry = ["webauthn>=2.5,<3"]
+contracts = ["web3>=7", "eth-tester[py-evm]>=0.12"]
 
 [project.scripts]
 innernet = "innernet2.cli:main"

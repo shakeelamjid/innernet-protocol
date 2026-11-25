@@ -102,3 +102,13 @@ td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
 .head > div { min-width: 0; }
 .head .mono { overflow-wrap: anywhere; }
 td .note { margin-top: 2px; }
+.narrow { max-width: 720px; }
+.step { margin-top: 16px; }
+.step p + p, .step p + .btn, .step .note + .btn { margin-top: 14px; }
+.step .btn { margin-top: 18px; }
+.step label { display: block; font-size: .85rem; color: var(--muted); margin-top: 4px; }
+.field { width: 100%; height: 40px; margin-top: 6px; padding: 0 12px; background: var(--bg); color: var(--text); border: 1px solid var(--border-2); font-size: .85rem; }
+.copyable { display: flex; align-items: center; gap: 12px; justify-content: space-between; white-space: normal; }
+.copyable code { overflow-wrap: anywhere; font-size: .85rem; }
+.copyable .btn { margin-top: 0; flex: none; }
+strong { color: var(--text); font-weight: 500; }

@@ -1,0 +1,7 @@
+{
+  "name": "innernet-contracts",
+  "private": true,
+  "description": "Rebuild contracts/build/contracts.json: npm ci && node build.js .",
+  "license": "Apache-2.0",
+  "devDependencies": { "solc": "0.8.28" }
+}

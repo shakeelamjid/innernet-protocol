@@ -290,7 +290,7 @@ func cmdWallet(args []string) error {
 		return err
 	}
 	fmt.Println("Payout contract set to", c.Payout, "on", c.Network)
-	fmt.Println("The registry will check that this contract is locked and sends the 1% network fee automatically.")
+	fmt.Println("The registry will check that this contract is locked and sends the 2.5% network fee automatically.")
 	return writeDetails(c, providerID(priv))
 }
 

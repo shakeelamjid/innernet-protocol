@@ -2,6 +2,15 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Payout split contract, 2.5% fee, provider guide
+
+- **Network fee is now 2.5%** (`fee_bps` 250) everywhere: registry default, contract tests, docs, CLI text and website.
+- `contracts/INNERnetSplit.sol`: `INNERnetSplit` (one per provider; `release(token)` sends 97.5% to the provider, rounded down, and the rest to the fee wallet; anyone can call it; no owner; handles tokens with and without a `bool` return; refuses ETH) and `INNERnetSplitFactory` (fixes fee wallet and share, fee capped at 10%, one split per provider at a CREATE2 address, `isSplit` for the registry). Built with solc 0.8.28; `contracts/build.js` reproduces `contracts/build/contracts.json` byte for byte.
+- Registry checks payouts against the factory: `isSplit(payTo)`, `feeRecipient()` and `feeBps()` (replaces the code-hash idea, which cannot work with per-split immutables). `admin approve` re-checks the payout. New `GET /registry/v1/config`.
+- New page `/registry/payout`: providers connect their own browser wallet, create or find their payout contract, copy the `wallet set` command, and collect payments. Operator deploys the factory once from `/registry/payout#operator`. No keys reach the server.
+- Spec: section 4.3 rewritten for the factory; new sections 5.7 (when a provider goes down: replicas, failover, repair, payment stops) and 5.8 (fair metering per service).
+- Tests: `tests/test_split_contract.py` (local EVM: create, predict, release maths for several amounts, USDT-style token, ETH refused, constructor guards, registry RPC checks against real and look-alike factories); selector and bytecode sync between contracts, registry and page; reproducible-build check.
+
 ### Registry service and dashboard (M1b part 2)
 
 - `innernet2/registry_service`: FastAPI + SQLite service. `apply`, `status`, CLI `login`, signed `registry.json`, `registry-key`. Accepts only networks with a configured fee wallet, checks payout addresses are contracts, rejects payout contracts shared between providers.

@@ -38,7 +38,7 @@ The demo uses only disposable synthetic data and loopback listeners. No server o
 
 Read [Core protocol specification](docs/RC5_CORE_PROTOCOL_SPEC.md), [architecture](docs/ARCHITECTURE.md), [security limits](SECURITY.md), and [release gates](docs/RELEASE_GATES.md) before integrating.
 
-**Next phase (draft, not implemented):** [IRM-1 Resource Market](docs/IRM1_RESOURCE_MARKET_SPEC.md) — paid storage, relaying and compute from registered providers over x402, with a non-custodial 1% network fee. Not part of v1.0.0. Providers: [innernet-provider CLI](docs/IRM1_PROVIDER_CLI.md) and [registry service](docs/IRM1_REGISTRY_SERVICE.md) (draft, testnet).
+**Next phase (draft, not implemented):** [IRM-1 Resource Market](docs/IRM1_RESOURCE_MARKET_SPEC.md) — paid storage, relaying and compute from registered providers over x402, with a non-custodial 2.5% network fee. Not part of v1.0.0. Providers: [innernet-provider CLI](docs/IRM1_PROVIDER_CLI.md) and [registry service](docs/IRM1_REGISTRY_SERVICE.md) (draft, testnet).
 
 ## Validation record
 

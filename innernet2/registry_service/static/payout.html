@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Payout contract · INNERnet providers</title>
+  <meta name="description" content="Create the payout contract that pays you 97.5% of every payment and the network 2.5%.">
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/payout.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="dashboard">Dashboard</a>
+    </div>
+  </header>
+  <main>
+    <div class="wrap narrow">
+      <div class="head">
+        <div>
+          <h1>Your payout contract</h1>
+          <p>Clients pay this contract. It sends <strong id="share-provider">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the INNERnet network. It has no owner, so nobody, including INNERnet, can change where the money goes.</p>
+        </div>
+      </div>
+
+      <p class="msg error" id="unavailable" hidden></p>
+
+      <section class="card frame step" id="step-connect">
+        <h2>1. Connect your wallet</h2>
+        <p>Use a browser wallet such as MetaMask, Coinbase Wallet or Trust Wallet. You pay a small network fee in test ETH. You can get it free from a Base Sepolia faucet.</p>
+        <button class="btn btn-light" id="connect">Connect wallet</button>
+        <p class="msg" id="connect-msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="step-create" hidden>
+        <h2>2. Create the contract</h2>
+        <label for="receiver">Wallet that receives your share</label>
+        <input id="receiver" class="field mono" spellcheck="false" autocomplete="off">
+        <p class="note">This is usually the wallet you just connected. It can be any wallet you control on <span id="net-name">Base Sepolia</span>. It cannot be changed later.</p>
+        <button class="btn btn-light" id="create">Find or create my payout contract</button>
+        <p class="msg" id="create-msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="step-done" hidden>
+        <h2>3. Use it</h2>
+        <p>Your payout contract:</p>
+        <div class="terminal copyable"><code id="split-addr"></code><button class="btn btn-sm" id="copy-addr" type="button">Copy</button></div>
+        <p>On the machine you set up as a provider, run:</p>
+        <div class="terminal copyable"><code id="cmd"></code><button class="btn btn-sm" id="copy-cmd" type="button">Copy</button></div>
+        <p class="note"><a id="split-link" target="_blank" rel="noopener noreferrer">View on the block explorer</a></p>
+      </section>
+
+      <section class="card frame step" id="step-release" hidden>
+        <h2>Collect payments</h2>
+        <p>Payments wait in the contract until someone collects them. Anyone can do it, and the split is always the same.</p>
+        <dl class="kv" id="preview"></dl>
+        <button class="btn" id="release">Collect now</button>
+        <p class="msg" id="release-msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="operator" hidden>
+        <h2>Operator: deploy the split factory</h2>
+        <p>Once per network. The factory fixes the fee wallet <code id="op-fee"></code> and fee share <code id="op-bps"></code> for every payout contract it creates. Neither can be changed later; a new fee wallet means a new factory.</p>
+        <button class="btn btn-light" id="deploy-factory">Deploy factory from my wallet</button>
+        <p class="msg" id="deploy-msg" role="status"></p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

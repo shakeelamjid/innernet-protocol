@@ -23,7 +23,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
 from ..bulk_v080 import BulkError
 from ..irm_registry import make_login_challenge, sign_registry, verify_descriptor, verify_login
 from . import chain, probe
-from .config import NETWORK_NAMES, Settings
+from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
 
 log = logging.getLogger("innernet.registry")
@@ -316,6 +316,21 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return {"registry_key": registry_key.public_key().public_bytes(
             serialization.Encoding.Raw, serialization.PublicFormat.Raw).hex()}
 
+    @app.get(P + "/v1/config")
+    def public_config():
+        """Public settings the payout page and clients need. Contains no secrets."""
+        nets = []
+        for net, fee_wallet in settings.fee_payto.items():
+            nets.append({"caip2": net, "name": NETWORK_NAMES.get(net, net), "chain_id": CHAIN_IDS.get(net),
+                         "usdc": USDC.get(net), "fee_wallet": fee_wallet, "factory": settings.split_factory.get(net),
+                         "explorer_tx": EXPLORER_TX.get(net, ""),
+                         "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/")})
+        return {"fee_bps": settings.fee_bps, "networks": nets}
+
+    @app.get(P + "/payout")
+    def payout_page():
+        return page("payout.html")
+
     cached_doc: dict = {}
 
     @app.get(P + "/v1/registry.json")
@@ -365,7 +380,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         path = (STATIC / name).resolve()
         if path.parent != STATIC.resolve() or not path.is_file() or path.suffix == ".html":
             raise HTTPException(404)
-        types = {".css": "text/css", ".js": "text/javascript", ".woff2": "font/woff2", ".svg": "image/svg+xml"}
+        types = {".css": "text/css", ".js": "text/javascript", ".woff2": "font/woff2", ".svg": "image/svg+xml",
+                 ".json": "application/json"}
         return FileResponse(path, media_type=types.get(path.suffix, "application/octet-stream"),
                             headers={"Cache-Control": "public, max-age=3600"})
 

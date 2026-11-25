@@ -215,7 +215,7 @@ def test_cli_login_passkey_dashboard_and_access(env):
     me = client.get(P + "/api/me")
     assert me.status_code == 200
     d = me.json()
-    assert d["provider"]["id"] == pid and d["fee_bps"] == 100
+    assert d["provider"]["id"] == pid and d["fee_bps"] == 250
     assert [k["name"] for k in d["passkeys"]] == ["Laptop"]
     assert set(d["activity"]) == {"STO-1", "CMP-1"}
     assert len(d["daily"]) == 30
@@ -290,8 +290,9 @@ def test_payments_earnings_and_splits(env):
     assert chain.scan_once(store, s, fake) == 0            # idempotent
     st = client.get(P + f"/v1/providers/{key.public_key().public_bytes_raw().hex()}/status").json()
     assert st["earnings"]["gross_30d"] == "3.50"
-    e = chain.earnings(store, key.public_key().public_bytes_raw().hex(), 100, since=0)
-    assert e["gross"] == 3_500_001 and e["fee"] == 25_000 + 10_001 and e["net"] == e["gross"] - e["fee"]
+    e = chain.earnings(store, key.public_key().public_bytes_raw().hex(), s.fee_bps, since=0)
+    assert e["gross"] == 3_500_001 and e["fee"] == 62_500 + 25_001 and e["net"] == e["gross"] - e["fee"]
+    assert chain.split(1_000_001, 250) == (975_000, 25_001)
     assert chain.split(1_000_001, 100) == (990_000, 10_001)
     enroll(client, key)
     d = client.get(P + "/api/me").json()
@@ -332,13 +333,13 @@ def test_signed_registry_document(env, tmp_path):
     reg_pub = bytes.fromhex(doc["registry_key"])
     payload = verify_registry(doc, [reg_pub])
     assert [p["id"] for p in payload["providers"]] == [pid]
-    assert payload["fee_bps"] == 100 and payload["fee_payto"] == {SEPOLIA: FEE_WALLET}
+    assert payload["fee_bps"] == 250 and payload["fee_payto"] == {SEPOLIA: FEE_WALLET}
     assert payload["providers"][0]["reputation"]["uptime_7d"] == "1.0000"
 
 
 def test_pages_and_headers(env):
     client, *_ = env
-    for path in ("/dashboard", "/enroll", "/providers/" + "ab" * 32):
+    for path in ("/dashboard", "/enroll", "/payout", "/providers/" + "ab" * 32):
         r = client.get(P + path)
         assert r.status_code == 200 and "text/html" in r.headers["content-type"]
         assert "script-src 'self'" in r.headers["content-security-policy"]
@@ -402,3 +403,55 @@ def test_works_when_proxy_strips_prefix(env):
     assert client.get("/healthz").json() == {"ok": True}
     assert client.get("/registry/healthz").json() == {"ok": True}
     assert client.get("/dashboard").status_code == 200
+
+
+def test_public_config_and_payout_assets(env):
+    client, *_ = env
+    cfg = client.get(P + "/v1/config").json()
+    assert cfg["fee_bps"] == 250
+    net = cfg["networks"][0]
+    assert net["caip2"] == SEPOLIA and net["chain_id"] == 84532 and net["usdc"] == USDC[SEPOLIA]
+    assert net["fee_wallet"] == FEE_WALLET and net["factory"] is None
+    assert net["explorer_address"] == "https://sepolia.basescan.org/address/"
+    art = client.get(P + "/static/split-factory.json")
+    assert art.status_code == 200 and art.headers["content-type"].startswith("application/json")
+
+
+def test_payout_page_matches_compiled_contracts():
+    """Selectors hard-coded in payout.js and chain.py, and the factory bytecode served to the
+    operator, must match contracts/build/contracts.json exactly."""
+    import re
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1]
+    art = json.loads((root / "contracts/build/contracts.json").read_text())
+    split_ids = art["contracts"]["INNERnetSplit"]["methodIdentifiers"]
+    fac_ids = art["contracts"]["INNERnetSplitFactory"]["methodIdentifiers"]
+    js = (root / "innernet2/registry_service/static/payout.js").read_text()
+    sel = dict(re.findall(r"(\w+): '([0-9a-f]{8})'", js.split("const SEL = {")[1].split("};")[0]))
+    assert sel == {"splitOf": fac_ids["splitOf(address)"], "create": fac_ids["create(address)"],
+                   "preview": split_ids["preview(address)"], "release": split_ids["release(address)"],
+                   "isSplit": fac_ids["isSplit(address)"]}
+    assert chain.SEL_IS_SPLIT == fac_ids["isSplit(address)"]
+    assert chain.SEL_FEE_RECIPIENT == split_ids["feeRecipient()"]
+    assert chain.SEL_FEE_BPS == split_ids["feeBps()"]
+    assert chain.SEL_SPLIT_OF == fac_ids["splitOf(address)"]
+    served = json.loads((root / "innernet2/registry_service/static/split-factory.json").read_text())
+    assert served["bytecode"] == art["contracts"]["INNERnetSplitFactory"]["bytecode"]
+
+
+def test_contract_artifact_is_reproducible(tmp_path):
+    """Recompile with solc 0.8.28 when node and solc are available, and compare byte for byte."""
+    import shutil as sh
+    from pathlib import Path
+    root = Path(__file__).resolve().parents[1] / "contracts"
+    node = sh.which("node")
+    if node is None or not (root / "node_modules" / "solc").exists():
+        pytest.skip("node + solc 0.8.28 not installed (cd contracts && npm ci)")
+    work = tmp_path / "c"
+    (work / "test").mkdir(parents=True)
+    (work / "build").mkdir()
+    for name in ("INNERnetSplit.sol", "build.js", "test/MockTokens.sol"):
+        sh.copy(root / name, work / name)
+    (work / "node_modules").symlink_to((root / "node_modules").resolve())
+    subprocess.run([node, str(work / "build.js"), str(work)], check=True, capture_output=True)
+    assert (work / "build/contracts.json").read_text() == (root / "build/contracts.json").read_text()

@@ -23,7 +23,7 @@ The installers find the newest `provider-v*` release through the GitHub API, or,
 ```sh
 innernet-provider init                                 # asks name, region, address, what to offer, prices
 innernet-provider backup ~/innernet-provider-backup.json
-innernet-provider wallet set 0x...                     # your payout split contract (IRM-1 section 4.3)
+innernet-provider wallet set 0x...                     # your payout contract, created at innernetcorp.com/registry/payout
 innernet-provider apply                                # sends the signed form to the registry
 innernet-provider status                               # applied, testing, listed; health; earnings
 innernet-provider login                                # one-time link to the web dashboard
@@ -64,7 +64,7 @@ There are two separate things:
 1. **The provider key** (`identity.key`). It signs your registry form and proves who you are. `innernet-provider backup FILE` writes a copy encrypted with a passphrase of at least 12 characters (PBKDF2-HMAC-SHA256 with 600,000 rounds, then AES-256-GCM). Keep that file offline. On a new machine, `innernet-provider restore FILE` brings back the same provider id. Without the key or the backup and its passphrase, the provider id cannot be recovered; you would register again as a new provider.
 2. **The web dashboard login** (passkey). `innernet-provider login` signs a one-time challenge with the provider key and prints a link valid for 10 minutes. There you add a passkey (fingerprint, face, phone or security key). After that you log in to the dashboard with the passkey alone, from any device. If you lose every passkey, run `login` again from a machine with the key.
 
-The dashboard shows status, health, activity per service, earnings, the 1% network fee and every on-chain split. It can never sign for you: changes to prices or services are confirmed with `innernet-provider apply`. Details: IRM-1 spec, section 3.6.
+The dashboard shows status, health, activity per service, earnings, the 2.5% network fee and every on-chain split. It can never sign for you: changes to prices or services are confirmed with `innernet-provider apply`. Details: IRM-1 spec, section 3.6.
 
 ## Environment variables
 

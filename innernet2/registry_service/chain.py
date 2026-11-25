@@ -39,20 +39,43 @@ def _topic_address(address: str) -> str:
     return "0x" + "0" * 24 + address[2:].lower()
 
 
+# Function selectors (keccak-256 of the signature), from contracts/build/contracts.json.
+SEL_IS_SPLIT = "8b8f5031"       # isSplit(address)
+SEL_FEE_RECIPIENT = "46904840"  # feeRecipient()
+SEL_FEE_BPS = "24a9d853"        # feeBps()
+SEL_SPLIT_OF = "41890891"       # splitOf(address)
+
+
+def _call(rpc: Rpc, url: str, to: str, selector: str, arg: str | None = None) -> int:
+    data = "0x" + selector + (("0" * 24 + arg[2:].lower()) if arg else "")
+    out = rpc(url, "eth_call", [{"to": to, "data": data}, "latest"])
+    if not isinstance(out, str) or len(out) < 66:
+        raise RuntimeError("short eth_call result")
+    return int(out[2:66], 16)
+
+
 def payout_check(settings: Settings, network: str, address: str, rpc: Rpc = http_rpc) -> tuple[bool, str]:
-    """Return (ok, reason). Without a configured split-contract code hash, the check is pending."""
+    """Return (ok, note). A payout must be a split created by the configured factory,
+    paying the configured fee wallet the configured share."""
     url = settings.rpc.get(network)
     if not url:
         return True, "payout contract not checked: no RPC configured for this network"
     try:
         code = rpc(url, "eth_getCode", [address, "latest"])
         if not code or code == "0x":
-            return False, "payout address is not a contract; deploy a split contract (IRM-1 section 4.3)"
-        if not settings.split_codehash:
-            return True, "payout is a contract; split-contract code check pending (no approved code hash yet)"
-        proof = rpc(url, "eth_getProof", [address, [], "latest"])
-        if str(proof.get("codeHash", "")).lower() not in settings.split_codehash:
-            return False, "payout contract is not an approved split contract"
+            return False, ("payout address is not a contract; create your payout split at "
+                           f"{settings.origin}{settings.prefix}/payout")
+        factory = settings.split_factory.get(network)
+        if not factory:
+            return True, "payout is a contract; split check pending (split factory not configured yet)"
+        if _call(rpc, url, factory, SEL_IS_SPLIT, address) != 1:
+            return False, ("payout contract was not created by the INNERnet split factory; create one at "
+                           f"{settings.origin}{settings.prefix}/payout")
+        fee_wallet = settings.fee_payto.get(network, "")
+        if _call(rpc, url, address, SEL_FEE_RECIPIENT) != int(fee_wallet, 16):
+            return False, "payout split pays the network fee to a different wallet"
+        if _call(rpc, url, address, SEL_FEE_BPS) != settings.fee_bps:
+            return False, "payout split uses a different fee share than this registry"
         return True, ""
     except Exception as exc:  # network trouble must not reject an application outright
         log.warning("payout check failed for %s: %s", address, exc)
