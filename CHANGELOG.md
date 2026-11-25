@@ -2,6 +2,14 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Client: seal, mix, 4-of-6 shards
+
+- **`innernet-client` now stores files as sealed, mixed shards** (record `IRM1-CLIENT-2`), replacing 3 full encrypted copies: cut into 64 KiB chunks → seal (OB80-2 chunk cipher) → mix 4 KiB cells with a keyed permutation → Reed-Solomon 6 shards, any 4 rebuild → 6 slots on at least 3 providers, at most 2 each, regions first. Storage overhead drops from 3× to 1.5×, losing any one provider still leaves 4 shards, and no provider holds a whole sealed chunk.
+- Reads take 4 verified shards per chunk, skipping dead or tampered holders. Repair rebuilds missing shards from any 4 healthy ones (no decryption needed) and places them elsewhere. Checks and payments are per shard holder.
+- `put` needs at least 3 working providers and removes partial uploads if placement fails. Records from the earlier draft (`IRM1-CLIENT-1`) are not read.
+- Tests: end to end with 4 real Go providers (a provider holding 2 shards goes down, reads continue, both shards rebuilt elsewhere, then one more provider lost), tampered shard, fewer than 3 providers; placement and pipeline unit tests.
+- Spec 5.7 and 5.10 updated.
+
 ### One-command onboarding, provider service, client (consolidated)
 
 - **One command.** The installer now starts `innernet-provider start`: it creates the machine key, detects the public IP, tests that the port is reachable from the internet (registry dials back to the caller only and must read a random nonce), free disk, CPUs, memory, region (time zone) and name, then asks: website or terminal.
