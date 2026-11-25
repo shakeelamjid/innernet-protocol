@@ -53,6 +53,8 @@ func main() {
 		err = cmdServe(args)
 	case "service":
 		err = cmdService(args)
+	case "passkeys":
+		err = cmdPasskeys(args)
 	case "uninstall":
 		err = cmdUninstall(args)
 	case "pause", "resume", "leave", "reinstate":
@@ -104,6 +106,7 @@ Registry
   apply [--dry-run]    send your signed provider form to the registry
   status [--watch]     one screen: listing, service, online, address, hours, uptime, earnings
   login                get a one-time link to the web dashboard (add a passkey there)
+  passkeys [remove N]  list the passkeys that open your dashboard; remove a lost one
 
 Other
   uninstall [--all]    remove the background service and this program (--all: also the key)
