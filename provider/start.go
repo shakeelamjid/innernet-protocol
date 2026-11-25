@@ -164,7 +164,8 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	}
 	var cr struct {
 		Code, Poll, URL string
-		ExpiresAt       int64 `json:"expires_at"`
+		ExpiresAt       int64            `json:"expires_at"`
+		Passkeys        []map[string]any `json:"passkeys"`
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&cr)
 	resp.Body.Close()
@@ -180,6 +181,17 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	fmt.Println()
 	fmt.Println(dim("  The code works once and expires in 30 minutes. Keep this terminal open."))
 	fmt.Println()
+	if n := len(cr.Passkeys); n > 0 {
+		names := make([]string, n)
+		for i, m := range cr.Passkeys {
+			name, _ := m["name"].(string)
+			names[i] = fmt.Sprintf("%s (%s)", name, passkeyWhen(m))
+		}
+		fmt.Printf("  This machine already has %d passkey(s): %s\n", n, strings.Join(names, "; "))
+		fmt.Println(dim("  On the website, confirm it on the device that has it, or add a new one if you lost it."))
+		fmt.Println(dim("  Remove a lost one afterwards: innernet-provider passkeys remove NAME"))
+		fmt.Println()
+	}
 	if !noOpen {
 		openBrowser(cr.URL)
 	}
