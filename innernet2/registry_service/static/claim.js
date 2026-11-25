@@ -18,9 +18,20 @@
     say('Waiting for your device…');
     try {
       const start = await I.api('/api/claim/options', { code: code });
-      const credential = await I.create(start.options);
-      await I.api('/api/claim/verify', { flow: start.flow, credential: credential, name: $('pk-name').value });
-      location.replace(I.BASE + '/setup');
+      let done = false;
+      try {
+        const credential = await I.create(start.options);
+        await I.api('/api/claim/verify', { flow: start.flow, credential: credential, name: $('pk-name').value });
+        done = true;
+      } catch (err) {
+        // This device already holds a passkey for this machine: sign in with it instead.
+        if (!(err && err.name === 'InvalidStateError' && start.login_flow)) throw err;
+        say('This device already has a passkey for this machine. Confirm it to continue…');
+        const assertion = await I.get(start.login_options);
+        await I.api('/api/claim/verify', { login: true, flow: start.login_flow, credential: assertion });
+        done = true;
+      }
+      if (done) location.replace(I.BASE + '/setup');
     } catch (err) {
       say(I.friendly(err), true);
       $('go').disabled = false;
