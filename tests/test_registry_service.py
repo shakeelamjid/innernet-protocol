@@ -804,3 +804,82 @@ def test_presence_and_intent_records_are_checked():
 def reg_verify_presence(record):
     from innernet2 import irm_registry as r
     return r.verify_presence(record)
+
+
+def test_claim_again_with_the_passkey_this_device_already_has(env):
+    """Setting the same machine up a second time from the same device: the browser refuses a second
+    passkey (InvalidStateError), so the page signs in with the existing one and the claim still works."""
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    det = {"name": "mac", "region": "asia-south", "host": "203.0.113.8", "port": 9443, "os": "darwin", "arch": "arm64"}
+    auth = SoftAuthenticator()
+    first = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    opt = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).json()
+    assert "login_flow" not in opt                                            # no passkeys yet: only enrolment
+    assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                      "name": "Mac"}, headers=H).status_code == 200
+    client.cookies.clear()
+    second = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    opt = client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H).json()
+    assert opt["login_flow"] and opt["login_options"]["allowCredentials"]
+    stranger = SoftAuthenticator()                                            # a passkey of another machine is refused
+    stranger.create(client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H).json()["options"])
+    assert client.post(P + "/api/claim/verify", json={"login": True, "flow": opt["login_flow"],
+                                                      "credential": stranger.get(opt["login_options"])},
+                       headers=H).status_code == 401
+    opt = client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H).json()
+    v = client.post(P + "/api/claim/verify", json={"login": True, "flow": opt["login_flow"],
+                                                   "credential": auth.get(opt["login_options"])}, headers=H)
+    assert v.status_code == 200 and v.json()["existing"] is True
+    assert client.get(P + "/v1/connect/status", headers={"X-Poll-Token": second["poll"]}).json()["status"] == "claimed"
+    assert client.get(P + "/api/setup").status_code == 200                   # signed in: the setup page works
+    assert store.one("SELECT COUNT(*) AS n FROM passkeys")["n"] == 1          # no second passkey was made
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_passkeys_list_and_remove_with_the_machine_key(tmp_path):
+    """Lost passkey: the machine key lists and removes passkeys; removal logs out every web session.
+    start shows the passkeys that already exist."""
+    server, th, port, fake, store = live_registry(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20})
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        wallet = "0x" + "46" * 20
+        fake.splits[wallet] = "0x" + "5e" * 20
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "p"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
+               "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
+        run = lambda *a: subprocess.run([str(binary), *a], env=env, capture_output=True, text=True,  # noqa: E731
+                                        stdin=subprocess.DEVNULL, timeout=60)
+        assert run("start", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())).returncode == 0
+        pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        assert "No passkeys yet" in run("passkeys").stdout
+        now = int(time.time())
+        for name in ("Mac", "Phone"):
+            store.x("INSERT INTO passkeys(cred_id, provider, public_key, sign_count, name, created_at) VALUES (?,?,?,?,?,?)",
+                    (name.lower() + "-id", pid, b"k", 0, name, now))
+        store.x("INSERT INTO sessions(token_hash, id, provider, created_at, expires_at) VALUES ('h','s1',?,?,?)",
+                (pid, now, now + 3600))
+        out = run("passkeys").stdout
+        assert "Mac" in out and "Phone" in out and "added" in out
+        r = run("passkeys", "remove", "Phone")
+        assert r.returncode == 0 and 'Removed passkey "Phone"' in r.stdout, r.stdout + r.stderr
+        assert [x["name"] for x in store.q("SELECT name FROM passkeys WHERE provider=?", (pid,))] == ["Mac"]
+        assert store.one("SELECT revoked FROM sessions WHERE id='s1'")["revoked"] == 1
+        r = run("passkeys", "remove", "Tablet")
+        assert r.returncode != 0 and "no passkey" in r.stderr
+        # start (website mode) shows the passkey that already exists
+        proc = subprocess.Popen([str(binary), "start", "--mode", "web", "--no-browser", "--port", str(free_tcp_port())],
+                                env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        seen = ""
+        for _ in range(60):
+            line = proc.stdout.readline()
+            seen += line
+            if "already has 1 passkey" in line or not line:
+                break
+        proc.kill()
+        assert "already has 1 passkey(s): Mac" in seen, seen
+    finally:
+        server.should_exit = True
+        th.join(timeout=5)
