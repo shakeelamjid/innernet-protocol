@@ -35,7 +35,7 @@ def uptime(store: Store, pid: str, *, since: int) -> tuple[float | None, int]:
     return ((row["good"] or 0) / n if n else None), n
 
 
-def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = None) -> None:
+def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = None, attached=lambda pid: False) -> None:
     now = int(time.time()) if now is None else now
     for p in store.providers():
         if p["state"] not in ("testing", "listed", "suspended", "paused", "leaving"):
@@ -43,7 +43,18 @@ def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = N
         if not reg.in_hours(p["entry"], now):
             continue                       # outside its promised hours: neither good nor bad
         endpoints = p["entry"]["endpoints"]
-        live = store.one("SELECT verified_host, verified_port, verified_at FROM presence WHERE provider=?", (p["id"],))
+        live = store.one("SELECT path, record, verified_host, verified_port, verified_at FROM presence WHERE provider=?",
+                         (p["id"],))
+        if live and live["path"] in ("relay", "tunnel"):
+            if live["path"] == "tunnel":
+                ok = bool(attached(p["id"]))  # HTTPS tunnel: reachable while attached
+            else:                             # ST81 relay: through the relay, end to end
+                import json as _json
+                rec = _json.loads(live["record"])["payload"]
+                ok = presence.relay_check(rec["endpoint"]["host"], rec["endpoint"]["port"], rec["relay_key"], p["id"])
+            store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)", (p["id"], now, int(ok), 0 if ok else None))
+            store.x("UPDATE providers SET checked_at=? WHERE id=?", (now, p["id"]))
+            continue
         if live and live["verified_host"] and now - (live["verified_at"] or 0) < 3600:
             endpoints = [{"host": live["verified_host"], "port": live["verified_port"]}]   # moved: probe where it is
         ok, latency = True, 0.0

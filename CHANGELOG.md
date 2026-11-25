@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### ST81 in Go, storage over ST81, relay for machines behind routers, HTTPS fallback
+
+- **ST81 in Go** (`provider/st81.go`): handshake, key pinning, key confirmation, AEAD framing and strict JSON exactly as `stream_v080.py`; conformance-tested against the Python reference in both directions and against the RFC 8439 ChaCha20-Poly1305 vector. ChaCha20-Poly1305 is the pure-Go code from Go's own source tree (`provider/internal/xcrypto`, BSD), so the provider still needs no external modules.
+- **Storage over ST81 by default:** `serve` answers ST81 and HTTP on one port (silence means ST81). The client uses ST81 first, pinned to the provider key, reuses sessions, and falls back to HTTP; `INNERNET_TRANSPORT` forces one.
+- **RLY-0 relay over ST81:** `innernet-provider relay`; providers attach with an outgoing ST81 session; clients open a stream and run a second, end-to-end ST81 session inside, so the relay sees only ciphertext and cannot impersonate a provider. `deploy/Dockerfile.relay`.
+- **HTTPS tunnel fallback** through the registry (`/v1/tunnel/{id}/poll|reply`, `/t/{id}/…`), signed long-polls, path allow-list, size, concurrency and daily budget limits.
+- Reachability ladder in `start`: direct → firewall → router → ST81 relay → HTTPS tunnel; `--via relay|tunnel`. After a network change `serve` switches to a relay by itself. Presence carries the path (`relay` with `relay_key`, `tunnel`), and the client follows live presence (signed by the provider) to reach a provider wherever it is.
+- The registry confirms relayed providers through the relay, end to end; probes do the same. Its reachability test now speaks first, so it works with the ST81/HTTP port.
+- Spec: 3.4b (relay and tunnel), 5.9a (STO-1 over ST81); core spec notes the Go ST81 implementation.
+- Tests: Go↔Python ST81 interop, Go relay end to end, client over ST81 with HTTP fallback and impostor refusal, and a full run with a real registry, relay, three relayed providers and one tunnelled provider storing and reading a 4-of-6 file.
+
 ### Passkeys: set up again on the same device, lost passkeys
 
 - Website setup on a device that already holds a passkey for the machine no longer fails ("This device already has a passkey"): the page confirms the existing passkey instead (`claim-login` flow; a passkey of another machine is refused). A device without one adds a new passkey as before.

@@ -26,7 +26,10 @@ The installer starts setup by itself (`INNERNET_NO_START=1` installs only). You 
    When the port is not reachable it tries, in order:
    - **The firewall on this machine** (macOS application firewall, ufw, firewalld, Windows Defender Firewall): it adds one allow rule only after you agree, through the system's own admin prompt (sudo or macOS password, Windows "allow changes"), and prints how to remove it.
    - **The router**: it asks the router to forward the port with NAT-PMP or UPnP, keeping the same port outside and inside, then tests again. `serve` renews the mapping while it runs.
-   - If the router's own internet address is shared by the internet provider (carrier-grade NAT, the 100.64.0.0/10 range or a private address), opening ports cannot help; it says so instead of pretending. Relay mode (an outgoing tunnel) is the planned answer.
+   - If the router's own internet address is shared by the internet provider (carrier-grade NAT, the 100.64.0.0/10 range or a private address), opening ports cannot help; it says so.
+   - **An INNERnet relay over ST81**: the machine connects out to a relay and clients reach it through that connection, with an end-to-end ST81 session inside, pinned to your key. Works behind any router or ISP.
+   - **The HTTPS tunnel**, when only web traffic gets out (some offices and hotels).
+   `start --via relay` or `--via tunnel` skips the direct tests. After a network change, `serve` re-tests and switches to a relay by itself if needed.
 2. **Choice.** Website (recommended) or terminal.
 
 **Website.** The terminal prints a one-time code such as `K7QM-4XPA` and a link to `innernetcorp.com/registry/claim`. On the website the person enters the code, adds a passkey (this becomes their login), checks the detected values, picks services and prices, and creates the payout contract with their own wallet. The terminal then shows the final offer, including the payout contract, and asks for confirmation; the machine signs the descriptor and applies. The code is single-use, expires after 30 minutes, and is never the key: the website cannot sign anything, and a guessed code cannot change the payout without the person seeing it in their terminal.
@@ -66,6 +69,8 @@ On Linux a normal user gets a user unit plus lingering (so it keeps running afte
 The same buttons are on the dashboard. Only the operator can reinstate a provider removed for abuse.
 
 **Passkeys are logins; the machine key is the master.** A passkey lives on your device (iCloud Keychain, Google Password Manager, a security key); the registry only keeps its public half, so nobody can show it to you. `start` lists the passkeys that already exist for this machine. On the website, a device that still has one just confirms it; a device without one (new, or the passkey was lost) adds a new one, because the code from the terminal proves you hold the machine. `innernet-provider passkeys` lists them and `innernet-provider passkeys remove NAME` deletes a lost or stolen one, signed by the machine key; removing also logs out every web session.
+
+**Transport.** `serve` answers ST81 (INNERnet's own encrypted session protocol) and HTTP on the same port; clients use ST81 first. `innernet-provider relay [--listen :9444]` runs a relay (see `deploy/Dockerfile.relay`).
 
 `uninstall` removes the background service and the program; `uninstall --all` also deletes the key, settings and stored pieces after asking.
 

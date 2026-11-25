@@ -1,0 +1,18 @@
+# INNERnet relay (RLY-0 over ST81) for providers that cannot accept incoming connections.
+# Coolify: Dockerfile build pack, this file; publish TCP port 9444 to the internet (Ports
+# Mappings 9444:9444, no HTTP domain needed); persistent volume at /var/lib/innernet-relay
+# (keeps the relay key). The relay key is printed at start; put "host:9444=<key>" into the
+# registry's INNERNET_RELAYS. The relay only forwards end-to-end encrypted ST81 streams.
+FROM golang:1.23-alpine AS build
+WORKDIR /src
+COPY provider/ ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w" -o /innernet-provider .
+
+FROM alpine:3.20
+RUN adduser -D -u 10002 relay && mkdir -p /var/lib/innernet-relay && chown relay /var/lib/innernet-relay \
+    && chmod 0700 /var/lib/innernet-relay
+COPY --from=build /innernet-provider /usr/local/bin/innernet-provider
+USER relay
+ENV INNERNET_HOME=/var/lib/innernet-relay
+EXPOSE 9444
+ENTRYPOINT ["innernet-provider", "relay", "--listen", ":9444"]

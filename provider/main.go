@@ -55,6 +55,10 @@ func main() {
 		err = cmdService(args)
 	case "passkeys":
 		err = cmdPasskeys(args)
+	case "relay":
+		err = cmdRelay(args)
+	case "st81-echo", "st81-ping":
+		err = cmdST81Debug(cmd, args)
 	case "uninstall":
 		err = cmdUninstall(args)
 	case "pause", "resume", "leave", "reinstate":

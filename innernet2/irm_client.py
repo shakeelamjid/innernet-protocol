@@ -39,6 +39,8 @@ from decimal import ROUND_CEILING, Decimal
 from pathlib import Path
 from typing import Callable
 
+import threading
+
 import httpx
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey, Ed25519PublicKey
@@ -46,8 +48,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey,
 from . import irm_storage
 from .bulk_v080 import BulkError
 from . import codec
+from . import rly0
+from . import stream_v080 as st81
 from .crypto import decrypt_chunk, deinterleave, derive, encrypt_chunk, interleave, new_root
-from .irm_registry import verify_registry, verify_ticket
+from .irm_registry import verify_presence, verify_registry, verify_ticket
 
 CHUNK = 64 * 1024
 REQUEST_DOMAIN = b"INNERnet/STO-1/request\x00"
@@ -86,11 +90,36 @@ class ProviderError(Exception):
     pass
 
 
+class _Reply:
+    """What an ST81 answer looks like to the rest of the client (same shape as an HTTP reply)."""
+
+    def __init__(self, status: int, headers: dict, content: bytes):
+        self.status_code, self.content = status, content
+        self.headers = {str(k).lower(): str(v) for k, v in headers.items()}
+
+    def json(self):
+        return json.loads(self.content)
+
+
+# One ST81 session per provider address and client key, reused across requests.
+_SESSIONS: dict[tuple, "st81.Session"] = {}
+_ST81_DOWN: dict[tuple, float] = {}       # address -> time until which we use HTTP only
+_LOCK = threading.Lock()
+
+
+def transport_mode() -> str:
+    """INNERNET_TRANSPORT: auto (ST81 first, HTTP fallback), st81 (ST81 only) or http."""
+    mode = os.environ.get("INNERNET_TRANSPORT", "auto")
+    return mode if mode in ("auto", "st81", "http") else "auto"
+
+
 @dataclass
 class Provider:
     entry: dict
     key: Ed25519PrivateKey
     timeout: float = 10.0
+    last_transport: str = ""
+    route: dict | None = None        # live presence: {"path", "host", "port", "relay_key"?, "http_base"?}
 
     @property
     def id(self) -> str:
@@ -98,19 +127,78 @@ class Provider:
 
     @property
     def base(self) -> str:
-        ep = self.entry["endpoints"][0]
+        if self.route and self.route.get("http_base"):
+            return self.route["http_base"]
+        ep = self.endpoint
         return f"http://{ep['host']}:{ep['port']}"
+
+    @property
+    def endpoint(self) -> dict:
+        if self.route and self.route["path"] in ("direct", "router"):
+            return {"host": self.route["host"], "port": self.route["port"]}
+        return self.entry["endpoints"][0]
 
     def _request(self, method: str, path: str, body: bytes = b"") -> httpx.Response:
         ts, nonce = str(int(time.time())), secrets.token_hex(16)
         msg = REQUEST_DOMAIN + f"{method}\n{path}\n{hashlib.sha256(body).hexdigest()}\n{ts}\n{nonce}".encode()
         headers = {"X-Innernet-Client": self.key.public_key().public_bytes_raw().hex(), "X-Innernet-Time": ts,
                    "X-Innernet-Nonce": nonce, "X-Innernet-Signature": self.key.sign(msg).hex()}
+        mode = transport_mode()
+        if self.route and self.route["path"] == "tunnel":
+            mode = "http"                      # HTTPS tunnel: the HTTP binding is the only way in
+        if mode != "http":
+            try:
+                r = self._st81(method, path, body, headers)
+                self.last_transport = "st81"
+                return r
+            except (st81.StreamError, OSError) as exc:
+                if mode == "st81":
+                    raise ProviderError(f"{self.entry['name']}: ST81 failed ({exc})") from exc
         try:
             r = httpx.request(method, self.base + path, content=body, headers=headers, timeout=self.timeout)
         except httpx.HTTPError as exc:
             raise ProviderError(f"{self.entry['name']}: unreachable ({exc.__class__.__name__})") from exc
+        self.last_transport = "http"
         return r
+
+    def _st81(self, method: str, path: str, body: bytes, headers: dict) -> _Reply:
+        """STO-1 over ST81 (spec 5.9a): the provider's listed key is the pinned server key."""
+        ep = self.endpoint
+        via = self.route if self.route and self.route["path"] == "relay" else None
+        if via:
+            ep = {"host": via["host"], "port": via["port"]}
+        addr = (self.id, ep["host"], ep["port"])
+        if _ST81_DOWN.get(addr, 0) > time.monotonic():
+            raise st81.StreamError("ST81 recently failed for this provider")
+        slot = addr + (self.key.public_key().public_bytes_raw(),)
+        with _LOCK:
+            sess = _SESSIONS.get(slot)
+            for attempt in (0, 1):
+                try:
+                    if sess is None and via:
+                        sess = rly0.connect(via["host"], via["port"], bytes.fromhex(via["relay_key"]), bytes.fromhex(self.id),
+                                            self.key, timeout=self.timeout)
+                        _SESSIONS[slot] = sess
+                    if sess is None:
+                        sess = st81.connect(ep["host"], ep["port"], self.key, bytes.fromhex(self.id), timeout=self.timeout)
+                        _SESSIONS[slot] = sess
+                    rid = secrets.randbelow(2**53)
+                    sess.write({"rid": rid, "method": method, "path": path, "headers": headers}, body)
+                    head, data = sess.read()
+                    if head.get("rid") != rid or type(head.get("status")) is not int:
+                        raise st81.StreamError("answer does not match the request")
+                    return _Reply(head["status"], head.get("headers") or {}, data)
+                except (st81.StreamError, OSError):
+                    _SESSIONS.pop(slot, None)
+                    if sess is not None:
+                        try:
+                            sess.sock.close()
+                        except OSError:
+                            pass
+                    sess = None
+                    if attempt == 1:
+                        _ST81_DOWN[addr] = time.monotonic() + 60
+                        raise
 
     def _json(self, r: httpx.Response) -> dict:
         """Verify the provider's signature on a JSON reply; it is our evidence."""
@@ -173,13 +261,16 @@ Payer = Callable[[str, str, int], str]   # (network, payto, amount in USDC base 
 
 class Client:
     def __init__(self, home: Path | None = None, *, registry_doc: dict | None = None, pinned: list[bytes] | None = None,
-                 registry_url: str | None = None, now: Callable[[], float] = time.time):
+                 registry_url: str | None = None, now: Callable[[], float] = time.time,
+                 presence_url: str | None = None):
         self.home = Path(home or state_home())
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.key = load_identity(self.home)
         self.now = now
         self.pinned = pinned or []
         self.registry_url = registry_url
+        self.presence_url = presence_url
+        self._routes: dict[str, tuple[float, dict | None]] = {}
         self._doc = registry_doc
 
     # registry
@@ -208,7 +299,34 @@ class Client:
             _private(p, json.dumps(seen).encode())
 
     def provider(self, entry: dict) -> Provider:
-        return Provider(entry, self.key)
+        return Provider(entry, self.key, route=self.route(entry["id"]))
+
+    def route(self, pid: str) -> dict | None:
+        """Where a provider can be reached right now, from its own signed presence record
+        (the registry only passes it on). Cached for a minute; None means use the listing."""
+        base = self.presence_url or self.registry_url
+        if not base:
+            return None
+        hit = self._routes.get(pid)
+        if hit and hit[0] > time.monotonic():
+            return hit[1]
+        route = None
+        try:
+            r = httpx.get(base.rstrip("/") + f"/presence/{pid}", timeout=10)
+            if r.status_code == 200:
+                live = r.json()
+                p = verify_presence(live["record"], now=int(self.now()), max_age=900)
+                if p["provider"] == pid and live.get("online"):
+                    ep = p["endpoint"]
+                    route = {"path": p["path"], "host": ep["host"], "port": ep["port"]}
+                    if p["path"] == "relay":
+                        route["relay_key"] = p["relay_key"]
+                    if p["path"] == "tunnel":
+                        route["http_base"] = base.rstrip("/").removesuffix("/v1") + f"/t/{pid}"
+        except (httpx.HTTPError, ValueError, KeyError, BulkError):
+            route = None
+        self._routes[pid] = (time.monotonic() + 60, route)
+        return route
 
     # records
     def _path(self, obj: str) -> Path:

@@ -18,6 +18,14 @@
     say('Waiting for your device…');
     try {
       const start = await I.api('/api/claim/options', { code: code });
+      if (start.resume) {
+        // This code was already used to sign in: confirm the passkey again and carry on.
+        say('Confirm your passkey to continue setting up this machine…');
+        const a = await I.get(start.login_options);
+        await I.api('/api/claim/verify', { login: true, flow: start.login_flow, credential: a });
+        location.replace(I.BASE + '/setup');
+        return;
+      }
       let done = false;
       try {
         const credential = await I.create(start.options);

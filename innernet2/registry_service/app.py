@@ -24,7 +24,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
 from ..bulk_v080 import BulkError
 from .. import irm_registry as reg
 from ..irm_registry import make_login_challenge, sign_registry, verify_connect, verify_descriptor, verify_login
-from . import presence
+from . import presence, tunnel
 from . import chain, offer as offers, probe
 from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
@@ -102,29 +102,25 @@ def norm_code(code: str) -> str:
 def nonce_check(host: str, port: int, nonce: str, timeout: float = 5.0) -> bool:
     """Connect to host:port and check the machine knows `nonce`.
 
-    A setup listener sends the nonce as soon as we connect. A running provider service
-    is an HTTP server, so if nothing arrives quickly we ask it for /reach/<nonce>."""
+    We speak first with `GET /reach/<nonce>`: a running provider service answers it over HTTP
+    (the same port also speaks ST81, which waits for the client to stay silent), and the
+    setup listener of `innernet-provider start` simply sends the nonce on connect."""
     import socket
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
-            sock.settimeout(1.5)
-            got = b""
-            try:
-                got = sock.recv(64)
-            except socket.timeout:
-                pass
-            if got[:len(nonce)] == nonce.encode():
-                return True
-            if got:
-                return False
             sock.settimeout(timeout)
             sock.sendall(f"GET /reach/{nonce} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
             data = b""
             while len(data) < 4096:
-                chunk = sock.recv(1024)
+                try:
+                    chunk = sock.recv(1024)
+                except socket.timeout:
+                    break
                 if not chunk:
                     break
                 data += chunk
+                if data[:len(nonce)] == nonce.encode():
+                    return True
             head, _, body = data.partition(b"\r\n\r\n")
             return head.startswith(b"HTTP/1.") and b" 200 " in head.split(b"\r\n")[0] + b" " and body.strip() == nonce.encode()
     except OSError:
@@ -134,6 +130,7 @@ def nonce_check(host: str, port: int, nonce: str, timeout: float = 5.0) -> bool:
 def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http_rpc,
                connect=probe.tcp_connect, reach=nonce_check, info=None) -> FastAPI:
     info = info or presence.info_check
+    tunnels = tunnel.Tunnels()
     store = store or Store(settings.db_path)
     registry_key = load_registry_key(settings.key_file)
     if registry_key is not None:
@@ -155,7 +152,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     async def lifespan(_app):
         threads = []
         if settings.workers:
-            for fn, iv in ((lambda: probe.probe_once(store, connect), settings.probe_interval),
+            for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached), settings.probe_interval),
                            (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval)):
                 t = threading.Thread(target=worker, args=(fn, iv), daemon=True)
                 t.start()
@@ -382,13 +379,56 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(400, "port and nonce required")
         return {"ip": ip, "port": port, "reachable": bool(reach(ip, port, nonce))}
 
+    # ---- relay tunnel: providers that cannot accept incoming connections ------------
+    def tunnel_provider(pid: str) -> None:
+        if not re.match(r"^[0-9a-f]{64}$", pid):
+            raise HTTPException(400, "bad provider id")
+        p = store.provider(pid)
+        if p is None or p["state"] == "removed":
+            raise HTTPException(403, "apply first; removed providers cannot use the relay")
+
+    @app.post(P + "/v1/tunnel/{pid}/poll")
+    async def tunnel_poll(pid: str, request: Request, wait: int = tunnel.POLL_SECONDS):
+        tunnel_provider(pid)
+        try:
+            tunnels.authenticate(pid, request.headers, "poll")
+        except tunnel.TunnelError as exc:
+            raise HTTPException(exc.status, str(exc))
+        item = await tunnels.poll(pid, wait=max(0, min(int(wait), tunnel.POLL_SECONDS)))
+        return item if item else Response(status_code=204)
+
+    @app.post(P + "/v1/tunnel/{pid}/reply/{rid}")
+    async def tunnel_reply(pid: str, rid: str, request: Request):
+        tunnel_provider(pid)
+        try:
+            tunnels.authenticate(pid, request.headers, "reply")
+            tunnels.reply(pid, rid, await body_json(request))
+        except tunnel.TunnelError as exc:
+            raise HTTPException(exc.status, str(exc))
+        except (ValueError, TypeError):
+            raise HTTPException(400, "bad answer")
+        return {"ok": True}
+
+    @app.api_route(P + "/t/{pid}/{path:path}", methods=["GET", "PUT", "POST", "DELETE"])
+    async def tunnel_forward(pid: str, path: str, request: Request):
+        """Clients reach a relayed provider here; the request and answer pass through unchanged."""
+        limiter.check("relay", client_ip(request), 600, 60)
+        if not re.match(r"^[0-9a-f]{64}$", pid):
+            raise HTTPException(400, "bad provider id")
+        body = await request.body()
+        try:
+            out = await tunnels.forward(pid, request.method, "/" + path, request.headers, body)
+        except tunnel.TunnelError as exc:
+            raise HTTPException(exc.status, str(exc))
+        return Response(content=out["body"], status_code=out["status"], headers=out["headers"])
+
     @app.post(P + "/v1/presence")
     async def post_presence(request: Request):
         """Signed live presence from a provider's service (about once a minute)."""
         ip = client_ip(request)
         limiter.check("presence", ip, 30, 600)
         try:
-            return presence.record_presence(store, await body_json(request), ip, info)
+            return presence.record_presence(store, await body_json(request), ip, info, relay=tunnels.attached)
         except BulkError as exc:
             raise HTTPException(422, str(exc))
 
@@ -467,12 +507,23 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         pid = pid.hex()
         code, poll = new_claim_code(), secrets.token_urlsafe(24)
         now = int(time.time())
-        store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status) "
-                "VALUES (?,?,?,?,?,?,'waiting')",
-                (token_hash(code), token_hash(poll), pid, json.dumps(detected), now, now + CLAIM_TTL))
-        store.audit(pid, "machine-connected", f"{detected.get('os', '')}/{detected.get('arch', '')}", ip)
-        return {"code": code, "poll": poll, "expires_at": now + CLAIM_TTL,
-                "url": f"{settings.origin}{P}/claim#code={code}", "passkeys": passkey_list(pid)}
+        # Same machine again within the 30 minutes (terminal was closed): continue that setup.
+        prev = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('claimed','submitted') AND expires_at>? "
+                         "ORDER BY created_at DESC LIMIT 1", (pid, now))
+        status, draft, claimed_at = "waiting", None, None
+        if prev is not None:
+            status, draft, claimed_at = "claimed", prev["draft"], prev["claimed_at"]
+            store.x("UPDATE claims SET status='superseded' WHERE provider=? AND status IN ('waiting','claimed','submitted')",
+                    (pid,))
+        store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status, draft, "
+                "claimed_at) VALUES (?,?,?,?,?,?,?,?,?)",
+                (token_hash(code), token_hash(poll), pid, json.dumps(detected), now, now + CLAIM_TTL, status, draft,
+                 claimed_at))
+        store.audit(pid, "machine-connected", f"{detected.get('os', '')}/{detected.get('arch', '')}"
+                    + (" (continuing setup)" if prev else ""), ip)
+        return {"code": code, "poll": poll, "expires_at": now + CLAIM_TTL, "resumed": prev is not None,
+                "url": f"{settings.origin}{P}/claim#code={code}", "setup_url": f"{settings.origin}{P}/setup",
+                "passkeys": passkey_list(pid)}
 
     def passkey_list(pid: str) -> list[dict]:
         return [{"id": r["cred_id"], "name": r["name"], "created_at": r["created_at"], "last_used": r["last_used"]}
@@ -513,7 +564,10 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                          "usdc": USDC.get(net), "fee_wallet": fee_wallet, "factory": settings.split_factory.get(net),
                          "explorer_tx": EXPLORER_TX.get(net, ""),
                          "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/")})
-        return {"fee_bps": settings.fee_bps, "networks": nets}
+        host = settings.origin.split("://", 1)[-1].split("/")[0]
+        return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays,
+                "tunnel": {"url": f"{settings.origin}{P}/v1/tunnel", "endpoint": {"host": host, "port": 443},
+                           "public": f"{settings.origin}{P}/t/"}}
 
     @app.get(P + "/payout")
     def payout_page():
@@ -703,21 +757,31 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return response
 
     # ---- claim a machine and set it up on the web -------------------------
-    def live_claim(code: str) -> dict:
+    def live_claim(code: str, allow_claimed: bool = False) -> dict:
         row = store.one("SELECT * FROM claims WHERE code_hash=?", (token_hash(norm_code(code)),))
-        if row is None or row["expires_at"] < int(time.time()):
+        if row is None or row["expires_at"] < int(time.time()) or row["status"] == "superseded":
             raise HTTPException(404, "This code is wrong or has expired. Run innernet-provider start again for a new one.")
-        if row["status"] != "waiting":
-            raise HTTPException(409, "This code was already used.")
-        return dict(row)
+        if row["status"] == "waiting" or (allow_claimed and row["status"] in ("claimed", "submitted")):
+            return dict(row)
+        raise HTTPException(409, "This code was already used.")
 
     @app.post(P + "/api/claim/options")
     async def claim_options(request: Request):
         guard(request)
         limiter.check("claim", client_ip(request), 20, 600)
-        c = live_claim((await body_json(request)).get("code", ""))
+        c = live_claim((await body_json(request)).get("code", ""), allow_claimed=True)
         pid = c["provider"]
         detected = json.loads(c["detected"])
+        if c["status"] != "waiting":
+            # Already claimed (the tab was closed): sign in again with a passkey of this machine.
+            rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))
+            login = generate_authentication_options(
+                rp_id=settings.rp_id, user_verification=UserVerificationRequirement.PREFERRED,
+                allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"])) for r in rows])
+            lflow = new_flow("claim-login", login.challenge, pid, None)
+            store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], lflow))
+            return {"resume": True, "login_flow": lflow, "login_options": json.loads(options_to_json(login)),
+                    "name": detected.get("name") or "provider"}
         name = detected.get("name") or "provider"
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
                     for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))]
@@ -785,10 +849,11 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(401, f"passkey was not accepted: {exc}") from None
         now = int(time.time())
         with store.tx() as db:
-            cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
+            cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' ELSE status END, "
+                             "claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? AND status IN ('waiting','claimed','submitted') "
                              "AND expires_at>?", (now, f["token_hash"], now))
             if cur.rowcount != 1:
-                raise HTTPException(409, "This code was already used or has expired.")
+                raise HTTPException(409, "This code has expired. Run innernet-provider start again.")
             db.execute("UPDATE passkeys SET sign_count=?, last_used=? WHERE cred_id=?", (v.new_sign_count, now, row["cred_id"]))
         store.audit(f["provider"], "machine-claimed", f"signed in with passkey {row['name']}", ip)
         response = JSONResponse({"ok": True, "existing": True})

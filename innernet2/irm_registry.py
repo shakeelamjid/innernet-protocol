@@ -426,7 +426,7 @@ CONNECT_DOMAIN = b"INNERnet/REG-1/provider-connect\x00"
 CONNECT_VERSION = "REG-1-CONNECT"
 _DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
                   "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str, "class": str,
-                  "tz": str, "port_map": str}
+                  "tz": str, "port_map": str, "path": str}
 
 
 def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:
@@ -467,7 +467,7 @@ def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) 
 
 PRESENCE_DOMAIN = b"INNERnet/REG-1/provider-presence\x00"
 PRESENCE_VERSION = "REG-1-PRESENCE"
-PATHS = {"direct", "router", "relay"}
+PATHS = {"direct", "router", "relay", "tunnel"}   # relay: RLY-0 over ST81; tunnel: HTTPS fallback
 _STAT_KEYS = {"stored_bytes", "leases", "requests_24h", "served_bytes_24h", "challenges_24h", "payments_24h",
               "uptime_s", "storage_limit_bytes"}
 
@@ -477,7 +477,11 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
     _exact_keys(record, {"payload", "signature"}, label="presence record")
     p = record["payload"]
     _exact_keys(p, {"version", "provider", "endpoint", "path", "seq", "issued_at", "stats", "software"},
-                label="presence payload")
+                {"relay_key"}, label="presence payload")
+    if (p.get("path") == "relay") != ("relay_key" in p):
+        raise BulkError("relay_key goes with path relay, and only with it")
+    if "relay_key" in p:
+        _bytes(p["relay_key"], 32, "relay key")
     if p["version"] != PRESENCE_VERSION:
         raise BulkError("unsupported presence version")
     issued = _int(p["issued_at"], 0, 2**53, "presence issued_at")

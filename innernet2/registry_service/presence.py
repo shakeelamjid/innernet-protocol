@@ -69,7 +69,32 @@ def info_check(host: str, port: int, provider: str, timeout: float = 5.0) -> boo
         return False
 
 
-def record_presence(store: Store, record: dict, source_ip: str, check=info_check, now: int | None = None) -> dict:
+def relay_check(host: str, port: int, relay_key: str, provider: str, timeout: float = 8.0) -> bool:
+    """Reach the provider through its ST81 relay, end to end, and check its signed info."""
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+    from .. import rly0
+    try:
+        sess = rly0.connect(host, port, bytes.fromhex(relay_key), bytes.fromhex(provider), Ed25519PrivateKey.generate(),
+                            timeout=timeout)
+    except Exception:
+        return False
+    try:
+        sess.write({"rid": 1, "method": "GET", "path": "/sto/v1/info", "headers": {}})
+        head, body = sess.read()
+        sig = bytes.fromhex(str((head.get("headers") or {}).get("X-Innernet-Signature", "")))
+        Ed25519PublicKey.from_public_bytes(bytes.fromhex(provider)).verify(sig, RESPONSE_DOMAIN + body)
+        return head.get("status") == 200 and json.loads(body).get("provider") == provider
+    except Exception:
+        return False
+    finally:
+        try:
+            sess.sock.close()
+        except OSError:
+            pass
+
+
+def record_presence(store: Store, record: dict, source_ip: str, check=info_check, now: int | None = None,
+                    relay=lambda pid: False, via_relay=relay_check) -> dict:
     now = int(time.time()) if now is None else now
     p = reg.verify_presence(record, now=now)
     pid = p["provider"]
@@ -79,15 +104,25 @@ def record_presence(store: Store, record: dict, source_ip: str, check=info_check
     if prov["state"] == "removed":
         raise reg.BulkError("provider was removed by the operator")
     ep = p["endpoint"]
-    if p["path"] != "relay" and ep["host"] != source_ip:
+    if p["path"] in ("direct", "router") and ep["host"] != source_ip:
         raise reg.BulkError(f"presence says {ep['host']} but it came from {source_ip}")
     last = store.one("SELECT * FROM presence WHERE provider=?", (pid,))
     if last and p["seq"] <= last["seq"]:
         raise reg.BulkError("presence sequence went backwards")
+    recheck = 600 if p["path"] == "relay" else 3600      # through a relay: confirm every 10 minutes
     verified = last and last["verified_host"] == ep["host"] and last["verified_port"] == ep["port"] \
-        and now - (last["verified_at"] or 0) < 3600
+        and now - (last["verified_at"] or 0) < recheck
     v_host, v_port, v_at = (last["verified_host"], last["verified_port"], last["verified_at"]) if last else (None, None, None)
-    if not verified:
+    if p["path"] == "tunnel":
+        verified = relay(pid)             # HTTPS tunnel: reachable exactly while it is attached
+        if verified:
+            v_host, v_port, v_at = ep["host"], ep["port"], now
+    elif p["path"] == "relay":            # ST81 relay: go through it, end to end, now and then
+        if not verified:
+            verified = via_relay(ep["host"], ep["port"], p["relay_key"], pid)
+            if verified:
+                v_host, v_port, v_at = ep["host"], ep["port"], now
+    elif not verified:
         if check(ep["host"], ep["port"], pid):
             v_host, v_port, v_at, verified = ep["host"], ep["port"], now, True
     with store.tx() as db:

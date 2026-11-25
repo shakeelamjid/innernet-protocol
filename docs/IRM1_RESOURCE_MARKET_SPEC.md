@@ -121,6 +121,15 @@ Probes run only inside a provider's promised hours (section 3.4a) and go to its 
 
 **Market.** `GET /registry/v1/market` gives the median and interquartile range of listed prices per service, overall and per class, so providers can price sensibly.
 
+### 3.4b Reaching providers that cannot accept connections (draft)
+
+A provider behind a home router or an internet provider's shared address (carrier-grade NAT) connects **out** instead:
+
+1. **RLY-0 relay over ST81** (preferred). The provider opens an ST81 session to a relay listed by the registry and sends `{"op":"attach"}`; the relay knows it by its authenticated ST81 key, so nobody can attach as someone else. A client opens an ST81 session to the relay and sends `{"op":"open","to":<provider id>}`; after `{"ok":true}` both sides exchange `{"op":"data","stream":n}` frames (and `{"op":"close","stream":n}`). Inside the stream the client runs a **second ST81 handshake pinned to the provider key**, so the relay forwards ciphertext it can neither read nor alter, and cannot impersonate the provider. The provider's presence carries `path: "relay"`, the relay address as `endpoint`, and `relay_key`; clients pin the relay with that key and the provider end to end with the provider id. The registry confirms relayed providers by going through the relay itself, end to end, at least every 10 minutes. The relay is `innernet-provider relay` (`deploy/Dockerfile.relay`); relays are configured in the registry (`INNERNET_RELAYS`) and published in `/registry/v1/config`.
+2. **HTTPS tunnel** (fallback where only web traffic gets out). The provider keeps signed long-polls open to `POST /registry/v1/tunnel/{id}/poll` (signature over `"INNERnet/REG-1/provider-tunnel\0" ‖ kind ‖ "\n" ‖ id ‖ "\n" ‖ time ‖ "\n" ‖ nonce`, fresh within 120 s, single use) and answers with `POST …/reply/{rid}`. Clients use `https://<registry>/registry/t/{id}/<path>`. Requests and answers keep their STO-1 signatures end to end; the tunnel forwards only provider paths, bounds bodies and in-flight requests, and applies a daily byte budget per provider.
+
+A provider tries, in order: direct, its own firewall, the router (NAT-PMP, UPnP), the ST81 relay, the HTTPS tunnel. After a network change it re-tests and switches to a relay by itself when it is no longer reachable.
+
 ### 3.5 Registry key rotation
 
 The registry signs with one active key and pins one offline backup key in every client build. A rotation is a document signed by **both** the old key and the backup key, naming the new key. Clients that see a valid rotation replace the old key and keep the backup. If the active key is compromised, the backup alone MAY sign a rotation; clients MUST then require it to carry a `sequence` higher than any seen.
@@ -255,6 +264,10 @@ INNERnet does not count usage centrally. Both parties keep evidence that a third
 | CMP-1 | Instructions of a deterministic job (WASM metering) | Only for a result that verifies (section 7.3) | Job hash, result hash, PAY-1 ticket, on-chain payment |
 
 Every payment is a public on-chain transfer to the provider's split contract, and every service unit is covered by a PAY-1 ticket signed by the provider. A dispute therefore compares two signed records and the chain, not two people's word. The registry publishes each provider's reachability and, once the provider service ships, its proof pass rate, so clients can prefer reliable providers.
+
+### 5.9a STO-1 over ST81 (default)
+
+Providers serve STO-1 over ST81 on the same port as HTTP: a client that stays silent gets the ST81 challenge, a client that speaks first is served HTTP. ST81 is pinned to the provider id from the signed registry entry. One request per frame, answered in order: request header `{"rid", "method", "path", "headers"}` plus the raw body; answer header `{"rid", "status", "headers"}` plus the raw body. Requests keep the per-request client signatures of section 5.9 and answers keep the provider's response signatures, so evidence is the same on both transports and leases have the same owners. Bodies over ST81 are bounded by the 400,000-byte frame limit. Clients use ST81 first and fall back to HTTP; `INNERNET_TRANSPORT=st81|http` forces one.
 
 ### 5.9 HTTP binding (draft)
 

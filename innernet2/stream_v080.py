@@ -172,6 +172,13 @@ def connect(host: str, port: int, key: Ed25519PrivateKey, pinned_server: bytes,
     """
     if len(pinned_server)!=32: raise StreamError("server pin must be 32 bytes")
     sock=socket.create_connection((host,port),timeout=timeout)
+    return handshake(sock, key, pinned_server, timeout=timeout)
+
+
+def handshake(sock, key: Ed25519PrivateKey, pinned_server: bytes, *, timeout: float=10) -> Session:
+    """Initiator side of ST81 over an already connected socket-like object (a TCP socket,
+    or a stream through an RLY-0 relay). Identical wire behaviour to `connect`."""
+    if len(pinned_server)!=32: raise StreamError("server pin must be 32 bytes")
     try:
         deadline=time.monotonic()+timeout
         challenge_msg=_read(sock,68,deadline=deadline)

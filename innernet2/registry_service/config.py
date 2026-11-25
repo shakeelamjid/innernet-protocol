@@ -41,6 +41,7 @@ class Settings:
     probe_interval: int = 300
     chain_interval: int = 120
     document_ttl: int = 3600
+    relays: list = field(default_factory=list)          # [{"addr": "host:port", "key": hex}] ST81 relays (RLY-0)
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -69,4 +70,11 @@ class Settings:
         s.rp_id = _env("INNERNET_REGISTRY_RP_ID", s.rp_id)
         s.login_host = _env("INNERNET_REGISTRY_HOST", s.rp_id)
         s.trust_proxy = _env("INNERNET_TRUST_PROXY", "1") == "1"
+        # INNERNET_RELAYS="relay.innernetcorp.com:9444=<relay key hex>,host2:9444=<key>"
+        for item in filter(None, (x.strip() for x in _env("INNERNET_RELAYS").split(","))):
+            addr, _, key = item.partition("=")
+            host, _, port = addr.rpartition(":")
+            if not (host and port.isdigit() and re.match(r"^[0-9a-f]{64}$", key)):
+                raise SystemExit("INNERNET_RELAYS entries look like host:port=<64 hex relay key>")
+            s.relays.append({"addr": addr, "key": key})
         return s

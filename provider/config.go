@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -32,26 +33,29 @@ var networks = map[string]string{
 var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "Ginstr"}
 
 type Config struct {
-	Version  string            `json:"version"`
-	Name     string            `json:"name"`
-	Region   string            `json:"region"`
-	Host     string            `json:"host"`
-	Port     int               `json:"port"`
-	Network  string            `json:"network"`
-	Payout   string            `json:"payout_contract"`
-	Registry string            `json:"registry"`
-	Storage  int               `json:"storage_gib"`
-	RelayCap int               `json:"relay_gib_per_month"`
-	Compute  bool              `json:"compute"`
-	CPUs     int               `json:"compute_max_cpus"`
-	MemMiB   int               `json:"compute_max_memory_mib"`
-	Prices   map[string]string `json:"prices_usdc"`
-	Created  string            `json:"created_at"`
-	PortMap  string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
-	Hours    string            `json:"hours,omitempty"`    // "always" or e.g. "mon-fri 21:00-08:00"
-	TZ       string            `json:"tz,omitempty"`       // time zone the hours are in
-	Class    string            `json:"class,omitempty"`    // server, desktop or laptop
-	State    string            `json:"state,omitempty"`    // paused or leaving, set by pause/leave
+	Version    string            `json:"version"`
+	Name       string            `json:"name"`
+	Region     string            `json:"region"`
+	Host       string            `json:"host"`
+	Port       int               `json:"port"`
+	Network    string            `json:"network"`
+	Payout     string            `json:"payout_contract"`
+	Registry   string            `json:"registry"`
+	Storage    int               `json:"storage_gib"`
+	RelayCap   int               `json:"relay_gib_per_month"`
+	Compute    bool              `json:"compute"`
+	CPUs       int               `json:"compute_max_cpus"`
+	MemMiB     int               `json:"compute_max_memory_mib"`
+	Prices     map[string]string `json:"prices_usdc"`
+	Created    string            `json:"created_at"`
+	PortMap    string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
+	Hours      string            `json:"hours,omitempty"`    // "always" or e.g. "mon-fri 21:00-08:00"
+	TZ         string            `json:"tz,omitempty"`       // time zone the hours are in
+	Class      string            `json:"class,omitempty"`    // server, desktop or laptop
+	State      string            `json:"state,omitempty"`    // paused or leaving, set by pause/leave
+	Relay      *relayTarget      `json:"relay,omitempty"`    // reached through this ST81 relay (RLY-0)
+	Tunnel     bool              `json:"tunnel,omitempty"`   // reached through the registry's HTTPS tunnel
+	TunnelHost string            `json:"tunnel_host,omitempty"`
 }
 
 func home() string {
@@ -212,7 +216,7 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	}
 	entry := map[string]any{
 		"id": id, "name": c.Name, "region": c.Region,
-		"endpoints": []any{map[string]any{"host": c.Host, "port": c.Port}},
+		"endpoints": []any{c.publicEndpoint()},
 		"services":  toAny(services),
 		"payto":     map[string]any{networks[c.Network]: c.Payout},
 		"prices":    prices,
@@ -273,4 +277,19 @@ func writeDetails(c *Config, id string) error {
 	b.WriteString("  3. innernet-provider apply\n")
 	b.WriteString("  4. innernet-provider status\n")
 	return os.WriteFile(detailsPath(), []byte(b.String()), 0o644)
+}
+
+// publicEndpoint is the address in the signed descriptor: the machine itself, or the
+// relay or tunnel that reaches it. Live presence carries the current one.
+func (c *Config) publicEndpoint() map[string]any {
+	switch {
+	case c.Relay != nil:
+		if i := strings.LastIndex(c.Relay.Addr, ":"); i > 0 {
+			port, _ := strconv.Atoi(c.Relay.Addr[i+1:])
+			return map[string]any{"host": c.Relay.Addr[:i], "port": port}
+		}
+	case c.Tunnel && c.TunnelHost != "":
+		return map[string]any{"host": c.TunnelHost, "port": 443}
+	}
+	return map[string]any{"host": c.Host, "port": c.Port}
 }

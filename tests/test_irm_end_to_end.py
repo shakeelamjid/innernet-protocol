@@ -232,3 +232,26 @@ def test_provider_rejects_wrong_owner_replay_and_reused_payment(network):
     url = owner.base + f"/sto/v1/leases/{r['lease']}/objects/{rec['object']}/chunks/0"
     assert httpx.get(url, headers=headers).status_code == 200
     assert httpx.get(url, headers=headers).status_code == 401
+
+
+def test_st81_is_used_first_and_http_is_the_fallback(network, monkeypatch):
+    """Clients speak ST81 to providers by default (pinned to the provider key), on the same port
+    as HTTP; with INNERNET_TRANSPORT=http they use the HTTP binding; a provider whose key does not
+    match the listing is refused over ST81 (pin) and its HTTP replies fail the signature check."""
+    import innernet2.irm_client as ic
+    client, providers, procs, chain, tmp = network
+    entry = providers[0]
+    p = client.provider(entry)
+    lease, obj = secrets.token_hex(16), secrets.token_hex(16)
+    ack = p.put_chunk(lease, obj, 0, b"sealed shard bytes" * 100)
+    assert p.last_transport == "st81" and ack["blocks"] >= 1
+    assert p.get_chunk(lease, obj, 0) == b"sealed shard bytes" * 100 and p.last_transport == "st81"
+    monkeypatch.setenv("INNERNET_TRANSPORT", "http")
+    q = client.provider(entry)
+    assert q.get_chunk(lease, obj, 0) == b"sealed shard bytes" * 100 and q.last_transport == "http"
+    monkeypatch.setenv("INNERNET_TRANSPORT", "st81")
+    impostor = dict(entry, id=providers[1]["id"])                     # listing says another key for this address
+    with pytest.raises(ProviderError, match="ST81 failed"):
+        client.provider(impostor).get_chunk(lease, obj, 0)
+    ic._ST81_DOWN.clear()
+    ic._SESSIONS.clear()

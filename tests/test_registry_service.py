@@ -552,7 +552,7 @@ def test_claim_and_setup_api(env):
     opt = client.post(P + "/api/claim/options", json={"code": started["code"].lower().replace("-", " ")}, headers=H).json()
     v = client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]), "name": "Mac"}, headers=H)
     assert v.status_code == 200
-    assert client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).status_code == 409
+    assert client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).json()["resume"] is True
     assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "claimed"
     assert client.get(P + "/api/me").status_code == 409                      # not applied yet -> setup page
     setup = client.get(P + "/api/setup").json()
@@ -819,7 +819,9 @@ def test_claim_again_with_the_passkey_this_device_already_has(env):
     assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
                                                       "name": "Mac"}, headers=H).status_code == 200
     client.cookies.clear()
+    store.x("UPDATE claims SET status='done'")                               # that setup was finished
     second = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    assert second["resumed"] is False
     opt = client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H).json()
     assert opt["login_flow"] and opt["login_options"]["allowCredentials"]
     stranger = SoftAuthenticator()                                            # a passkey of another machine is refused
@@ -883,3 +885,31 @@ def test_go_passkeys_list_and_remove_with_the_machine_key(tmp_path):
     finally:
         server.should_exit = True
         th.join(timeout=5)
+
+
+def test_setup_resumes_after_closing_the_terminal_or_the_tab(env):
+    """Closing the browser tab: the same code signs you in again with your passkey. Closing the terminal:
+    `start` again continues the claimed setup (new code, still signed in, draft kept)."""
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    det = {"name": "mac", "region": "asia-south", "host": "203.0.113.9", "port": 9443, "os": "darwin", "arch": "arm64"}
+    auth = SoftAuthenticator()
+    first = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    assert first["resumed"] is False
+    opt = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).json()
+    assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                      "name": "Mac"}, headers=H).status_code == 200
+    # tab closed, cookie gone: the same code works again, by passkey
+    client.cookies.clear()
+    again = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).json()
+    assert again["resume"] is True and "options" not in again
+    v = client.post(P + "/api/claim/verify", json={"login": True, "flow": again["login_flow"],
+                                                   "credential": auth.get(again["login_options"])}, headers=H)
+    assert v.status_code == 200 and client.get(P + "/api/setup").status_code == 200
+    # terminal closed: start again continues (already claimed, no code needed in the open tab)
+    second = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    assert second["resumed"] is True and second["setup_url"].endswith("/registry/setup")
+    assert client.get(P + "/v1/connect/status", headers={"X-Poll-Token": second["poll"]}).json()["status"] == "claimed"
+    assert client.get(P + "/v1/connect/status", headers={"X-Poll-Token": first["poll"]}).json()["status"] == "superseded"
+    assert client.get(P + "/api/setup").status_code == 200                  # the open tab keeps working
+    assert client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).status_code == 404

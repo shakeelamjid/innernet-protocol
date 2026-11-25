@@ -131,14 +131,13 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 				log.Printf("router port mapping after network change: %v", err)
 			}
 		}
+		s.adaptPath(registry)
 	}
-	if s.cfg.PortMap != "" {
-		st.Path = "router"
-	}
-	st.Host = host
+	path, epHost, epPort, relayKey := s.pathEndpoint(host)
+	st.Path, st.Host, st.Port = path, epHost, epPort
 	payload := map[string]any{
 		"version": "REG-1-PRESENCE", "provider": providerID(s.priv),
-		"endpoint": map[string]any{"host": host, "port": s.cfg.Port}, "path": st.Path,
+		"endpoint": map[string]any{"host": epHost, "port": epPort}, "path": path,
 		"seq": now.UnixMilli(), "issued_at": now.Unix(), "software": "innernet-provider/" + version,
 		"stats": map[string]any{
 			"stored_bytes": s.usedBytes(), "storage_limit_bytes": int64(s.cfg.Storage) << 30, "leases": s.leases(),
@@ -146,6 +145,9 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 			"challenges_24h": s.stats.last24h("challenges"), "payments_24h": s.stats.last24h("payments"),
 			"uptime_s": int64(now.Sub(s.started).Seconds()),
 		},
+	}
+	if relayKey != "" {
+		payload["relay_key"] = relayKey
 	}
 	sig, err := signCanonical(s.priv, presenceDomain, payload)
 	if err != nil {
@@ -281,4 +283,24 @@ func stateLabel(s string) string {
 		return l
 	}
 	return s
+}
+
+// adaptPath runs after a network change: a machine that was reached directly but no longer
+// is (a laptop on another network) switches to a relay by itself and remembers it.
+func (s *server) adaptPath(registry string) {
+	if s.cfg.Relay != nil || s.cfg.Tunnel || os.Getenv("INNERNET_NO_RELAY") == "1" {
+		return
+	}
+	if ok, _ := reachable(registry, s.cfg.Port); ok {
+		return
+	}
+	r, err := tryRelays(registry, s.priv)
+	if err != nil {
+		log.Printf("not reachable on this network and no relay: %v", err)
+		return
+	}
+	log.Printf("not reachable on this network: switching to relay %s", r.Addr)
+	s.cfg.Relay = r
+	_ = saveConfig(s.cfg)
+	go s.attachLoop(*r, func(ok bool) { s.pathUp.Store(ok) })
 }

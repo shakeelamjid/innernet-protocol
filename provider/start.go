@@ -24,6 +24,9 @@ const connectDomain = "INNERnet/REG-1/provider-connect\x00"
 
 var pollEvery = 3 * time.Second // shortened in tests
 
+// forceVia skips the direct test ("relay" or "tunnel").
+var forceVia string
+
 // setupStep carries the numbered steps of `start` through the setup paths.
 var setupStep *stepper
 
@@ -37,6 +40,7 @@ func cmdStart(args []string) error {
 	port := fs.Int("port", 9443, "public port to offer")
 	noOpen := fs.Bool("no-browser", false, "do not try to open the browser")
 	svc := fs.Bool("service", false, "with --yes: also install the background service")
+	via := fs.String("via", "", "force how clients reach this machine: relay (ST81 relay) or tunnel (HTTPS); default: try direct first")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -59,6 +63,7 @@ func cmdStart(args []string) error {
 	} else {
 		st.ok("using existing · provider %s…", providerID(priv)[:16])
 	}
+	forceVia = *via
 	f := detectSteps(reg, *port, st, !*yes)
 	setupStep = st
 	m := strings.ToLower(*mode)
@@ -105,6 +110,9 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64) (map[string]any
 	}
 	if f.PortMap != "" {
 		detected["port_map"] = f.PortMap
+	}
+	if f.Path != "" {
+		detected["path"] = f.Path
 	}
 	payload := map[string]any{"version": "REG-1-CONNECT", "provider": providerID(priv), "detected": detected,
 		"nonce": hex.EncodeToString(nb), "issued_at": now}
@@ -166,6 +174,8 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		Code, Poll, URL string
 		ExpiresAt       int64            `json:"expires_at"`
 		Passkeys        []map[string]any `json:"passkeys"`
+		Resumed         bool             `json:"resumed"`
+		SetupURL        string           `json:"setup_url"`
 	}
 	err = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&cr)
 	resp.Body.Close()
@@ -173,6 +183,11 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		return fmt.Errorf("registry refused to start setup (%s)", resp.Status)
 	}
 	fmt.Println()
+	if cr.Resumed {
+		fmt.Println("  " + green(markOK) + " Continuing the setup you started earlier on the website.")
+		fmt.Println("    If that browser tab is still open and signed in, just finish there: " + bold(cr.SetupURL))
+		fmt.Println("    Otherwise use the code below; you will only confirm your passkey.")
+	}
 	fmt.Println("  Open this link, or go to innernetcorp.com/registry/claim and enter the code:")
 	fmt.Println()
 	fmt.Println("    " + bold(cr.URL))
@@ -203,6 +218,7 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	if offer.Port == f.Port {
 		c.PortMap = f.PortMap
 	}
+	c.Relay, c.Tunnel, c.TunnelHost, c.Class, c.TZ = f.Relay, f.Tunnel, f.TunnelHost, f.Class, f.TZ
 	if err := c.validate(true); err != nil {
 		return fmt.Errorf("the offer from the website is not valid: %v", err)
 	}

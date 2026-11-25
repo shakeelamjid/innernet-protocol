@@ -20,7 +20,8 @@
       const dd = document.createElement('dd'); dd.textContent = r[1];
       facts.append(dt, dd);
     });
-    if (det.reachable === true) say('reach', 'Reachability: other machines can reach ' + det.host + ':' + det.port + '.');
+    if (det.path === 'relay') say('reach', 'Reachability: clients reach this machine through the INNERnet relay (it connects out, so no router settings are needed). Data stays encrypted end to end.');
+    else if (det.reachable === true) say('reach', 'Reachability: other machines can reach ' + det.host + ':' + det.port + (det.path === 'router' ? ' (port opened on your router).' : '.'));
     else say('reach', 'Reachability: we could not reach ' + (det.host || 'your machine') + ':' + (det.port || '') +
       ' from the internet. Open this TCP port on your firewall or router, or use a server with a public address.', true);
     const src = draft || {};

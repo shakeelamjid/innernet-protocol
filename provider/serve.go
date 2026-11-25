@@ -13,6 +13,7 @@ import (
 	"io/fs"
 	"log"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -20,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -54,6 +56,7 @@ type server struct {
 	now     func() time.Time
 	stats   counters
 	started time.Time
+	pathUp  atomic.Bool
 }
 
 func cmdServe(args []string) error {
@@ -79,14 +82,19 @@ func cmdServe(args []string) error {
 	if c.PortMap != "" && os.Getenv("INNERNET_NO_PORTMAP") != "1" {
 		go keepPortOpen(c.Port)
 	}
+	s.startReachability(registryURL(c))
 	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
 		go s.presenceLoop(registryURL(c))
 	}
 	addr := orDefault(*listen, fmt.Sprintf(":%d", c.Port))
-	log.Printf("innernet-provider %s serving STO-1 on %s (provider %s)", version, addr, providerID(priv))
-	srv := &http.Server{Addr: addr, Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
+	log.Printf("innernet-provider %s serving STO-1 over ST81 and HTTP on %s (provider %s)", version, addr, providerID(priv))
+	srv := &http.Server{Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
 		WriteTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	return srv.ListenAndServe()
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return err
+	}
+	return s.serveBoth(ln, srv)
 }
 
 func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, error) {

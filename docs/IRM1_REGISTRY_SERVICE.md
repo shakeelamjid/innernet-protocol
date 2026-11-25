@@ -25,6 +25,8 @@ It never holds funds or provider keys. Payments go from client to the provider's
 | `GET /registry/v1/split?receiver=0x…` | `start`, `payout` | The payout contract the factory created for a wallet, if any |
 | `POST /registry/v1/presence`, `GET /registry/v1/presence/{id}` | `serve`, clients | Signed live presence in; the latest record out, unchanged, with `online` and `reachable` |
 | `POST /registry/v1/providers/{id}/intent` | `pause`, `resume`, `leave`, `reinstate` | Signed by the machine; `POST /registry/api/me/intent` does the same from the dashboard |
+| `POST /registry/v1/tunnel/{id}/poll`, `POST /registry/v1/tunnel/{id}/reply/{rid}` | `serve` (HTTPS tunnel) | Signed long-polls from providers that use the tunnel |
+| `GET/PUT/POST/DELETE /registry/t/{id}/<path>` | Clients | Requests to a tunnelled provider; passed through unchanged |
 | `GET /registry/v1/market` | Anyone | Typical prices of listed providers per service and machine class |
 | `/registry/claim`, `/registry/setup` | People | Enter the code, add a passkey, choose the offer and create the payout contract |
 | `/registry/api/...` | Dashboard | Passkey enrolment and login (WebAuthn), dashboard data, passkey and session management |
@@ -92,3 +94,7 @@ python -m innernet2.registry_service.admin remove  <provider id> "reason shown t
 - Storage challenges, relay tests and compute canaries (they need the provider service on the provider's machine); until then, probes are TCP reachability only and listing is approved by hand.
 - Team access with roles (IRM-1 section 3.6, milestone M3).
 - Alerts by e-mail or webhook.
+
+### ST81 relay
+
+Run `innernet-provider relay` from `deploy/Dockerfile.relay` as a separate Coolify application with TCP port 9444 published and a persistent volume at `/var/lib/innernet-relay`. Its log prints the relay key. Set `INNERNET_RELAYS=<public host>:9444=<relay key>` on the registry and redeploy; providers then find the relay in `/registry/v1/config`.

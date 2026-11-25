@@ -30,6 +30,10 @@ type facts struct {
 	Version        string `json:"version"`
 	PortMap        string `json:"port_map,omitempty"`
 	Class          string `json:"class,omitempty"`
+	Path           string `json:"path,omitempty"`
+	Relay          *relayTarget
+	Tunnel         bool
+	TunnelHost     string
 	TZ             string `json:"tz,omitempty"`
 	reachChecked   bool
 	reachNote      string
@@ -73,9 +77,22 @@ func detectSteps(registry string, port int, st *stepper, interactive bool) *fact
 		st.ok("%s · %s", ip, f.Class)
 		st.begin("Reachable")
 	}
+	if forceVia != "" {
+		f.reachChecked = true
+		f.forceOutgoing(registry, forceVia)
+		if st != nil {
+			if f.Reachable {
+				st.ok("through %s (chosen with --via)", f.Path)
+			} else {
+				st.fail("could not set up %s", forceVia)
+			}
+		}
+		return f
+	}
 	f.Reachable, f.reachNote = reachable(registry, port)
 	f.reachChecked = true
 	if f.Reachable {
+		f.Path = "direct"
 		if st != nil {
 			st.ok("port %d is reachable from the internet", port)
 		}
@@ -87,11 +104,15 @@ func detectSteps(registry string, port int, st *stepper, interactive bool) *fact
 	// 1) this machine's firewall, 2) the router.
 	if allowThroughFirewall(port, interactive) {
 		if f.Reachable, f.reachNote = reachable(registry, port); f.Reachable {
+			f.Path = "direct"
 			note("Reachable now.")
 			return f
 		}
 	}
 	f.tryRouter(registry, port, func(format string, a ...any) { note(format, a...) })
+	if !f.Reachable {
+		f.tryOutgoing(registry)
+	}
 	if !f.Reachable {
 		note("You can finish setup now; the registry keeps checking and lists you once reachable.")
 	}
@@ -103,6 +124,49 @@ func osName(goos string) string {
 		return n
 	}
 	return goos
+}
+
+func (f *facts) forceOutgoing(registry, via string) {
+	priv, err := loadKey()
+	if err != nil {
+		return
+	}
+	switch via {
+	case "relay":
+		if r, err := tryRelays(registry, priv); err == nil {
+			f.Relay, f.Reachable, f.Path = r, true, "relay"
+		} else {
+			note("Relay: %v.", err)
+		}
+	case "tunnel":
+		if nc, err := fetchNetConfig(registry); err == nil && nc.Tunnel.Endpoint.Host != "" {
+			f.Tunnel, f.TunnelHost, f.Reachable, f.Path = true, nc.Tunnel.Endpoint.Host, true, "tunnel"
+		}
+	}
+}
+
+// tryOutgoing uses an outgoing connection instead: an INNERnet relay over ST81, or the
+// HTTPS tunnel when only web traffic gets out. Works behind any router or ISP.
+func (f *facts) tryOutgoing(registry string) {
+	if os.Getenv("INNERNET_NO_RELAY") == "1" {
+		return
+	}
+	priv, err := loadKey()
+	if err != nil {
+		return
+	}
+	note("Trying an INNERnet relay (this machine connects out; clients reach it through the relay)…")
+	if r, err := tryRelays(registry, priv); err == nil {
+		f.Relay, f.Reachable, f.Path = r, true, "relay"
+		note("Reachable through relay %s over ST81. Data stays encrypted end to end.", r.Addr)
+		return
+	} else {
+		note("Relay: %v.", err)
+	}
+	if nc, err := fetchNetConfig(registry); err == nil && nc.Tunnel.Endpoint.Host != "" {
+		f.Tunnel, f.TunnelHost, f.Reachable, f.Path = true, nc.Tunnel.Endpoint.Host, true, "tunnel"
+		note("Using the HTTPS tunnel through %s (works where only web traffic gets out).", nc.Tunnel.Endpoint.Host)
+	}
 }
 
 // tryRouter asks the home router to forward the port, then tests again from outside.
@@ -126,7 +190,7 @@ func (f *facts) tryRouter(registry string, port int, say func(string, ...any)) {
 	}
 	f.Reachable, f.reachNote = reachable(registry, port)
 	if f.Reachable {
-		f.PortMap = m.Method
+		f.PortMap, f.Path = m.Method, "router"
 		say("Port %d is reachable from the internet now.", port)
 	} else {
 		say("Port %d is still not reachable (%s).", port, f.reachNote)
@@ -140,6 +204,7 @@ func (f *facts) fill(c *Config) {
 	if c.Class == "" {
 		c.Class = f.Class
 	}
+	c.Relay, c.Tunnel, c.TunnelHost = f.Relay, f.Tunnel, f.TunnelHost
 	if c.TZ == "" {
 		c.TZ = f.TZ
 	}
