@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -175,41 +176,103 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 
 // ---------- intents ----------
 
-func cmdIntent(action string) error {
+// machineRequest signs an action with this machine's key and sends it to the registry.
+func machineRequest(action, target string) (map[string]any, error) {
 	c, err := loadConfig()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	priv, err := loadKey()
 	if err != nil {
-		return err
+		return nil, err
 	}
 	nb := make([]byte, 16)
 	_, _ = rand.Read(nb)
 	payload := map[string]any{"version": "REG-1-INTENT", "provider": providerID(priv), "action": action,
 		"nonce": hex.EncodeToString(nb), "issued_at": time.Now().Unix()}
+	if target != "" {
+		payload["target"] = target
+	}
 	sig, err := signCanonical(priv, intentDomain, payload)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	raw, _ := json.Marshal(map[string]any{"payload": payload, "signature": sig})
 	resp, err := httpClient.Post(registryURL(c)+"/providers/"+providerID(priv)+"/intent", "application/json", bytes.NewReader(raw))
 	if err != nil {
-		return fmt.Errorf("could not reach the registry: %v", err)
+		return nil, fmt.Errorf("could not reach the registry: %v", err)
 	}
 	defer resp.Body.Close()
-	var out struct {
-		State, Reason, Detail string
-	}
-	_ = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&out)
+	out := map[string]any{}
+	_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&out)
 	if resp.StatusCode != 200 {
-		return errors.New(orDefault(out.Detail, resp.Status))
+		d, _ := out["detail"].(string)
+		return nil, errors.New(orDefault(d, resp.Status))
 	}
-	fmt.Printf(" %s %s\n", green(markOK), bold(stateLabel(out.State)))
-	if out.Reason != "" {
-		fmt.Println("   " + dim(out.Reason))
+	return out, nil
+}
+
+func cmdIntent(action string) error {
+	out, err := machineRequest(action, "")
+	if err != nil {
+		return err
+	}
+	st, _ := out["state"].(string)
+	reason, _ := out["reason"].(string)
+	fmt.Printf(" %s %s\n", green(markOK), bold(stateLabel(st)))
+	if reason != "" {
+		fmt.Println("   " + dim(reason))
 	}
 	return nil
+}
+
+// cmdPasskeys lists the passkeys that can open this machine's dashboard, or removes one
+// (a lost or stolen device). The machine key decides; removing also logs out every web session.
+func cmdPasskeys(args []string) error {
+	if len(args) >= 2 && (args[0] == "remove" || args[0] == "rm") {
+		out, err := machineRequest("passkey-remove", strings.Join(args[1:], " "))
+		if err != nil {
+			return err
+		}
+		fmt.Printf(" %s Removed passkey %q. Every web session was logged out.\n", green(markOK), out["removed"])
+		printPasskeys(out["passkeys"])
+		return nil
+	}
+	if len(args) > 0 {
+		return errors.New("usage: innernet-provider passkeys [remove NAME]")
+	}
+	out, err := machineRequest("passkey-list", "")
+	if err != nil {
+		return err
+	}
+	printPasskeys(out["passkeys"])
+	return nil
+}
+
+func printPasskeys(v any) {
+	list, _ := v.([]any)
+	if len(list) == 0 {
+		fmt.Println("  No passkeys yet. Run innernet-provider start (website setup) or innernet-provider login to add one.")
+		return
+	}
+	rows := [][2]string{}
+	for _, it := range list {
+		m, _ := it.(map[string]any)
+		name, _ := m["name"].(string)
+		rows = append(rows, [2]string{name, passkeyWhen(m)})
+	}
+	box("Passkeys that can open your dashboard", rows)
+	fmt.Println(dim("  Lost one? innernet-provider passkeys remove NAME   ·   Add one: innernet-provider login"))
+}
+
+func passkeyWhen(m map[string]any) string {
+	day := func(k string) string {
+		if f, ok := m[k].(float64); ok && f > 0 {
+			return time.Unix(int64(f), 0).Format("2 Jan 2006")
+		}
+		return "never"
+	}
+	return "added " + day("created_at") + " · last used " + day("last_used")
 }
 
 func stateLabel(s string) string {
