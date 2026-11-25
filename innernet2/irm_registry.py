@@ -84,9 +84,38 @@ def _payto_map(value, label: str) -> dict:
     return value
 
 
+CLASSES = {"server", "desktop", "laptop"}
+_TZ = re.compile(r"^(UTC[+-][0-9]{2}:[0-9]{2}|[A-Za-z_]{1,32}(/[A-Za-z0-9_+-]{1,32}){0,2}|UTC)$")
+
+
+def validate_availability(av) -> None:
+    """Weekly hours: {"tz": zone, "weekly": [[day 0=Mon..6, from_minute, to_minute], ...]}, sorted,
+    non-overlapping, each window inside one day. Missing availability means always on."""
+    _exact_keys(av, {"tz", "weekly"}, label="availability")
+    if not isinstance(av["tz"], str) or not _TZ.match(av["tz"]):
+        raise BulkError("invalid availability time zone")
+    weekly = av["weekly"]
+    if not isinstance(weekly, list) or not 1 <= len(weekly) <= 64:
+        raise BulkError("invalid availability windows")
+    last = (-1, 0)
+    for w in weekly:
+        if not isinstance(w, list) or len(w) != 3:
+            raise BulkError("invalid availability window")
+        day, start, end = (_int(w[0], 0, 6, "availability day"), _int(w[1], 0, 1439, "availability start"),
+                           _int(w[2], 1, 1440, "availability end"))
+        if start >= end or (day, start) < last or (day == last[0] and start < last[1]):
+            raise BulkError("availability windows must be sorted and must not overlap")
+        last = (day, end)
+
+
+def available_minutes(entry: dict) -> int:
+    av = entry.get("availability")
+    return 7 * 1440 if av is None else sum(w[2] - w[1] for w in av["weekly"])
+
+
 def _validate_provider(entry: dict, *, registry: bool) -> None:
     required = {"id", "name", "region", "endpoints", "services", "payto", "prices"}
-    optional = {"limits"} | ({"listed_at", "reputation"} if registry else set())
+    optional = {"limits", "availability", "class"} | ({"listed_at", "reputation"} if registry else set())
     _exact_keys(entry, required, optional, "provider entry")
     if not isinstance(entry["id"], str) or not _HEX32.match(entry["id"]):
         raise BulkError("invalid provider id")
@@ -128,6 +157,10 @@ def _validate_provider(entry: dict, *, registry: bool) -> None:
                 if not isinstance(k, str) or not _UNIT.match(k.replace("_", "-")):
                     raise BulkError("invalid provider limit name")
                 _int(v, 0, 2**53, "provider limit value")
+    if "class" in entry and entry["class"] not in CLASSES:
+        raise BulkError("invalid provider class")
+    if "availability" in entry:
+        validate_availability(entry["availability"])
     if registry:
         if "listed_at" in entry:
             _int(entry["listed_at"], 0, 2**53, "provider listed_at")
@@ -392,7 +425,8 @@ def verify_login(record: dict, *, expected_challenge: str, registry_host: str,
 CONNECT_DOMAIN = b"INNERnet/REG-1/provider-connect\x00"
 CONNECT_VERSION = "REG-1-CONNECT"
 _DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
-                  "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str}
+                  "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str, "class": str,
+                  "tz": str, "port_map": str}
 
 
 def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:
@@ -424,3 +458,103 @@ def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) 
     except (ValueError, InvalidSignature) as exc:
         raise BulkError("connect signature invalid") from exc
     return provider, detected
+
+
+# ---- live presence (REG-1-PRESENCE) -------------------------------------------
+# `innernet-provider serve` signs a short record about once a minute: where it can be
+# reached right now, how, and a few usage counters. The registry keeps the latest one
+# and hands it to clients as is, so it cannot invent an address for a provider.
+
+PRESENCE_DOMAIN = b"INNERnet/REG-1/provider-presence\x00"
+PRESENCE_VERSION = "REG-1-PRESENCE"
+PATHS = {"direct", "router", "relay"}
+_STAT_KEYS = {"stored_bytes", "leases", "requests_24h", "served_bytes_24h", "challenges_24h", "payments_24h",
+              "uptime_s", "storage_limit_bytes"}
+
+
+def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300) -> dict:
+    """Return the payload of a fresh, correctly signed presence record."""
+    _exact_keys(record, {"payload", "signature"}, label="presence record")
+    p = record["payload"]
+    _exact_keys(p, {"version", "provider", "endpoint", "path", "seq", "issued_at", "stats", "software"},
+                label="presence payload")
+    if p["version"] != PRESENCE_VERSION:
+        raise BulkError("unsupported presence version")
+    issued = _int(p["issued_at"], 0, 2**53, "presence issued_at")
+    instant = int(time.time()) if now is None else now
+    if not instant - max_age <= issued <= instant + FUTURE_SKEW:
+        raise BulkError("presence record is stale")
+    _int(p["seq"], 1, 2**62, "presence seq")
+    ep = p["endpoint"]
+    _exact_keys(ep, {"host", "port"}, label="presence endpoint")
+    if not isinstance(ep["host"], str) or not _HOST.match(ep["host"]):
+        raise BulkError("invalid presence host")
+    _int(ep["port"], 1, 65535, "presence port")
+    if p["path"] not in PATHS:
+        raise BulkError("invalid presence path")
+    stats = p["stats"]
+    if not isinstance(stats, dict) or not set(stats) <= _STAT_KEYS:
+        raise BulkError("invalid presence stats")
+    for k, v in stats.items():
+        _int(v, 0, 2**62, f"presence {k}")
+    if not isinstance(p["software"], str) or len(p["software"]) > 64:
+        raise BulkError("invalid presence software")
+    provider = _bytes(p["provider"], 32, "provider id")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider).verify(
+            _bytes(record["signature"], 64, "presence signature"), PRESENCE_DOMAIN + canonical(p))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("presence signature invalid") from exc
+    return p
+
+
+# ---- provider intents (pause, resume, leave, reinstate) ------------------------
+
+INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
+INTENT_VERSION = "REG-1-INTENT"
+INTENTS = {"pause", "resume", "leave", "reinstate"}
+
+
+def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, str, str]:
+    """Return (provider id, action, nonce) for a fresh, correctly signed intent."""
+    _exact_keys(record, {"payload", "signature"}, label="intent record")
+    p = record["payload"]
+    _exact_keys(p, {"version", "provider", "action", "nonce", "issued_at"}, label="intent payload")
+    if p["version"] != INTENT_VERSION or p["action"] not in INTENTS:
+        raise BulkError("unsupported intent")
+    issued = _int(p["issued_at"], 0, 2**53, "intent issued_at")
+    instant = int(time.time()) if now is None else now
+    if not instant - max_age <= issued <= instant + FUTURE_SKEW:
+        raise BulkError("intent is stale")
+    if not isinstance(p["nonce"], str) or not re.match(r"^[0-9a-f]{32}$", p["nonce"]):
+        raise BulkError("invalid intent nonce")
+    provider = _bytes(p["provider"], 32, "provider id")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider).verify(
+            _bytes(record["signature"], 64, "intent signature"), INTENT_DOMAIN + canonical(p))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("intent signature invalid") from exc
+    return provider, p["action"], p["nonce"]
+
+
+def in_hours(entry: dict, instant: int) -> bool:
+    """Is `instant` inside the provider's promised hours? No hours means always."""
+    av = entry.get("availability")
+    if av is None:
+        return True
+    from datetime import datetime, timedelta, timezone
+    tz = av["tz"]
+    try:
+        if tz.startswith("UTC") and len(tz) == 9:
+            sign = 1 if tz[3] == "+" else -1
+            zone = timezone(sign * timedelta(hours=int(tz[4:6]), minutes=int(tz[7:9])))
+        elif tz == "UTC":
+            zone = timezone.utc
+        else:
+            from zoneinfo import ZoneInfo
+            zone = ZoneInfo(tz)
+    except Exception:
+        return True                                   # unknown zone: do not penalise
+    local = datetime.fromtimestamp(instant, zone)
+    minute = local.hour * 60 + local.minute
+    return any(w[0] == local.weekday() and w[1] <= minute < w[2] for w in av["weekly"])

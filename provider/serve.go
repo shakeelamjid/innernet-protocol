@@ -52,6 +52,8 @@ type server struct {
 	used    map[string]bool  // payment transactions already credited
 	usedLog string
 	now     func() time.Time
+	stats   counters
+	started time.Time
 }
 
 func cmdServe(args []string) error {
@@ -74,6 +76,12 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
+	if c.PortMap != "" && os.Getenv("INNERNET_NO_PORTMAP") != "1" {
+		go keepPortOpen(c.Port)
+	}
+	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
+		go s.presenceLoop(registryURL(c))
+	}
 	addr := orDefault(*listen, fmt.Sprintf(":%d", c.Port))
 	log.Printf("innernet-provider %s serving STO-1 on %s (provider %s)", version, addr, providerID(priv))
 	srv := &http.Server{Addr: addr, Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
@@ -86,7 +94,7 @@ func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, e
 		return nil, err
 	}
 	s := &server{cfg: c, priv: priv, data: data, rpc: rpc, seen: map[string]int64{}, used: map[string]bool{},
-		usedLog: filepath.Join(data, "payments.log"), now: time.Now}
+		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now()}
 	if raw, err := os.ReadFile(s.usedLog); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {
 			if f := strings.Fields(l); len(f) > 0 {
@@ -191,10 +199,17 @@ func (s *server) usedBytes() int64 {
 var reChunkPath = regexp.MustCompile(`^/sto/v1/leases/([0-9a-f]{32})/objects/([0-9a-f]{32})/chunks/([0-9]{1,6})$`)
 var reLeasePath = regexp.MustCompile(`^/sto/v1/leases/([0-9a-f]{32})(/challenge|/pay)?$`)
 
+var reReach = regexp.MustCompile(`^/reach/([0-9a-f]{32})$`)
+
 func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/healthz" {
 		w.WriteHeader(200)
 		_, _ = w.Write([]byte("ok\n"))
+		return
+	}
+	if m := reReach.FindStringSubmatch(r.URL.Path); m != nil && r.Method == "GET" {
+		// Reachability test from the registry: echo its random nonce (nothing else is revealed).
+		_, _ = w.Write([]byte(m[1]))
 		return
 	}
 	if r.URL.Path == "/sto/v1/info" && r.Method == "GET" {
@@ -207,6 +222,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if m := reChunkPath.FindStringSubmatch(r.URL.Path); m != nil {
+		s.stats.add("requests", 1)
 		client, err := s.authenticate(r, body)
 		if err != nil {
 			s.fail(w, 401, err.Error())
@@ -292,6 +308,7 @@ func (s *server) chunk(w http.ResponseWriter, r *http.Request, client, lease, ob
 		}
 		w.Header().Set("Content-Type", "application/octet-stream")
 		_, _ = w.Write(data)
+		s.stats.add("served", int64(len(data)))
 	default:
 		s.fail(w, 405, "method not allowed")
 	}
@@ -325,6 +342,7 @@ func (s *server) challenge(w http.ResponseWriter, client, lease string, body []b
 	for i, p := range path {
 		hexPath[i] = hex.EncodeToString(p)
 	}
+	s.stats.add("challenges", 1)
 	s.reply(w, 200, map[string]any{"lease": lease, "object": req.Object, "index": req.Index, "block": req.Block,
 		"data": hex.EncodeToString(block), "path": hexPath, "time": s.now().Unix()})
 }
@@ -386,6 +404,7 @@ func (s *server) pay(w http.ResponseWriter, client, lease string, body []byte) {
 		s.fail(w, 500, "could not sign ticket")
 		return
 	}
+	s.stats.add("payments", 1)
 	s.reply(w, 200, map[string]any{"payload": payload, "signature": sig})
 }
 
@@ -446,4 +465,16 @@ func (s *server) paidTo(tx string) (*big.Int, error) {
 		return nil, errors.New("no USDC transfer to this provider's payout contract in that transaction")
 	}
 	return total, nil
+}
+
+// keepPortOpen renews the router mapping every 20 minutes (it is asked for an hour).
+func keepPortOpen(port int) {
+	for {
+		if m, err := openPort(port); err != nil {
+			log.Printf("router port mapping: %v", err)
+		} else {
+			log.Printf("router port %d open (%s)", port, m.Method)
+		}
+		time.Sleep(20 * time.Minute)
+	}
 }

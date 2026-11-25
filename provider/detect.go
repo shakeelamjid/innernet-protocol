@@ -28,44 +28,127 @@ type facts struct {
 	Arch           string `json:"arch"`
 	Reachable      bool   `json:"reachable"`
 	Version        string `json:"version"`
+	PortMap        string `json:"port_map,omitempty"`
+	Class          string `json:"class,omitempty"`
+	TZ             string `json:"tz,omitempty"`
 	reachChecked   bool
 	reachNote      string
 }
 
 // detect gathers machine facts. The public address and reachability need the registry;
-// everything else is local. verbose prints a line per finding.
+// everything else is local. With a stepper it reports each finding as a numbered step;
+// interactive allows asking before changing the firewall.
 func detect(registry string, port int, verbose bool) *facts {
+	var st *stepper
+	if verbose {
+		st = newStepper(3)
+	}
+	return detectSteps(registry, port, st, verbose)
+}
+
+func detectSteps(registry string, port int, st *stepper, interactive bool) *facts {
 	hostname, _ := os.Hostname()
 	f := &facts{Name: sanitize(hostname), Region: regionFromTimezone(), Port: port, CPUs: runtime.NumCPU(),
-		OS: runtime.GOOS, Arch: runtime.GOARCH, Version: version}
+		OS: runtime.GOOS, Arch: runtime.GOARCH, Version: version, TZ: localTZ()}
+	if st != nil {
+		st.begin("This machine")
+	}
 	f.StorageFreeGiB = freeDiskGiB(home())
 	f.MemoryMiB = totalMemoryMiB()
-	say := func(format string, a ...any) {
-		if verbose {
-			fmt.Printf("  "+format+"\n", a...)
+	if st != nil {
+		st.ok("%s %s · %d CPU · %s memory · %s free", osName(f.OS), f.Arch, f.CPUs, mib(f.MemoryMiB), gib(f.StorageFreeGiB))
+		st.begin("Internet address")
+	}
+	ip, err := whoami(registry)
+	if err != nil {
+		f.Class = machineClass("")
+		if st != nil {
+			st.fail("unknown (%v)", err)
+		}
+		return f
+	}
+	f.Host = ip
+	f.Class = machineClass(ip)
+	if st != nil {
+		st.ok("%s · %s", ip, f.Class)
+		st.begin("Reachable")
+	}
+	f.Reachable, f.reachNote = reachable(registry, port)
+	f.reachChecked = true
+	if f.Reachable {
+		if st != nil {
+			st.ok("port %d is reachable from the internet", port)
+		}
+		return f
+	}
+	if st != nil {
+		st.warn("port %d is not reachable yet (%s)", port, f.reachNote)
+	}
+	// 1) this machine's firewall, 2) the router.
+	if allowThroughFirewall(port, interactive) {
+		if f.Reachable, f.reachNote = reachable(registry, port); f.Reachable {
+			note("Reachable now.")
+			return f
 		}
 	}
-	if verbose {
-		fmt.Println("Checking this machine…")
-	}
-	say("System       %s/%s, %d CPUs, %s memory, %s free disk", f.OS, f.Arch, f.CPUs, mib(f.MemoryMiB), gib(f.StorageFreeGiB))
-	if ip, err := whoami(registry); err == nil {
-		f.Host = ip
-		say("Public IP    %s", ip)
-		f.Reachable, f.reachNote = reachable(registry, port)
-		f.reachChecked = true
-		if f.Reachable {
-			say("Port %d     reachable from the internet", port)
-		} else {
-			say("Port %d     NOT reachable from the internet (%s)", port, f.reachNote)
-		}
-	} else {
-		say("Public IP    unknown (%v)", err)
+	f.tryRouter(registry, port, func(format string, a ...any) { note(format, a...) })
+	if !f.Reachable {
+		note("You can finish setup now; the registry keeps checking and lists you once reachable.")
 	}
 	return f
 }
 
+func osName(goos string) string {
+	if n, ok := map[string]string{"darwin": "macOS", "linux": "Linux", "windows": "Windows"}[goos]; ok {
+		return n
+	}
+	return goos
+}
+
+// tryRouter asks the home router to forward the port, then tests again from outside.
+func (f *facts) tryRouter(registry string, port int, say func(string, ...any)) {
+	if os.Getenv("INNERNET_NO_PORTMAP") == "1" {
+		return
+	}
+	say("Asking your router to open port %d…", port)
+	m, err := openPort(port)
+	if err != nil {
+		say("The router did not open it automatically (%s).", err)
+		say("Open TCP port %d on your router to this machine, or use a server with a public IP.", port)
+		return
+	}
+	say("Router opened port %d (%s).", port, map[string]string{"natpmp": "NAT-PMP", "upnp": "UPnP"}[m.Method])
+	if m.ExternalIP != "" && sharedAddress(m.ExternalIP) {
+		say("But its internet address %s is shared by your internet provider (carrier-grade NAT),", m.ExternalIP)
+		say("so opening ports cannot make this machine reachable. Ask your provider for a public IP,")
+		say("use a server with a public IP, or use relay mode when it ships.")
+		return
+	}
+	f.Reachable, f.reachNote = reachable(registry, port)
+	if f.Reachable {
+		f.PortMap = m.Method
+		say("Port %d is reachable from the internet now.", port)
+	} else {
+		say("Port %d is still not reachable (%s).", port, f.reachNote)
+	}
+}
+
 func (f *facts) fill(c *Config) {
+	if f.PortMap != "" {
+		c.PortMap = f.PortMap
+	}
+	if c.Class == "" {
+		c.Class = f.Class
+	}
+	if c.TZ == "" {
+		c.TZ = f.TZ
+	}
+	if c.Hours == "" {
+		c.Hours = "always"
+		if f.Class == "laptop" {
+			c.Hours = "daily 09:00-23:00"
+		}
+	}
 	if c.Name == "" {
 		c.Name = f.Name
 	}
@@ -115,25 +198,29 @@ func whoami(registry string) (string, error) {
 // reachable listens on the port, asks the registry to connect back, and checks the
 // registry saw our random nonce, so it really reached this machine.
 func reachable(registry string, port int) (bool, string) {
-	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
-	if err != nil {
-		return false, "port is in use on this machine, so it could not be tested"
-	}
-	defer ln.Close()
 	nb := make([]byte, 16)
 	_, _ = rand.Read(nb)
 	nonce := hex.EncodeToString(nb)
-	go func() {
-		for {
-			conn, err := ln.Accept()
-			if err != nil {
-				return
-			}
-			_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
-			_, _ = conn.Write([]byte(nonce))
-			conn.Close()
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		// Our own provider service may already hold the port; it answers /reach/<nonce>.
+		if !waitHealthy(port, time.Second) {
+			return false, "port is in use by another program on this machine"
 		}
-	}()
+	} else {
+		defer ln.Close()
+		go func() {
+			for {
+				conn, err := ln.Accept()
+				if err != nil {
+					return
+				}
+				_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+				_, _ = conn.Write([]byte(nonce))
+				conn.Close()
+			}
+		}()
+	}
 	body, _ := json.Marshal(map[string]any{"port": port, "nonce": nonce})
 	resp, err := httpClient.Post(registry+"/reachability", "application/json", bytes.NewReader(body))
 	if err != nil {

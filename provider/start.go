@@ -24,6 +24,9 @@ const connectDomain = "INNERnet/REG-1/provider-connect\x00"
 
 var pollEvery = 3 * time.Second // shortened in tests
 
+// setupStep carries the numbered steps of `start` through the setup paths.
+var setupStep *stepper
+
 // cmdStart is the one-command onboarding: detect, then set up on the website or in the terminal.
 func cmdStart(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
@@ -33,6 +36,7 @@ func cmdStart(args []string) error {
 	registry := fs.String("registry", defaultRegistry, "registry URL")
 	port := fs.Int("port", 9443, "public port to offer")
 	noOpen := fs.Bool("no-browser", false, "do not try to open the browser")
+	svc := fs.Bool("service", false, "with --yes: also install the background service")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -40,35 +44,33 @@ func cmdStart(args []string) error {
 	if ms, err := strconv.Atoi(os.Getenv("INNERNET_POLL_MS")); err == nil && ms > 0 {
 		pollEvery = time.Duration(ms) * time.Millisecond
 	}
-	fmt.Println("INNERnet provider setup (Base Sepolia testnet: no real money moves yet)")
+	banner("provider setup", "base-sepolia")
+	fmt.Println(dim("  Test network: no real money moves yet. Your key never leaves this machine."))
 	fmt.Println()
+	st := newStepper(6)
+	st.begin("Machine key")
 	priv, err := loadKey()
 	if err != nil {
 		if priv, err = newKey(); err != nil {
+			st.fail("%v", err)
 			return err
 		}
-		fmt.Println("Created this machine's provider key:", keyPath())
+		st.ok("created · provider %s…", providerID(priv)[:16])
 	} else {
-		fmt.Println("Using this machine's provider key:", keyPath())
+		st.ok("using existing · provider %s…", providerID(priv)[:16])
 	}
-	fmt.Println("Provider id:", providerID(priv))
-	fmt.Println()
-	f := detect(reg, *port, true)
-	fmt.Println()
-	if f.reachChecked && !f.Reachable {
-		fmt.Println("Note: clients must be able to reach this machine. You can finish setup now and open the port later;")
-		fmt.Println("the registry will keep checking.")
-		fmt.Println()
-	}
+	f := detectSteps(reg, *port, st, !*yes)
+	setupStep = st
 	m := strings.ToLower(*mode)
 	if *yes && m == "" {
 		m = "terminal"
 	}
+	fmt.Println()
 	if m == "" {
-		fmt.Println("How do you want to set up?")
-		fmt.Println("  1) On the website (recommended): you get a code, then choose everything in your browser")
-		fmt.Println("  2) Here in the terminal (power users and agents)")
-		if strings.HasPrefix(ask("Choose 1 or 2", "1"), "2") {
+		fmt.Println(bold("  How do you want to finish setup?"))
+		fmt.Println("    1  On the website (recommended): you get a code, then choose everything in your browser")
+		fmt.Println("    2  Here in the terminal (power users and agents)")
+		if strings.HasPrefix(ask("  Choose 1 or 2", "1"), "2") {
 			m = "terminal"
 		} else {
 			m = "web"
@@ -79,7 +81,7 @@ func cmdStart(args []string) error {
 	case "web":
 		return startWeb(reg, priv, f, *noOpen)
 	case "terminal":
-		return startTerminal(reg, priv, f, *yes, *wallet)
+		return startTerminal(reg, priv, f, *yes, *wallet, *svc)
 	}
 	return errors.New("--mode must be web or terminal")
 }
@@ -94,6 +96,15 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64) (map[string]any
 		"version": f.Version}
 	if f.Host != "" {
 		detected["host"] = f.Host
+	}
+	if f.Class != "" {
+		detected["class"] = f.Class
+	}
+	if f.TZ != "" {
+		detected["tz"] = f.TZ
+	}
+	if f.PortMap != "" {
+		detected["port_map"] = f.PortMap
 	}
 	payload := map[string]any{"version": "REG-1-CONNECT", "provider": providerID(priv), "detected": detected,
 		"nonce": hex.EncodeToString(nb), "issued_at": now}
@@ -160,13 +171,15 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	if resp.StatusCode != 200 || err != nil || cr.Code == "" {
 		return fmt.Errorf("registry refused to start setup (%s)", resp.Status)
 	}
-	fmt.Println("Open this link, or go to innernetcorp.com/registry/claim and enter the code:")
 	fmt.Println()
-	fmt.Println("    " + cr.URL)
+	fmt.Println("  Open this link, or go to innernetcorp.com/registry/claim and enter the code:")
 	fmt.Println()
-	fmt.Println("    Code:  " + cr.Code)
+	fmt.Println("    " + bold(cr.URL))
 	fmt.Println()
-	fmt.Println("The code works once and expires in 30 minutes. Keep this terminal open.")
+	fmt.Println("    Code:  " + bold(cr.Code))
+	fmt.Println()
+	fmt.Println(dim("  The code works once and expires in 30 minutes. Keep this terminal open."))
+	fmt.Println()
 	if !noOpen {
 		openBrowser(cr.URL)
 	}
@@ -175,6 +188,9 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		return err
 	}
 	c := offer.config(strings.TrimSuffix(reg, ""))
+	if offer.Port == f.Port {
+		c.PortMap = f.PortMap
+	}
 	if err := c.validate(true); err != nil {
 		return fmt.Errorf("the offer from the website is not valid: %v", err)
 	}
@@ -191,7 +207,7 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	if r, err := httpClient.Do(req); err == nil {
 		r.Body.Close()
 	}
-	afterSetup(false)
+	afterSetup(false, true)
 	return nil
 }
 
@@ -212,7 +228,7 @@ func waitForOffer(reg, poll string) (*webOffer, error) {
 			if st.Status != last {
 				switch st.Status {
 				case "claimed":
-					fmt.Println("Code accepted. Waiting for you to finish on the website…")
+					fmt.Println("  " + green(markOK) + " Code accepted. Waiting for you to finish on the website…")
 				case "expired":
 					return nil, errors.New("the code expired; run innernet-provider start again")
 				}
@@ -245,7 +261,7 @@ func openBrowser(url string) {
 
 // ---------- terminal setup ----------
 
-func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wallet string) error {
+func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wallet string, wantService bool) error {
 	c := &Config{Version: "1", Registry: reg, Network: "base-sepolia", Port: f.Port, CPUs: 1, MemMiB: 512,
 		Prices: map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100"}}
 	if old, err := loadConfig(); err == nil {
@@ -282,7 +298,7 @@ func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wall
 	if err := finishSetup(c, priv); err != nil {
 		return err
 	}
-	afterSetup(yes)
+	afterSetup(yes, wantService)
 	return nil
 }
 
@@ -356,20 +372,21 @@ func cmdPayout(args []string) error {
 // ---------- shared ----------
 
 func printOffer(c *Config) {
-	fmt.Println("Offer to sign")
-	fmt.Printf("  Name       %s (%s)\n", c.Name, c.Region)
-	fmt.Printf("  Address    %s:%d\n", c.Host, c.Port)
+	rows := [][2]string{{"Name", c.Name + " (" + c.Region + ")"}, {"Address", fmt.Sprintf("%s:%d", c.Host, c.Port)},
+		{"Machine", orDefault(c.Class, "unknown")}, {"Hours", describeHours(c.Hours) + " · " + orDefault(c.TZ, "UTC")}}
 	if c.Storage > 0 {
-		fmt.Printf("  Storage    %d GiB at %s USDC per GiB-day\n", c.Storage, c.Prices["STO-1"])
+		rows = append(rows, [2]string{"Storage", fmt.Sprintf("%d GiB at %s USDC per GiB-day", c.Storage, c.Prices["STO-1"])})
 	}
 	if c.RelayCap > 0 {
-		fmt.Printf("  Bandwidth  %d GiB/month at %s USDC per GiB\n", c.RelayCap, c.Prices["RLY-1"])
+		rows = append(rows, [2]string{"Bandwidth", fmt.Sprintf("%d GiB/month at %s USDC per GiB", c.RelayCap, c.Prices["RLY-1"])})
 	}
 	if c.Compute {
-		fmt.Printf("  Compute    %d CPUs, %d MiB at %s USDC per billion instructions\n", c.CPUs, c.MemMiB, c.Prices["CMP-1"])
+		rows = append(rows, [2]string{"Compute", fmt.Sprintf("%d CPUs, %d MiB at %s USDC per billion instr.", c.CPUs, c.MemMiB, c.Prices["CMP-1"])})
 	}
-	fmt.Printf("  Payout     %s on %s\n", c.Payout, c.Network)
-	fmt.Println("             (check this is the contract you created; payments go there)")
+	rows = append(rows, [2]string{"Payout", c.Payout + " (" + c.Network + ")"})
+	box("Offer to sign", rows)
+	fmt.Println(dim("  Check the payout contract is the one you created: clients pay it, and it pays you."))
+	fmt.Println()
 }
 
 func finishSetup(c *Config, priv ed25519.PrivateKey) error {
@@ -390,22 +407,49 @@ func finishSetup(c *Config, priv ed25519.PrivateKey) error {
 	return postApplication(c, raw)
 }
 
-func afterSetup(quiet bool) {
-	fmt.Println()
-	fmt.Println("Your details:", detailsPath())
+func afterSetup(quiet, wantService bool) {
+	st := setupStep
+	if st == nil {
+		st = newStepper(2)
+		st.n = 0
+	}
+	if st.n < st.total-1 {
+		st.n = st.total - 2
+	}
+	st.begin("Setup")
+	st.ok("offer signed and sent to the registry")
 	backup := filepath.Join(filepath.Dir(home()), "provider-backup.json")
 	if _, err := os.Stat(backup); err != nil && !quiet {
-		if askYes("Back up this machine's key now (encrypted with a passphrase)", true) {
+		fmt.Println()
+		if askYes("  Back up this machine's key now (encrypted with a passphrase)", true) {
 			if err := cmdBackup([]string{backup}); err != nil {
-				fmt.Println("Backup skipped:", err)
+				note("Backup skipped: %v", err)
 			}
 		} else {
-			fmt.Println("Back it up later with: innernet-provider backup ~/innernet-provider-backup.json")
+			note("Later: innernet-provider backup ~/innernet-provider-backup.json")
 		}
+		fmt.Println()
 	}
+	st.n++
+	st.label = "Background service"
+	switch res := offerService(quiet, wantService); {
+	case strings.HasPrefix(res, "ok:"):
+		fmt.Printf("%s %s %s\n", st.prefix(), green(markOK), res[3:])
+	case res != "":
+		fmt.Printf("%s %s %s\n", st.prefix(), amber(markWarn), res)
+	}
+	c, _ := loadConfig()
+	priv, _ := loadKey()
+	rows := [][2]string{}
+	if c != nil && priv != nil {
+		rows = append(rows, [2]string{"Provider", providerID(priv)[:16] + "…"},
+			[2]string{"Address", fmt.Sprintf("%s:%d", c.Host, c.Port)},
+			[2]string{"Hours", describeHours(c.Hours)})
+	}
+	rows = append(rows, [2]string{"Details", detailsPath()},
+		[2]string{"Dashboard", "https://innernetcorp.com/dashboard"},
+		[2]string{"Next", "innernet-provider status"})
+	box("You are set up", rows)
+	fmt.Println(dim("  The registry checks your machine for a while, then lists it. Keep it online."))
 	fmt.Println()
-	fmt.Println("Next:")
-	fmt.Println("  innernet-provider serve     start serving clients (keep it running)")
-	fmt.Println("  innernet-provider status    see where your listing stands")
-	fmt.Println("  Dashboard: https://innernetcorp.com/dashboard")
 }

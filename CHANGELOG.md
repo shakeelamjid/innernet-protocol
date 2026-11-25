@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Provider 0.3.0: background service, home networks, presence, hours, states, new terminal
+
+- **Background service:** `service install|status|uninstall` (systemd user or system unit, launchd agent, Task Scheduler); offered at the end of `start` (`--service` with `--yes`).
+- **Home networks:** when the port is not reachable, `start` offers one firewall rule on the machine (only after the system's own admin prompt), then asks the router to forward the port (NAT-PMP, UPnP IGD; same port outside and inside; renewed by `serve`), then tests again. Carrier-grade NAT is detected and explained. The running service answers the registry's reachability test (`/reach/<nonce>`), so `start` and `status` work while it runs.
+- **Presence:** `serve` signs a `REG-1-PRESENCE` record every minute (address, path, usage counters) and follows network changes. The registry confirms new addresses through the provider's signed info, serves the record unchanged at `/v1/presence/{id}`, and probes the provider where it is.
+- **Hours and machine type** in the signed offer (`availability`, `class`); probes and uptime count only promised hours.
+- **States:** `pause`, `resume`, `leave`, `reinstate` from the terminal (signed `REG-1-INTENT`) or the dashboard; `gone` after 7 days unheard; 24 h trial and automatic re-listing; operator-only `removed`.
+- **Market prices:** `/v1/market` (median and range per service and class). Dashboard data now includes presence, usage, market and hours.
+- **Terminal:** branded banner, numbered steps with spinner and ✓/✗, offer and summary boxes, `status --watch` live screen and `status --json`; plain output in pipes or with `NO_COLOR`. Installers show a banner and a download progress bar. `uninstall [--all]`.
+- Tests: Go tests for service files, NAT-PMP and UPnP against fake routers, gateway parsing, carrier-grade NAT; an end-to-end test with a real `serve` checking in, address confirmation, forged presence refused, pause/resume/leave/reinstate, status, market, and the gone → trial → listed path.
+
 ### Client: seal, mix, 4-of-6 shards
 
 - **`innernet-client` now stores files as sealed, mixed shards** (record `IRM1-CLIENT-2`), replacing 3 full encrypted copies: cut into 64 KiB chunks → seal (OB80-2 chunk cipher) → mix 4 KiB cells with a keyed permutation → Reed-Solomon 6 shards, any 4 rebuild → 6 slots on at least 3 providers, at most 2 each, regions first. Storage overhead drops from 3× to 1.5×, losing any one provider still leaves 4 shards, and no provider holds a whole sealed chunk.

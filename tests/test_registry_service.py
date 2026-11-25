@@ -5,6 +5,7 @@ import base64
 import hashlib
 import json
 import os
+import sys
 import shutil
 import socket
 import struct
@@ -403,7 +404,8 @@ def test_go_cli_against_live_registry(tmp_path):
         cli("wallet", "set", "0x" + "9a" * 20)
         assert "Application received" in cli("apply")
         out = cli("status")
-        assert "Status: testing" in out and "Earnings (30 days): 0.00 USDC paid" in out
+        assert "Checking (not listed yet)" in out and "0.00 USDC to you (0.00 paid, 0.00 fee)" in out
+        assert json.loads(cli("status", "--json"))["registry"]["state"] == "testing"
         out = cli("login")
         link = out.strip().splitlines()[-1]
         assert link.startswith(ORIGIN + "/registry/enroll#t=")
@@ -605,7 +607,7 @@ def test_go_start_web_setup_end_to_end(tmp_path):
         subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
                        env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
         offer_port = free_tcp_port()
-        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "home"), "INNERNET_POLL_MS": "100",
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "home"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1", "INNERNET_NO_PORTMAP": "1",
                "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1", "TZ": "Asia/Karachi"}
         proc = subprocess.Popen([str(binary), "start", "--mode", "web", "--no-browser", "--port", str(offer_port)],
                                 env=env, stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -617,13 +619,15 @@ def test_go_start_web_setup_end_to_end(tmp_path):
             if line.strip().startswith("Code:"):
                 code = line.split(":", 1)[1].strip()
         out = "".join(lines)
-        assert "Public IP    127.0.0.1" in out and "reachable from the internet" in out   # real dial-back test
+        assert "Internet address" in out and "127.0.0.1" in out and "reachable from the internet" in out   # real dial-back
+        assert "[1/6]" in out and "Machine key" in out and "\x1b[" not in out        # steps; no colour codes in a pipe
         web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
         auth = SoftAuthenticator()
         opt = web.post(P + "/api/claim/options", json={"code": code}).json()
         assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])}).status_code == 200
         det = web.get(P + "/api/setup").json()["detected"]
         assert det["reachable"] is True and det["host"] == "127.0.0.1" and det["region"] == "asia-south" and det["cpus"] >= 1
+        assert det["class"] in ("server", "desktop", "laptop") and det["tz"] == "Asia/Karachi"
         payout = "0x" + "c3" * 20
         offer = {"name": det["name"], "region": det["region"], "host": "node.example.test", "port": offer_port,
                  "storage_gib": 10, "relay_gib": 0, "compute": False, "cpus": 1, "memory_mib": 512,
@@ -651,7 +655,7 @@ def test_go_start_terminal_for_agents(tmp_path):
                        env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
         wallet, split = "0x" + "44" * 20, "0x" + "5c" * 20
         fake.splits[wallet] = split
-        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "agent"), "INNERNET_POLL_MS": "100",
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "agent"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1", "INNERNET_NO_PORTMAP": "1",
                "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
         r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())],
                            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
@@ -662,6 +666,13 @@ def test_go_start_terminal_for_agents(tmp_path):
         again = subprocess.run([str(binary), "start", "--yes", "--port", str(free_tcp_port())], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
         assert again.returncode == 0                                   # set-up machine re-applies, wallet kept
+        if sys.platform.startswith("linux"):                           # background service file, dry run
+            svc_env = {k: v for k, v in env.items() if k != "INNERNET_NO_SERVICE"}
+            dry = subprocess.run([str(binary), "service", "install", "--dry-run"], env=svc_env, capture_output=True,
+                                 text=True, stdin=subprocess.DEVNULL, timeout=30)
+            assert dry.returncode == 0, dry.stderr
+            assert f"ExecStart={binary} serve" in dry.stdout and f"INNERNET_HOME={tmp_path / 'agent'}" in dry.stdout
+            assert "Restart=always" in dry.stdout
         fresh = dict(env, INNERNET_HOME=str(tmp_path / "fresh"))
         no = subprocess.run([str(binary), "start", "--yes", "--port", "9"], env=fresh, capture_output=True, text=True,
                             stdin=subprocess.DEVNULL, timeout=60)
@@ -669,3 +680,127 @@ def test_go_start_terminal_for_agents(tmp_path):
     finally:
         server.should_exit = True
         th.join(timeout=5)
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_serve_presence_intents_status_and_states(tmp_path):
+    """serve checks in with a signed presence; the registry verifies the address by fetching the
+    provider's signed info; pause/resume/leave/reinstate work from the terminal and the web; status
+    shows it all; states move on with time (gone, trial, listed again)."""
+    import httpx
+    from innernet2.registry_service import presence, probe as probe_mod
+    server, th, port, fake, store = live_registry(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20})
+    procs = []
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        wallet, split = "0x" + "45" * 20, "0x" + "5d" * 20
+        fake.splits[wallet] = split
+        sport = free_tcp_port()
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "p"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
+               "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1", "INNERNET_PRESENCE_SEC": "1",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1", "TZ": "Asia/Karachi"}
+        run = lambda *a: subprocess.run([str(binary), *a], env=env, capture_output=True, text=True,  # noqa: E731
+                                        stdin=subprocess.DEVNULL, timeout=60)
+        r = run("start", "--yes", "--wallet", wallet, "--port", str(sport))
+        assert r.returncode == 0, r.stdout + r.stderr
+        pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        entry = store.provider(pid)["entry"]
+        assert entry["class"] in ("server", "desktop", "laptop")
+        procs.append(subprocess.Popen([str(binary), "serve"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))
+        api = httpx.Client(base_url=f"http://127.0.0.1:{port}/registry/v1")
+        live = None
+        for _ in range(80):
+            got = api.get(f"/presence/{pid}")
+            if got.status_code == 200 and got.json()["reachable"]:
+                live = got.json()
+                break
+            time.sleep(0.1)
+        assert live and live["online"] and live["record"]["payload"]["endpoint"] == {"host": "127.0.0.1", "port": sport}
+        assert reg_verify_presence(live["record"])["path"] == "direct"          # clients check the signature themselves
+        # a forged record (wrong key) or an address that is not the sender's is refused
+        bad = json.loads(json.dumps(live["record"]))
+        bad["payload"]["seq"] += 10**6
+        assert api.post("/presence", json=bad).status_code == 422
+        # the running service answers the registry's reachability test (port in use by serve)
+        assert nonce_check("127.0.0.1", sport, "ab" * 16)
+        # intents from the terminal
+        r = run("pause")
+        assert r.returncode == 0 and "Paused" in r.stdout, r.stdout + r.stderr
+        assert store.provider(pid)["state"] == "paused"
+        assert "listed" not in [p["state"] for p in store.providers("listed") if p["id"] == pid]
+        assert run("resume").returncode == 0 and store.provider(pid)["state"] == "testing"
+        assert run("leave").returncode == 0 and store.provider(pid)["state"] == "leaving"
+        assert run("resume").returncode == 0 and store.provider(pid)["state"] == "testing"
+        r = run("reinstate")
+        assert r.returncode != 0 and "nothing to reinstate" in r.stderr
+        # status: plain and JSON
+        r = run("status", "--json")
+        st = json.loads(r.stdout)
+        assert st["service_answering"] and st["presence"]["reachable"] and st["registry"]["state"] == "testing"
+        r = run("status")
+        assert "running on port" in r.stdout and "last check-in" in r.stdout and "\x1b[" not in r.stdout
+        # usage and market for the dashboard
+        u = presence.usage(store, pid)
+        assert u["now"]["storage_limit_bytes"] > 0 and "stored_bytes" in u["now"]
+        store.x("UPDATE providers SET state='listed', listed_at=? WHERE id=?", (int(time.time()), pid))
+        m = api.get("/market").json()["services"]["STO-1"]
+        assert m["providers"] == 1 and m["median"] == entry["prices"]["STO-1"]["amount"].rstrip("0").rstrip(".")
+        # time passes: nothing heard for 8 days -> gone; reinstate -> trial; a clean trial lists it again
+        procs[0].kill()
+        procs[0].wait()
+        later = int(time.time()) + 8 * 86400
+        store.x("UPDATE providers SET last_seen=?, checked_at=? WHERE id=?", (later - 8 * 86400, later - 8 * 86400, pid))
+        store.x("DELETE FROM probes WHERE provider=?", (pid,))
+        presence.advance_states(store, probe_mod.uptime, later)
+        assert store.provider(pid)["state"] == "gone"
+        assert run("reinstate").returncode == 0 and store.provider(pid)["state"] == "testing"
+        trial = store.provider(pid)["trial_since"]
+        for i in range(24):
+            store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)", (pid, trial + 3600 * i + 1, 1, 5))
+        presence.advance_states(store, probe_mod.uptime, trial + 86400 + 10)
+        assert store.provider(pid)["state"] == "listed"
+        audit = [r["event"] for r in store.q("SELECT event FROM audit WHERE provider=? ORDER BY id", (pid,))]
+        for ev in ("pause", "resume", "leave", "gone", "reinstate", "listed"):
+            assert ev in audit
+    finally:
+        for p in procs:
+            p.kill()
+        server.should_exit = True
+        th.join(timeout=5)
+
+
+def test_presence_and_intent_records_are_checked():
+    from innernet2.bulk_v080 import BulkError
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as K
+    from innernet2 import irm_registry as r
+    key = K.generate()
+    pid = key.public_key().public_bytes_raw().hex()
+    now = int(time.time())
+    p = {"version": "REG-1-PRESENCE", "provider": pid, "endpoint": {"host": "203.0.113.9", "port": 9443}, "path": "router",
+         "seq": now * 1000, "issued_at": now, "software": "innernet-provider/0.3.0", "stats": {"stored_bytes": 5}}
+    rec = {"payload": p, "signature": key.sign(r.PRESENCE_DOMAIN + r.canonical(p)).hex()}
+    assert r.verify_presence(rec)["path"] == "router"
+    for change in ({"path": "teleport"}, {"issued_at": now - 3600}, {"stats": {"secret": 1}}):
+        q = dict(p, **change)
+        with pytest.raises(BulkError):
+            r.verify_presence({"payload": q, "signature": key.sign(r.PRESENCE_DOMAIN + r.canonical(q)).hex()})
+    with pytest.raises(BulkError):                                      # signed with the intent domain
+        r.verify_presence({"payload": p, "signature": key.sign(r.INTENT_DOMAIN + r.canonical(p)).hex()})
+    i = {"version": "REG-1-INTENT", "provider": pid, "action": "pause", "nonce": "ab" * 16, "issued_at": now}
+    assert r.verify_intent({"payload": i, "signature": key.sign(r.INTENT_DOMAIN + r.canonical(i)).hex()})[1] == "pause"
+    j = dict(i, action="delete-everything")
+    with pytest.raises(BulkError):
+        r.verify_intent({"payload": j, "signature": key.sign(r.INTENT_DOMAIN + r.canonical(j)).hex()})
+    # hours: Wednesday 21:46 in Karachi is inside "wed 20:00-24:00", Thursday noon is not
+    e = {"availability": {"tz": "Asia/Karachi", "weekly": [[2, 1200, 1440]]}}
+    assert r.in_hours(e, 1795624000) and not r.in_hours(e, 1795624000 + 14 * 3600)
+    assert r.in_hours({}, 0) and r.available_minutes(e) == 240
+    with pytest.raises(BulkError):
+        r.validate_availability({"tz": "Asia/Karachi", "weekly": [[2, 1300, 1200]]})
+
+
+def reg_verify_presence(record):
+    from innernet2 import irm_registry as r
+    return r.verify_presence(record)

@@ -42,3 +42,25 @@ func TestRegionFor(t *testing.T) {
 		}
 	}
 }
+
+func TestServiceFilesNameBinaryHomeAndRestart(t *testing.T) {
+	s := serviceSpec{Exe: "/opt/my tools/innernet-provider", Home: "/home/a/.innernet/provider"}
+	u := systemdUnit(s)
+	for _, want := range []string{`ExecStart="/opt/my tools/innernet-provider" serve`, "Environment=INNERNET_HOME=/home/a/.innernet/provider",
+		"Restart=always", "WantedBy=default.target"} {
+		if !strings.Contains(u, want) {
+			t.Fatalf("unit missing %q:\n%s", want, u)
+		}
+	}
+	s.Root = true
+	if !strings.Contains(systemdUnit(s), "WantedBy=multi-user.target") || unitPath(s) != "/etc/systemd/system/innernet-provider.service" {
+		t.Fatal("root unit should be a system unit")
+	}
+	p := launchdPlist(serviceSpec{Exe: "/Users/a&b/bin/innernet-provider", Home: "/Users/a/.innernet/provider"})
+	for _, want := range []string{"<string>/Users/a&amp;b/bin/innernet-provider</string><string>serve</string>", "<key>KeepAlive</key><true/>",
+		"<key>RunAtLoad</key><true/>", "com.innernetcorp.provider"} {
+		if !strings.Contains(p, want) {
+			t.Fatalf("plist missing %q:\n%s", want, p)
+		}
+	}
+}

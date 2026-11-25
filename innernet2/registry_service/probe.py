@@ -10,6 +10,8 @@ import socket
 import time
 from typing import Callable
 
+from .. import irm_registry as reg
+from . import presence
 from .store import Store
 
 log = logging.getLogger("innernet.registry.probe")
@@ -36,10 +38,16 @@ def uptime(store: Store, pid: str, *, since: int) -> tuple[float | None, int]:
 def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = None) -> None:
     now = int(time.time()) if now is None else now
     for p in store.providers():
-        if p["state"] not in ("testing", "listed", "suspended"):
+        if p["state"] not in ("testing", "listed", "suspended", "paused", "leaving"):
             continue
+        if not reg.in_hours(p["entry"], now):
+            continue                       # outside its promised hours: neither good nor bad
+        endpoints = p["entry"]["endpoints"]
+        live = store.one("SELECT verified_host, verified_port, verified_at FROM presence WHERE provider=?", (p["id"],))
+        if live and live["verified_host"] and now - (live["verified_at"] or 0) < 3600:
+            endpoints = [{"host": live["verified_host"], "port": live["verified_port"]}]   # moved: probe where it is
         ok, latency = True, 0.0
-        for ep in p["entry"]["endpoints"]:
+        for ep in endpoints:
             try:
                 latency = max(latency, connect(ep["host"], ep["port"], 5.0))
             except OSError:
@@ -50,7 +58,8 @@ def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = N
         if p["state"] == "listed":
             ratio, n = uptime(store, p["id"], since=now - WEEK)
             if n >= MIN_PROBES and ratio is not None and ratio < SUSPEND_BELOW:
-                reason = f"reachable {ratio:.1%} of the time over 7 days (needs 95%)"
+                reason = f"reachable {ratio:.1%} of its promised hours over 7 days (needs 95%); reinstate to start a 24 h trial"
                 store.x("UPDATE providers SET state='suspended', reason=?, updated_at=? WHERE id=?", (reason, now, p["id"]))
                 store.audit(p["id"], "suspended", reason)
+    presence.advance_states(store, uptime, now)
     store.x("DELETE FROM probes WHERE ts<?", (now - 31 * 86400,))

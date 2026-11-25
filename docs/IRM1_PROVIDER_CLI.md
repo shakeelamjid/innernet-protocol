@@ -22,7 +22,11 @@ The installers find the newest `provider-v*` release through the GitHub API, or,
 
 The installer starts setup by itself (`INNERNET_NO_START=1` installs only). You can also run `innernet-provider start` any time.
 
-1. **Detection.** The tool creates this machine's provider key (it never leaves the machine), then finds out by itself: the public IP (as the registry sees it), whether the chosen port (9443 by default) is reachable from the internet (it listens, the registry connects back and must read a random nonce), free disk, CPUs, memory, region (from the time zone) and a name (from the host name).
+1. **Detection.** The tool creates this machine's provider key (it never leaves the machine), then finds out by itself: the public IP (as the registry sees it), whether the chosen port (9443 by default) is reachable from the internet (it listens, the registry connects back and must read a random nonce), free disk, CPUs, memory, region (from the time zone), a name (from the host name), the time zone and the machine type (laptop when it has a battery, server when the public address is on the machine itself, otherwise desktop).
+   When the port is not reachable it tries, in order:
+   - **The firewall on this machine** (macOS application firewall, ufw, firewalld, Windows Defender Firewall): it adds one allow rule only after you agree, through the system's own admin prompt (sudo or macOS password, Windows "allow changes"), and prints how to remove it.
+   - **The router**: it asks the router to forward the port with NAT-PMP or UPnP, keeping the same port outside and inside, then tests again. `serve` renews the mapping while it runs.
+   - If the router's own internet address is shared by the internet provider (carrier-grade NAT, the 100.64.0.0/10 range or a private address), opening ports cannot help; it says so instead of pretending. Relay mode (an outgoing tunnel) is the planned answer.
 2. **Choice.** Website (recommended) or terminal.
 
 **Website.** The terminal prints a one-time code such as `K7QM-4XPA` and a link to `innernetcorp.com/registry/claim`. On the website the person enters the code, adds a passkey (this becomes their login), checks the detected values, picks services and prices, and creates the payout contract with their own wallet. The terminal then shows the final offer, including the payout contract, and asks for confirmation; the machine signs the descriptor and applies. The code is single-use, expires after 30 minutes, and is never the key: the website cannot sign anything, and a guessed code cannot change the payout without the person seeing it in their terminal.
@@ -35,15 +39,35 @@ innernet-provider start --yes --wallet 0xYourWallet [--port 9443]
 
 Only the wallet is required. `start` looks up the payout contract for that wallet through the registry; if there is none yet, it prints a one-click link to create it and waits. A machine that is already set up re-applies with its saved settings.
 
-After setup, keep the provider service running:
+At the end `start` offers to keep the provider running in the background (`--service` with `--yes`). Or any time:
 
 ```sh
-innernet-provider serve      # stores pieces, answers storage checks, issues payment receipts
-innernet-provider status
-innernet-provider login      # dashboard link for a new device
+innernet-provider service install    # systemd (Linux), launchd (macOS), Task Scheduler (Windows)
+innernet-provider service status
+innernet-provider status --watch     # one live screen: listing, service, online, address, hours, uptime, earnings
+innernet-provider login              # dashboard link for a new device
 ```
 
-Run `serve` under a service manager so it survives restarts, for example a systemd unit with `ExecStart=/home/you/.local/bin/innernet-provider serve` and `Restart=always`.
+On Linux a normal user gets a user unit plus lingering (so it keeps running after log-out); root gets a system unit. On macOS the launch agent runs while you are logged in; turn off sleep to stay reachable.
+
+**Hours.** Every offer carries availability hours in the machine's time zone, written like `always` or `mon-fri 21:00-08:00, weekends 00:00-24:00`. Laptops default to `daily 09:00-23:00`. Checks only count inside your hours, so a machine is never marked down for being off when it said it would be. Clients use the hours to place files so that enough pieces are always online.
+
+**While it runs**, `serve` checks in with the registry about once a minute with a signed presence record: where it can be reached right now (it notices network changes and follows them on its own), how (direct or through the router), and usage counters (stored bytes, leases, requests, checks and payments in the last 24 hours). The registry confirms a new address by fetching the provider's signed `/sto/v1/info` from it.
+
+**Pause, leave, come back.**
+
+| Command | Effect |
+|---|---|
+| `pause` | No new files; what you hold is still served and paid |
+| `resume` | Take new files again, or cancel leaving |
+| `leave` | Clients move their files away; then the machine can stop |
+| `reinstate` | After a suspension (below 95% of promised hours) or 7 days unheard: a 24 hour trial, then listed again |
+
+The same buttons are on the dashboard. Only the operator can reinstate a provider removed for abuse.
+
+`uninstall` removes the background service and the program; `uninstall --all` also deletes the key, settings and stored pieces after asking.
+
+Output: colours, spinner and boxes on a terminal; plain text in a pipe or with `NO_COLOR` (or `INNERNET_PLAIN=1`); `status --json` for scripts.
 
 Other commands: `init` (terminal questions only, also accepts every value as a flag), `payout 0xWALLET` (find or create the payout contract and save it), `wallet set 0xCONTRACT`, `apply [--dry-run]`, `show`, `backup FILE`, `restore FILE`, `version`.
 
@@ -90,6 +114,8 @@ The dashboard shows status, health, activity per service, earnings, the 2.5% net
 | `INNERNET_REGISTRY` | Registry URL (default `https://innernetcorp.com/registry/v1`) |
 | `INNERNET_RPC` | JSON-RPC endpoint `serve` uses to check payments |
 | `INNERNET_NO_START` | Installer: install only, do not start setup |
+| `INNERNET_GATEWAY` | Router address for NAT-PMP, when it cannot be found automatically |
+| `INNERNET_NO_PORTMAP`, `INNERNET_NO_FIREWALL`, `INNERNET_NO_SERVICE`, `INNERNET_NO_PRESENCE` | Switch off router mapping, the firewall offer, the background service offer, or presence check-ins (tests, special setups) |
 | `INNERNET_BACKUP_PASSPHRASE` | Passphrase for `backup` / `restore` without a prompt (automation only; it ends up in your shell history and process list) |
 
 Never put the contents of `identity.key`, a wallet seed phrase or any private key in an environment variable, chat, GitHub or the dashboard.

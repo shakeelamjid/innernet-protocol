@@ -1,15 +1,25 @@
 #!/bin/sh
 # Install innernet-provider on Linux or macOS.
 #   curl -fsSL https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.sh | sh
-# Optional: INNERNET_VERSION=provider-v0.1.0  INNERNET_BIN_DIR=$HOME/.local/bin
+# Optional: INNERNET_VERSION=provider-v0.3.0  INNERNET_BIN_DIR=$HOME/.local/bin
 set -eu
 
 REPO="shakeelamjid/innernet-protocol"
 BIN_DIR="${INNERNET_BIN_DIR:-$HOME/.local/bin}"
 
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  B=$(printf '\033[1m'); D=$(printf '\033[2m'); G=$(printf '\033[32m'); R=$(printf '\033[31m')
+  INV=$(printf '\033[1;7m'); N=$(printf '\033[0m')
+else B=; D=; G=; R=; INV=; N=; fi
 say() { printf '%s\n' "$*"; }
-die() { printf 'error: %s\n' "$*" >&2; exit 1; }
+ok() { printf '  %s✓%s %s\n' "$G" "$N" "$*"; }
+die() { printf '  %s✗ %s%s\n' "$R" "$*" "$N" >&2; exit 1; }
 need() { command -v "$1" >/dev/null 2>&1 || die "this installer needs '$1'"; }
+
+printf '\n %s INNERNET %s  provider installer\n\n' "$INV" "$N"
+say "  This installs one program, ${B}innernet-provider${N}, into ${BIN_DIR}."
+say "  ${D}It needs no admin rights. Remove it any time: innernet-provider uninstall${N}"
+say ""
 
 need curl
 need uname
@@ -46,24 +56,28 @@ base="https://github.com/$REPO/releases/download/$tag"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 
-say "Downloading $asset ($tag)"
-curl -fsSL -o "$tmp/$asset" "$base/$asset" || die "download failed"
+say "  Downloading ${B}$asset${N} ${D}($tag)${N}"
+if [ -t 2 ]; then
+  curl -fL --progress-bar -o "$tmp/$asset" "$base/$asset" || die "download failed"
+else
+  curl -fsSL -o "$tmp/$asset" "$base/$asset" || die "download failed"
+fi
 curl -fsSL -o "$tmp/SHA256SUMS" "$base/SHA256SUMS" || die "checksum file download failed"
 
 expected=$(grep " $asset\$" "$tmp/SHA256SUMS" | awk '{print $1}')
 [ -n "$expected" ] || die "no checksum listed for $asset"
 actual=$(cd "$tmp" && $SUM "$asset" | awk '{print $1}')
 [ "$expected" = "$actual" ] || die "checksum mismatch: expected $expected, got $actual"
-say "Checksum OK"
+ok "Checksum verified"
 
 mkdir -p "$BIN_DIR"
 install -m 0755 "$tmp/$asset" "$BIN_DIR/innernet-provider" 2>/dev/null \
   || { cp "$tmp/$asset" "$BIN_DIR/innernet-provider" && chmod 0755 "$BIN_DIR/innernet-provider"; }
 
-say "Installed $BIN_DIR/innernet-provider"
+ok "Installed $BIN_DIR/innernet-provider"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) say "Add it to your PATH:  export PATH=\"$BIN_DIR:\$PATH\"" ;;
+  *) say "  ${D}Add it to your PATH:${N}  export PATH=\"$BIN_DIR:\$PATH\"" ;;
 esac
 
 # Start setup straight away when a person is at the terminal (curl | sh leaves stdin on the
@@ -73,5 +87,5 @@ if [ -z "${INNERNET_NO_START:-}" ] && [ -t 1 ] && [ -r /dev/tty ] \
   say ""
   "$BIN_DIR/innernet-provider" start </dev/tty
 else
-  say "Next:  innernet-provider start"
+  say "  Next:  ${B}innernet-provider start${N}"
 fi

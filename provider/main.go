@@ -23,7 +23,7 @@ import (
 	"time"
 )
 
-var version = "0.2.0-draft" // set at build time with -ldflags "-X main.version=..."
+var version = "0.3.0-draft" // set at build time with -ldflags "-X main.version=..."
 
 const defaultRegistry = "https://innernetcorp.com/registry/v1"
 
@@ -48,9 +48,15 @@ func main() {
 	case "apply":
 		err = cmdApply(args)
 	case "status":
-		err = cmdStatus()
+		err = cmdStatus(args)
 	case "serve":
 		err = cmdServe(args)
+	case "service":
+		err = cmdService(args)
+	case "uninstall":
+		err = cmdUninstall(args)
+	case "pause", "resume", "leave", "reinstate":
+		err = cmdIntent(cmd)
 	case "login":
 		err = cmdLogin(args)
 	case "backup":
@@ -86,13 +92,21 @@ Setup
 
 Run
   serve                serve clients: store encrypted pieces, answer storage checks, issue payment receipts
+  service install      keep serving in the background, also after a restart (systemd, launchd, Task Scheduler)
+  service status       is the background service running and answering
+  service uninstall    remove the background service
 
 Registry
+  pause                stop taking new files (what you hold is still served and paid)
+  resume               take new files again, or cancel leaving
+  leave                clients move their files away, then you can stop
+  reinstate            after a suspension or a long absence: start a 24 h trial to be listed again
   apply [--dry-run]    send your signed provider form to the registry
-  status               show your listing status (applied, testing, listed, removed)
+  status [--watch]     one screen: listing, service, online, address, hours, uptime, earnings
   login                get a one-time link to the web dashboard (add a passkey there)
 
 Other
+  uninstall [--all]    remove the background service and this program (--all: also the key)
   version, help
 
 Files live in ~/.innernet/provider (override with INNERNET_HOME).
@@ -353,7 +367,13 @@ func postApplication(c *Config, raw []byte) error {
 	return nil
 }
 
-func cmdStatus() error {
+func cmdStatus(args []string) error {
+	fs := flag.NewFlagSet("status", flag.ContinueOnError)
+	watch := fs.Bool("watch", false, "refresh every 5 seconds (Ctrl+C to stop)")
+	asJSON := fs.Bool("json", false, "machine-readable output")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
 	c, err := loadConfig()
 	if err != nil {
 		return err
@@ -362,21 +382,115 @@ func cmdStatus() error {
 	if err != nil {
 		return err
 	}
-	resp, err := httpClient.Get(registryURL(c) + "/providers/" + providerID(priv) + "/status")
-	if err != nil {
-		return fmt.Errorf("could not reach the registry: %v", err)
+	for {
+		v := gatherStatus(c, providerID(priv))
+		if *asJSON {
+			raw, _ := json.MarshalIndent(v, "", "  ")
+			fmt.Println(string(raw))
+			return nil
+		}
+		if *watch && isTTY {
+			fmt.Print("\x1b[H\x1b[2J")
+		}
+		renderStatus(c, v)
+		if !*watch {
+			return nil
+		}
+		fmt.Println(dim("  Refreshing every 5 s · Ctrl+C to stop"))
+		time.Sleep(5 * time.Second)
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode == http.StatusNotFound {
-		fmt.Println("Status: not applied yet (or the registry is not live yet).")
-		return nil
+}
+
+type statusView struct {
+	Provider  string         `json:"provider"`
+	Registry  *statusReply   `json:"registry,omitempty"`
+	RegError  string         `json:"registry_error,omitempty"`
+	Service   bool           `json:"service_answering"`
+	Presence  *presenceState `json:"presence,omitempty"`
+	Stats     map[string]any `json:"stats,omitempty"`
+	CheckedAt int64          `json:"checked_at"`
+}
+
+func gatherStatus(c *Config, id string) statusView {
+	v := statusView{Provider: id, CheckedAt: time.Now().Unix(), Service: waitHealthy(c.Port, 600*time.Millisecond)}
+	if resp, err := httpClient.Get(registryURL(c) + "/providers/" + id + "/status"); err != nil {
+		v.RegError = "registry not reachable"
+	} else {
+		if resp.StatusCode == http.StatusNotFound {
+			v.RegError = "not applied yet"
+		} else {
+			var s statusReply
+			if json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&s) == nil {
+				v.Registry = &s
+			}
+		}
+		resp.Body.Close()
 	}
-	var s statusReply
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&s); err != nil {
-		return fmt.Errorf("unexpected registry reply: %v", err)
+	if raw, err := os.ReadFile(presenceFile()); err == nil {
+		var p presenceState
+		if json.Unmarshal(raw, &p) == nil {
+			v.Presence = &p
+		}
 	}
-	printStatus(os.Stdout, &s)
-	return nil
+	return v
+}
+
+func renderStatus(c *Config, v statusView) {
+	banner("provider status", c.Network)
+	state, reason := "unknown", v.RegError
+	if v.Registry != nil {
+		state, reason = v.Registry.State, v.Registry.Reason
+	}
+	mark := map[string]string{"listed": green(markOK), "testing": amber(markWait), "paused": amber(markWait),
+		"leaving": amber(markWait)}[state]
+	if mark == "" {
+		mark = red(markFail)
+	}
+	rows := [][2]string{{"Listing", mark + " " + stateLabel(state)}}
+	if reason != "" {
+		rows = append(rows, [2]string{"", dim(reason)})
+	}
+	svc := red(markFail) + " not running · innernet-provider service install"
+	if v.Service {
+		svc = green(markOK) + fmt.Sprintf(" running on port %d", c.Port)
+	}
+	rows = append(rows, [2]string{"Service", svc})
+	if p := v.Presence; p != nil && p.At > 0 {
+		ago := time.Since(time.Unix(p.At, 0)).Round(time.Second)
+		if p.Error != "" {
+			rows = append(rows, [2]string{"Online", red(markFail) + " " + p.Error})
+		} else {
+			reach := green(markOK) + " reachable"
+			if !p.Reachable {
+				reach = amber(markWarn) + " not reachable from the internet"
+			}
+			rows = append(rows, [2]string{"Online", fmt.Sprintf("%s last check-in %s ago", green(markOK), ago)},
+				[2]string{"Address", fmt.Sprintf("%s:%d via %s · %s", p.Host, p.Port, p.Path, reach)})
+		}
+	} else {
+		rows = append(rows, [2]string{"Online", dim("no check-in yet (the service sends one every minute)")})
+	}
+	rows = append(rows, [2]string{"Hours", describeHours(c.Hours) + " · " + orDefault(c.TZ, "UTC")})
+	if r := v.Registry; r != nil {
+		if r.Health != nil {
+			rows = append(rows, [2]string{"Uptime 7 d", r.Health.Uptime7d})
+		}
+		if r.Earnings != nil {
+			rows = append(rows, [2]string{"Earned 30 d", fmt.Sprintf("%s %s to you (%s paid, %s fee)",
+				r.Earnings.Net, r.Earnings.Asset, r.Earnings.Gross, r.Earnings.Fee)})
+		}
+	}
+	box("Provider "+v.Provider[:16]+"…", rows)
+	switch state {
+	case "paused":
+		fmt.Println(dim("  Take new files again: innernet-provider resume"))
+	case "leaving":
+		fmt.Println(dim("  Changed your mind: innernet-provider resume"))
+	case "suspended", "gone":
+		fmt.Println(dim("  Back to normal: innernet-provider reinstate (24 h trial)"))
+	}
+	fmt.Println(dim("  Usage, earnings and payments in detail: https://innernetcorp.com/dashboard"))
+	fmt.Println()
 }
 
 // loginRecord signs a registry-issued challenge. The registry verifies it and

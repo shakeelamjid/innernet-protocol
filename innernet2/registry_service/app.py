@@ -22,7 +22,9 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
                                       ResidentKeyRequirement, UserVerificationRequirement)
 
 from ..bulk_v080 import BulkError
+from .. import irm_registry as reg
 from ..irm_registry import make_login_challenge, sign_registry, verify_connect, verify_descriptor, verify_login
+from . import presence
 from . import chain, offer as offers, probe
 from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
@@ -98,24 +100,40 @@ def norm_code(code: str) -> str:
 
 
 def nonce_check(host: str, port: int, nonce: str, timeout: float = 5.0) -> bool:
-    """Connect to host:port and expect the machine to send `nonce` first."""
+    """Connect to host:port and check the machine knows `nonce`.
+
+    A setup listener sends the nonce as soon as we connect. A running provider service
+    is an HTTP server, so if nothing arrives quickly we ask it for /reach/<nonce>."""
     import socket
     try:
         with socket.create_connection((host, port), timeout=timeout) as sock:
-            sock.settimeout(timeout)
+            sock.settimeout(1.5)
             got = b""
-            while len(got) < len(nonce):
-                chunk = sock.recv(64)
+            try:
+                got = sock.recv(64)
+            except socket.timeout:
+                pass
+            if got[:len(nonce)] == nonce.encode():
+                return True
+            if got:
+                return False
+            sock.settimeout(timeout)
+            sock.sendall(f"GET /reach/{nonce} HTTP/1.0\r\nHost: {host}\r\n\r\n".encode())
+            data = b""
+            while len(data) < 4096:
+                chunk = sock.recv(1024)
                 if not chunk:
                     break
-                got += chunk
-            return got[:len(nonce)] == nonce.encode()
+                data += chunk
+            head, _, body = data.partition(b"\r\n\r\n")
+            return head.startswith(b"HTTP/1.") and b" 200 " in head.split(b"\r\n")[0] + b" " and body.strip() == nonce.encode()
     except OSError:
         return False
 
 
 def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http_rpc,
-               connect=probe.tcp_connect, reach=nonce_check) -> FastAPI:
+               connect=probe.tcp_connect, reach=nonce_check, info=None) -> FastAPI:
+    info = info or presence.info_check
     store = store or Store(settings.db_path)
     registry_key = load_registry_key(settings.key_file)
     if registry_key is not None:
@@ -363,6 +381,51 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if type(port) is not int or not 1 <= port <= 65535 or not re.match(r"^[0-9a-f]{32}$", nonce):
             raise HTTPException(400, "port and nonce required")
         return {"ip": ip, "port": port, "reachable": bool(reach(ip, port, nonce))}
+
+    @app.post(P + "/v1/presence")
+    async def post_presence(request: Request):
+        """Signed live presence from a provider's service (about once a minute)."""
+        ip = client_ip(request)
+        limiter.check("presence", ip, 30, 600)
+        try:
+            return presence.record_presence(store, await body_json(request), ip, info)
+        except BulkError as exc:
+            raise HTTPException(422, str(exc))
+
+    @app.get(P + "/v1/presence/{pid}")
+    def get_presence(pid: str):
+        """Where a provider can be reached right now: its own signed record, unchanged."""
+        if not re.match(r"^[0-9a-f]{64}$", pid):
+            raise HTTPException(400, "bad provider id")
+        p = store.provider(pid)
+        live = presence.live(store, pid)
+        if p is None or live is None:
+            raise HTTPException(404, "no presence for this provider")
+        return {"state": p["state"], **live}
+
+    @app.post(P + "/v1/providers/{pid}/intent")
+    async def provider_intent(pid: str, request: Request):
+        """pause, resume, leave or reinstate, signed by the machine's key."""
+        ip = client_ip(request)
+        limiter.check("intent", ip, 20, 600)
+        try:
+            prov, action, nonce = reg.verify_intent(await body_json(request))
+        except BulkError as exc:
+            raise HTTPException(422, str(exc))
+        if prov.hex() != pid:
+            raise HTTPException(422, "intent is for another provider")
+        if store.one("SELECT 1 FROM audit WHERE provider=? AND detail LIKE ?", (pid, f"%nonce {nonce}%")):
+            raise HTTPException(409, "intent already used")
+        try:
+            out = presence.apply_intent(store, pid, action, via=f"machine, nonce {nonce}", ip=ip)
+        except BulkError as exc:
+            raise HTTPException(409, str(exc))
+        return out
+
+    @app.get(P + "/v1/market")
+    def market_prices():
+        """Typical prices of listed providers, for setting a price."""
+        return {"fee_bps": settings.fee_bps, "services": presence.market(store)}
 
     @app.get(P + "/v1/split")
     def find_split(receiver: str, network: str = "eip155:84532"):
@@ -731,7 +794,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             "listed_at": p["listed_at"], "checked_at": p["checked_at"], "fee_bps": settings.fee_bps,
             "networks": {n: NETWORK_NAMES.get(n, n) for n in p["entry"]["payto"]},
             "health": health(pid),
-            "activity": {svc: "not reported yet" for svc in p["entry"]["services"]},
+            "presence": presence.live(store, pid),
+            "usage": (u := presence.usage(store, pid)),
+            "activity": presence.activity(p["entry"], u),
+            "market": presence.market(store),
+            "availability": p["entry"].get("availability"), "class": p["entry"].get("class"),
+            "available_minutes": reg.available_minutes(p["entry"]),
+            "trial_since": p.get("trial_since"), "last_seen": p.get("last_seen"),
             "earnings": {"30d": fmt(e30), "all": fmt(eall)},
             "daily": chain.daily(store, pid, settings.fee_bps),
             "splits": chain.recent_splits(store, pid, settings.fee_bps),
@@ -744,6 +813,19 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             "audit": [dict(ts=r["ts"], event=r["event"], detail=r["detail"], ip=r["ip"])
                       for r in store.q("SELECT * FROM audit WHERE provider=? ORDER BY id DESC LIMIT 100", (pid,))],
         }
+
+    @app.post(P + "/api/me/intent")
+    async def web_intent(request: Request):
+        """Pause, resume, leave or reinstate from the dashboard (passkey session)."""
+        guard(request)
+        s = need_session(request)
+        action = str((await body_json(request)).get("action", ""))
+        if action not in reg.INTENTS:
+            raise HTTPException(400, "unknown action")
+        try:
+            return presence.apply_intent(store, s["provider"], action, via="dashboard", ip=client_ip(request))
+        except BulkError as exc:
+            raise HTTPException(409, str(exc))
 
     @app.post(P + "/api/passkeys/{cred_id}/rename")
     async def rename_passkey(cred_id: str, request: Request):

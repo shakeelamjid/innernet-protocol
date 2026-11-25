@@ -13,7 +13,7 @@ SCHEMA = """
 CREATE TABLE IF NOT EXISTS providers (
   id TEXT PRIMARY KEY,
   record TEXT NOT NULL,            -- signed descriptor {payload, signature}
-  state TEXT NOT NULL,             -- testing | listed | suspended | removed
+  state TEXT NOT NULL,             -- testing | listed | paused | leaving | suspended | gone | removed
   reason TEXT NOT NULL DEFAULT '',
   applied_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
@@ -82,6 +82,8 @@ class Store:
             self._db.execute("PRAGMA journal_mode=WAL")
             self._db.execute("PRAGMA foreign_keys=ON")
             self._db.executescript(SCHEMA)
+        from . import presence          # tables and columns added after the first release
+        presence.migrate(self)
 
     @contextmanager
     def tx(self):
