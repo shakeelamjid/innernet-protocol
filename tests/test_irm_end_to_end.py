@@ -1,6 +1,7 @@
 """IRM-1 end to end: 4 real Go providers (`innernet-provider serve`), the Python client,
-a signed registry document and a fake chain. One provider goes down; the client keeps
-reading, detects it, stops paying it and repairs onto the spare provider."""
+a signed registry document and a fake chain. Files are sealed, mixed and spread as 6 shards
+(any 4 rebuild). One provider goes down; the client keeps reading, detects it, stops paying
+it and rebuilds its shards onto another provider."""
 from __future__ import annotations
 
 import json
@@ -115,64 +116,97 @@ def network(binary, tmp_path):
     chain.server.shutdown()
 
 
+def _slots(rec):
+    count = {}
+    for h in rec["holders"]:
+        count[h["name"]] = count.get(h["name"], 0) + 1
+    return count
+
+
 def test_store_fail_over_check_pay_and_repair(network):
     client, providers, procs, chain, tmp = network
     data = os.urandom(200_000)                                   # 4 chunks
     rec = client.put(data, "report.bin")
-    names = [r["name"] for r in rec["replicas"]]
-    assert names == ["p0", "p1", "p2"]                            # one per region first; p3 is the spare
+    assert rec["version"] == "IRM1-CLIENT-2" and (rec["k"], rec["n"]) == (4, 6)
+    assert sorted(h["slot"] for h in rec["holders"]) == list(range(6))
+    count = _slots(rec)
+    assert set(count) == {"p0", "p1", "p2", "p3"} and max(count.values()) == 2   # all 4 used, at most 2 slots each
     assert client.get(rec["object"]) == data
 
-    # Providers only hold ciphertext.
-    stored = b"".join(p.read_bytes() for p in (tmp / "p0" / "data").rglob("*.chunk"))
-    assert data[:4096] not in stored and len(stored) > len(data)
+    # Providers only hold shards of sealed, mixed chunks: no plaintext, and about 1.5x the size in total.
+    stored = {p: b"".join(f.read_bytes() for f in (tmp / p / "data").rglob("*.chunk")) for p in count}
+    assert all(data[:4096] not in s for s in stored.values())
+    total = sum(len(s) for s in stored.values())
+    assert 1.4 * len(data) < total < 1.7 * len(data)
+    # No provider holds enough to rebuild anything on its own.
+    assert all(len(s) < 0.6 * len(data) for s in stored.values())
 
-    # Everyone passes the daily check and gets paid for this epoch; tickets verify.
+    # Every holder passes the daily check and gets paid for this epoch; tickets verify.
     assert all(v["ok"] for v in client.check(rec["object"]).values())
     paid = client.pay(rec["object"], chain.pay)
-    assert all(v.startswith("paid") for v in paid.values()) and len(chain.payments) == 3
-    assert client.pay(rec["object"], chain.pay)[rec["replicas"][0]["provider"]] == "already paid"
+    assert len(paid) == 6 and all(v.startswith("paid") for v in paid.values()) and len(chain.payments) == 6
+    first = rec["holders"][0]
+    assert client.pay(rec["object"], chain.pay)[f"{first['provider']}#{first['slot']}"] == "already paid"
 
-    # A provider goes down: reads still work, its check fails, it is not paid.
-    procs[1].kill()
-    procs[1].wait()
+    # A provider holding 2 shards goes down: 4 remain, reads still work, its checks fail, it is not paid.
+    victim = next(i for i, p in enumerate(providers) if count[p["name"]] == 2)
+    vid = providers[victim]["id"]
+    procs[victim].kill()
+    procs[victim].wait()
     assert client.get(rec["object"]) == data
     res = client.check(rec["object"])
-    assert not res[providers[1]["id"]]["ok"] and res[providers[0]["id"]]["ok"]
+    assert all(not v["ok"] for v in res.values() if v["provider"] == vid)
+    assert all(v["ok"] for v in res.values() if v["provider"] != vid)
     out = client.pay(rec["object"], chain.pay, epoch=int(time.time() // 86400) + 1)
-    assert out[providers[1]["id"]].startswith("not paid")
+    assert all(v.startswith("not paid") for k, v in out.items() if k.startswith(vid))
 
-    # Within the grace period nothing moves; with --now it repairs onto the spare provider.
+    # Within the grace period nothing moves; forced, both shards are rebuilt onto other providers.
     assert client.repair(rec["object"]) == []
     changes = client.repair(rec["object"], force=True)
-    assert changes == [{"replaced": providers[1]["id"], "with": providers[3]["id"]}]
+    assert len(changes) == 2 and all(c["replaced"] == vid and c["with"] not in (None, vid) for c in changes)
+    rec = client.load(rec["object"])
+    assert vid not in {h["provider"] for h in rec["holders"]} and max(_slots(rec).values()) == 2
     assert all(v["ok"] for v in client.check(rec["object"]).values())
-    procs[0].kill()                                               # lose another one: still readable
-    procs[0].wait()
+    assert client.get(rec["object"]) == data
+    # Lose one more provider (at most 2 shards): still readable from the remaining 4.
+    other = next(i for i, p in enumerate(providers) if i != victim and p["id"] in {h["provider"] for h in rec["holders"]})
+    procs[other].kill()
+    procs[other].wait()
     assert client.get(rec["object"]) == data
 
 
-def test_tampered_chunk_fails_check_and_get_skips_it(network):
+def test_tampered_shard_fails_check_and_get_skips_it(network):
     client, providers, procs, chain, tmp = network
     data = os.urandom(70_000)
     rec = client.put(data, "x")
-    victim = rec["replicas"][0]
-    for f in (tmp / victim["name"] / "data").rglob("*.chunk"):
+    victim = rec["holders"][0]
+    lease_dir = next(d for d in (tmp / victim["name"] / "data").rglob("*") if d.is_dir() and victim["lease"] in str(d))
+    for f in lease_dir.rglob("*.chunk"):
         raw = bytearray(f.read_bytes())
         raw[10] ^= 0xFF
         f.write_bytes(bytes(raw))
-    assert client.get(rec["object"]) == data                       # falls through to an intact replica
+    assert client.get(rec["object"]) == data                       # the bad shard is skipped, 4 good ones rebuild
+    key = f"{victim['provider']}#{victim['slot']}"
     for _ in range(5):                                             # random samples: catches it fast
         res = client.check(rec["object"], samples=8)
-        if not res[victim["provider"]]["ok"]:
+        if not res[key]["ok"]:
             break
-    assert not res[victim["provider"]]["ok"]
+    assert not res[key]["ok"]
+
+
+def test_needs_three_providers(network, tmp_path):
+    client, providers, procs, chain, tmp = network
+    for p in procs[2:]:
+        p.kill()
+        p.wait()
+    with pytest.raises(Exception, match="at least 3"):
+        client.put(os.urandom(10_000), "y")
 
 
 def test_provider_rejects_wrong_owner_replay_and_reused_payment(network):
     client, providers, procs, chain, tmp = network
     rec = client.put(os.urandom(5000), "small")
-    r = rec["replicas"][0]
+    r = rec["holders"][0]
     stranger = Provider(r["entry"], Ed25519PrivateKey.generate())
     with pytest.raises(ProviderError, match="another client"):
         stranger.put_chunk(r["lease"], rec["object"], 0, b"overwrite")
