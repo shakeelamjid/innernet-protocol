@@ -513,15 +513,19 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
 INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
 INTENT_VERSION = "REG-1-INTENT"
 INTENTS = {"pause", "resume", "leave", "reinstate"}
+MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove"}
 
 
 def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, str, str]:
     """Return (provider id, action, nonce) for a fresh, correctly signed intent."""
     _exact_keys(record, {"payload", "signature"}, label="intent record")
     p = record["payload"]
-    _exact_keys(p, {"version", "provider", "action", "nonce", "issued_at"}, label="intent payload")
-    if p["version"] != INTENT_VERSION or p["action"] not in INTENTS:
+    _exact_keys(p, {"version", "provider", "action", "nonce", "issued_at"}, {"target"}, label="intent payload")
+    if p["version"] != INTENT_VERSION or p["action"] not in MACHINE_ACTIONS:
         raise BulkError("unsupported intent")
+    if ("target" in p) != (p["action"] == "passkey-remove") or ("target" in p and (
+            not isinstance(p["target"], str) or not 1 <= len(p["target"]) <= 128)):
+        raise BulkError("invalid intent target")
     issued = _int(p["issued_at"], 0, 2**53, "intent issued_at")
     instant = int(time.time()) if now is None else now
     if not instant - max_age <= issued <= instant + FUTURE_SKEW:
@@ -535,6 +539,10 @@ def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -
     except (ValueError, InvalidSignature) as exc:
         raise BulkError("intent signature invalid") from exc
     return provider, p["action"], p["nonce"]
+
+
+def intent_target(record: dict) -> str:
+    return record["payload"].get("target", "")
 
 
 def in_hours(entry: dict, instant: int) -> bool:
