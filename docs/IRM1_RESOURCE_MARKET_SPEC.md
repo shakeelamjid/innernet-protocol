@@ -200,7 +200,7 @@ Rent is paid per **epoch** (default: 1 day) rather than up front. At the start o
 
 1. issues a proof-of-storage challenge (section 5.4) for that lease;
 2. if the proof verifies, pays that epoch's rent over x402;
-3. if the proof fails or times out, does not pay, marks the provider failed, and re-replicates the affected pieces to another provider.
+3. if the proof fails or times out, does not pay, marks the provider failed, and rebuilds the affected shards onto another provider.
 
 A provider MAY delete a lease's pieces after **3** consecutive unpaid epochs. Its descriptor states this grace period.
 
@@ -222,17 +222,17 @@ Providers MUST keep pieces bit-exact, answer challenges within the advertised ti
 
 ### 5.6 What the provider can see
 
-The provider sees ciphertext sizes, object counts, the client's key, the client's IP address and access timing. It cannot see content or file names.
+The provider sees shard sizes, object counts, the client's key, the client's IP address and access timing. It cannot see content or file names.
 
 ### 5.7 When a provider goes down
 
 Storage never depends on one provider:
 
-1. **Replicas.** Every piece is placed on at least 3 providers with different operators, regions and networks where the registry allows (section 8). The R90 route plan lists all replicas in preference order.
-2. **Failover.** A read that fails or times out on one replica moves to the next immediately (R90, v1.0.0). Users see no error while one replica is alive.
+1. **Shards.** Each chunk is sealed, its cells are mixed with a key derived from the object key, and it is erasure-coded into 6 shards of which any 4 rebuild it. The 6 shard slots go to at least 3 providers, at most 2 per provider, different operators, regions and networks first where the registry allows (section 8). Losing any one provider leaves at least 4 shards. Storage overhead is 1.5×, and no provider holds a whole sealed chunk. The R90 route plan lists every shard holder.
+2. **Failover.** A read fetches shards from healthy holders first; a shard that fails, times out or does not match its recorded root is skipped and the next holder is asked (R90, v1.0.0). Users see no error while any 4 shards of each chunk are reachable.
 3. **Detection.** The client's daily challenge (section 5.4) also detects a dead or lossy provider. The registry's probes detect unreachable providers independently and suspend them (section 3.4), which removes them from new placements.
-4. **Repair.** When a replica fails its challenge, or stays unreachable for longer than the repair grace period (default 24 h), the client: fetches the affected pieces from a healthy replica, verifies them against the signed manifest, places them on a new provider chosen from the current registry document, opens a new lease there, and publishes a new route plan with a higher ROUTE-2 sequence number. The pieces stay encrypted to the recipient, so the new provider learns nothing more than the old one. Repair can be delegated to an always-on agent holding a repair-only key that can re-place ciphertext and publish route plans but cannot decrypt.
-5. **Payment stops with the service.** The failed lease earns nothing from the first failed epoch; rent for that replica moves to the replacement. The most a client can lose is one prepaid epoch on one replica.
+4. **Repair.** When a shard holder fails its challenge, or stays unreachable for longer than the repair grace period (default 24 h), the client: fetches 4 verified shards of each chunk from healthy holders, rebuilds the missing shards (no decryption and no mixing key needed), checks them against the recorded roots, places them on a new provider chosen from the current registry document, opens a new lease there, and publishes a new route plan with a higher ROUTE-2 sequence number. The shards stay sealed and mixed, so the new provider learns nothing more than the old one. Repair can be delegated to an always-on agent holding a repair-only key that can re-place ciphertext and publish route plans but cannot decrypt.
+5. **Payment stops with the service.** The failed lease earns nothing from the first failed epoch; rent for that shard slot moves to the replacement. The most a client can lose is one prepaid epoch on one slot.
 
 ### 5.8 Fair metering
 
@@ -258,7 +258,7 @@ Until STO-1 runs over ST81, providers serve it over HTTP on their listed endpoin
 
 ### 5.10 Client behaviour (draft)
 
-The reference client places each file on 3 providers (one per region first, most reachable and cheapest first), checks each upload's STO-1 root, reads from the first replica that returns a chunk matching the recorded root, challenges random blocks daily, pays only replicas that passed the current epoch's check, and repairs replicas that have failed for longer than 24 h by copying verified chunks from a healthy replica to a new provider. Its record of where pieces live, and the object key, stay on the client machine (mode 0600). It refuses a registry document older than one it has already seen.
+The reference client (record version `IRM1-CLIENT-2`) stores a file in five steps: **cut** into 64 KiB chunks; **seal** each with the OB80-2 chunk cipher under a fresh object key; **mix** each sealed chunk by cutting it into 4 KiB cells and shuffling them with a keyed Fisher-Yates permutation (key `HKDF(object key, "irm/sto-1/mix/<index>")`; an extra layer that hides chunk boundaries and structure, not a replacement for the encryption); **spread** with systematic Reed-Solomon over GF(256), 6 shards of which any 4 rebuild the chunk; **place** shard slot *j* of every chunk under one lease, 6 slots on at least 3 providers, at most 2 per provider, fewest-held then new region then most reachable and cheapest first. It checks every uploaded shard's STO-1 root, reads 4 verified shards per chunk (healthy holders first) and reverses the steps, challenges random blocks daily, pays each holder only for an epoch in which it passed, and rebuilds the shards of holders that failed for longer than 24 h onto other providers. Its record of where shards live, and the object key, stay on the client machine (mode 0600). It refuses a registry document older than one it has already seen.
 
 ## 6. RLY-1: paid bandwidth (relaying)
 
