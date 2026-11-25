@@ -41,9 +41,11 @@ jobs:
         with:
           go-version: '1.23'
 
+      # Output goes to the runner temp dir: the package directory is itself
+      # named `uv10verify`, so a default `go build` cannot write its binary.
       - name: Build UV10 Go verifier
         working-directory: interop/go
-        run: go build ./uv10verify
+        run: go build -o "$RUNNER_TEMP/uv10verify" ./uv10verify
 
       - name: Install package and test deps
         run: python -m pip install --upgrade pip && python -m pip install -e '.[test]'
