@@ -330,6 +330,10 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                                   and current["entry"]["payto"] == entry["payto"])
         if current and current["state"] == "listed" and same_route:
             state, reason = "listed", ""
+        elif (current and current["state"] == "suspended" and current["reason"].startswith("payout contract:")
+              and not current.get("admin_lock") and not notes):
+            # Suspended only for its payout, which is valid now: back where it was.
+            state, reason = ("listed", "") if current["listed_at"] else ("testing", "checking reachability")
         elif current and current["state"] == "suspended":
             state, reason = "suspended", current["reason"]
         else:
@@ -890,7 +894,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     from . import admin_web
     admin_web.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, body_json=body_json,
                        new_flow=new_flow, take_flow=take_flow, limiter=limiter, cookie_secure=settings.cookie_secure,
-                       page=page, payout_ok=payout_ok)
+                       page=page, payout_ok=payout_ok, rpc=rpc)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):

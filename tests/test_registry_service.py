@@ -1660,3 +1660,50 @@ def test_config_offers_phone_wallets_when_configured(tmp_path):
     page = client.get(P + "/payout")
     assert "wss://relay.walletconnect.org" in page.headers["content-security-policy"]
     assert client.get(P + "/static/walletconnect.js").status_code == 200
+
+
+def test_admin_sees_machines_without_a_payout_contract_and_smart_wallets_count_as_wallets(tmp_path):
+    from innernet2.registry_service.admin_web import new_login_link
+    fake = FakeChain()
+    s = settings(tmp_path)
+    s.split_factory = {SEPOLIA: "0x" + "fa" * 20}
+    app = create_app(s, rpc=fake, connect=lambda h, p, t: 3.0)
+    client, store = TestClient(app, base_url=ORIGIN), app.state.store
+    k = Ed25519PrivateKey.generate()
+    pid = k.public_key().public_bytes_raw().hex()
+    wallet = "0x" + "ab" * 20
+    # A machine that got in with a plain wallet (before the gate): stored directly.
+    fake.splits[wallet] = "0x" + "5c" * 20
+    assert client.post(P + "/v1/apply", json=provider_record(k, payto=fake.splits[wallet])).status_code == 200
+    row = json.loads(store.one("SELECT record FROM providers WHERE id=?", (pid,))["record"])
+    row["payload"]["provider"]["payto"] = {SEPOLIA: wallet}      # stored as it was then (not re-signed)
+    store.x("UPDATE providers SET record=? WHERE id=?", (json.dumps(row), pid))
+    del fake.splits[wallet]
+    fake.code = "0xef0100" + "d2" * 20                  # EIP-7702 delegation: a "smart" wallet, not a contract
+    ok, why = chain.payout_check(s, SEPOLIA, wallet, fake)
+    assert not ok and "is a wallet, not a payout contract" in why
+    tok = new_login_link(store, ORIGIN, P).split("#token=")[1]
+    admin = SoftAuthenticator()
+    o = client.post(P + "/api/admin/enroll/options", json={"token": tok}, headers=H).json()
+    client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])}, headers=H)
+    po = client.get(P + f"/api/admin/machines/{pid}").json()["payout"][0]
+    assert po["wallet"] is True and po["contract"] is None and po["ok"] is False and po["factory"] == "0x" + "fa" * 20
+    fake.splits[wallet] = "0x" + "77" * 20                # the admin created and paid for it
+    po = client.get(P + f"/api/admin/machines/{pid}").json()["payout"][0]
+    assert po["contract"] == "0x" + "77" * 20
+
+
+def test_a_machine_suspended_for_its_payout_returns_once_it_applies_with_a_contract(tmp_path):
+    fake = FakeChain()
+    app = create_app(settings(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20}), rpc=fake, connect=lambda h, p, t: 3.0)
+    client, store = TestClient(app, base_url=ORIGIN), app.state.store
+    fake.splits["0x" + "ab" * 20] = "0x" + "ab" * 20
+    fake.splits["0x" + "cd" * 20] = "0x" + "cd" * 20
+    k = Ed25519PrivateKey.generate()
+    pid = k.public_key().public_bytes_raw().hex()
+    assert client.post(P + "/v1/apply", json=provider_record(k)).status_code == 200
+    now = int(time.time())
+    store.x("UPDATE providers SET state='suspended', listed_at=?, reason='payout contract: 0xab is a wallet' WHERE id=?",
+            (now - 3600, pid))
+    assert client.post(P + "/v1/apply", json=provider_record(k, payto="0x" + "cd" * 20)).status_code == 200
+    assert store.provider(pid)["state"] == "listed"

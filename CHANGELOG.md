@@ -2,6 +2,15 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Payout checks that actually run, admin pays the fee for chosen machines
+
+- Fix: the registry's chain calls now send a User-Agent. Base's public RPC refused the default Python agent, so every payout check came back "postponed" and machines paid to a plain wallet stayed listed.
+- Wallets with an EIP-7702 delegation ("smart" accounts in Trust Wallet, MetaMask and others) count as wallets, not contracts.
+- Admin machine details show the payout status. A machine paid to a plain wallet gets a notice and its payout address becomes clickable: the admin pays the network fee (about $0.01) to create that wallet's payout contract, with a phone wallet (QR code) or a browser wallet. Providers still create their own contract by default; this is the admin's choice per machine.
+- The provider program adopts its payout contract by itself: while its payout is a plain wallet it checks every 10 minutes whether the factory has created a contract for it; once there is one it switches to it, saves its settings and applies again with its own signature.
+- A machine suspended only for its payout is back where it was (listed, if it was) as soon as it applies with a valid payout contract.
+- `provider/LATEST` is `provider-v0.6.8`.
+
 ### Payout contracts enforced, phone wallets, real USDC by default
 
 - Every listed machine must be paid through a payout contract created by the INNERNET factory. A plain wallet address, or a contract from elsewhere, is refused when applying, an admin cannot list it by hand, and a listed machine whose payout is not a valid split is suspended automatically (it returns once the payout is fixed and its checks are good). Approval waits when the chain cannot be checked, instead of letting the machine through. Verdicts are kept 6 hours.

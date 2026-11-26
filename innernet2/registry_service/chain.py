@@ -27,7 +27,9 @@ Rpc = Callable[[str, str, list], object]
 
 def http_rpc(url: str, method: str, params: list):
     body = json.dumps({"jsonrpc": "2.0", "id": 1, "method": method, "params": params}).encode()
-    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json"})
+    # Public RPC endpoints behind CDNs refuse the default "Python-urllib" agent; name ourselves.
+    req = urllib.request.Request(url, data=body, headers={"Content-Type": "application/json", "Accept": "application/json",
+                                                          "User-Agent": "innernet-registry/1.0 (+https://innernetcorp.com)"})
     with urllib.request.urlopen(req, timeout=20) as resp:  # noqa: S310 - URL comes from operator config
         reply = json.loads(resp.read(4 << 20))
     if "error" in reply:
@@ -54,6 +56,22 @@ def _call(rpc: Rpc, url: str, to: str, selector: str, arg: str | None = None) ->
     return int(out[2:66], 16)
 
 
+def is_wallet_code(code) -> bool:
+    """A wallet, not a contract: no code, or only an EIP-7702 delegation (0xef0100 + address), which
+    "smart" wallets such as Trust Wallet or MetaMask set on an ordinary account."""
+    c = str(code or "0x").lower()
+    return c in ("0x", "0x0", "") or (c.startswith("0xef0100") and len(c) == 2 + 2 * 23)
+
+
+def split_of(settings: Settings, network: str, wallet: str, rpc: Rpc = http_rpc) -> str | None:
+    """The payout contract the factory created for wallet, or None."""
+    factory, url = settings.split_factory.get(network), settings.rpc.get(network)
+    if not factory or not url:
+        return None
+    value = _call(rpc, url, factory, SEL_SPLIT_OF, wallet)
+    return None if not value else "0x" + format(value, "040x")
+
+
 def payout_check(settings: Settings, network: str, address: str, rpc: Rpc = http_rpc) -> tuple[bool, str]:
     """Return (ok, note). A payout must be a split created by the configured factory,
     paying the configured fee wallet the configured share."""
@@ -65,7 +83,7 @@ def payout_check(settings: Settings, network: str, address: str, rpc: Rpc = http
         how = (f"Create it at {settings.origin}{settings.prefix}/payout: enter the wallet that should receive your "
                "earnings and approve one transaction in your wallet app (phone or browser). The network fee is about "
                "$0.01 in ETH on Base, paid from that wallet. Then set the contract address in Change settings.")
-        if not code or code == "0x":
+        if is_wallet_code(code):
             return False, f"{address} is a wallet, not a payout contract. Payments must go through a payout contract. {how}"
         factory = settings.split_factory.get(network)
         if not factory:

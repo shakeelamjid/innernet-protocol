@@ -228,3 +228,6 @@ table.adm .link { text-decoration: underline; text-underline-offset: 3px; }
 .qr { display: inline-block; background: #fff; padding: 8px; border-radius: 8px; line-height: 0; }
 .qr svg { width: 232px; height: 232px; }
 .actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.linkish { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
+.pay-box { margin: 12px 0; }
+.pay-box .qr { margin: 8px 0; }

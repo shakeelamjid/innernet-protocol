@@ -80,7 +80,7 @@ def new_login_link(store: Store, origin: str, prefix: str) -> str:
 
 
 def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json, new_flow, take_flow, limiter,
-             cookie_secure: bool, page, payout_ok=lambda entry: (True, "")) -> None:
+             cookie_secure: bool, page, payout_ok=lambda entry: (True, ""), rpc=None) -> None:
     migrate(store)
     cookie = "__Host-innernet_admin" if cookie_secure else "innernet_admin"
 
@@ -341,8 +341,25 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
                              for r in store.q("SELECT * FROM passkeys WHERE provider=? ORDER BY created_at", (owner,))],
                 "sessions": store.one("SELECT COUNT(*) AS n FROM sessions WHERE provider=? AND revoked=0 AND expires_at>?",
                                       (owner, now))["n"],
+                "payout": [payout_status(network, address) for network, address in e.get("payto", {}).items()],
                 "audit": [dict(ts=r["ts"], event=r["event"], detail=r["detail"], ip=r["ip"])
                           for r in store.q("SELECT * FROM audit WHERE provider=? ORDER BY id DESC LIMIT 40", (p["id"],))]}
+
+    def payout_status(network: str, address: str) -> dict:
+        """What the admin needs to see about one payout: valid contract, a wallet still waiting for its
+        contract (the admin may create it and pay the gas), or a check that could not run."""
+        from . import chain
+        ok, why = payout_ok({"network": network, "payout": address})
+        out = {"network": network, "address": address, "ok": ok and not why, "note": why, "wallet": False,
+               "contract": None, "factory": settings.split_factory.get(network)}
+        if rpc is not None and settings.rpc.get(network):
+            try:
+                out["wallet"] = chain.is_wallet_code(rpc(settings.rpc[network], "eth_getCode", [address, "latest"]))
+                if out["wallet"]:
+                    out["contract"] = chain.split_of(settings, network, address, rpc)
+            except Exception as exc:  # the chain may be unreachable for a moment
+                out["note"] = out["note"] or f"could not check on-chain: {exc}"
+        return out
 
     @app.get(P + "/api/admin/owners")
     def owners_page(request: Request, q: str = "", page: int = 1, size: int = 50):

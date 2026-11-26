@@ -129,6 +129,7 @@
     add('Reason', d.reason); add('Services', d.services.join(', '));
     add('Prices', Object.keys(d.prices).map(function (k) { return k + ' ' + d.prices[k]; }).join(' · '));
     add('Payout', Object.keys(d.payto).map(function (k) { return d.payto[k] + ' (' + k + ')'; }).join('; '));
+    const payDd = kv.lastChild;
     add('Listed address', (d.endpoints || []).map(function (e) { return e.host + ':' + e.port; }).join(', '));
     const pr = d.presence && d.presence.record && d.presence.record.payload;
     add('Now', pr ? (d.presence.online ? 'online' : 'offline') + ' · ' + pr.path + ' · ' + pr.endpoint.host + ':' + pr.endpoint.port + ' · ' + pr.software : 'no check-in yet');
@@ -137,6 +138,7 @@
     add('Applied / listed', when(d.applied_at) + ' / ' + when(d.listed_at));
     add('Owner signed in', d.sessions + ' sessions');
     b.append(kv);
+    (d.payout || []).forEach(function (po) { if (!po.ok) b.append(payoutBox(d, po, payDd)); });
     const acts = el('div', 'admin-row admin-acts');
     if (d.state !== 'listed') acts.append(btn('Approve (list)', function () { return setState([d.id], 'listed'); }));
     if (d.state !== 'suspended') acts.append(btn('Suspend', function () { return setState([d.id], 'suspended'); }));
@@ -164,6 +166,69 @@
     d.audit.forEach(function (a) { const tr = el('tr'); td(tr, when(a.ts), 'dim'); td(tr, a.event); td(tr, a.detail); tb.append(tr); });
     t.append(tb); b.append(t);
     $('drawer').hidden = false;
+  }
+
+  // ---- payout contracts: the admin may create one for a machine and pay its network fee ----
+  let netCfg = null;
+  async function network(caip2) {
+    if (!netCfg) netCfg = await (await fetch(I.BASE + '/v1/config')).json();
+    return { cfg: netCfg, net: (netCfg.networks || []).find(function (n) { return n.caip2 === caip2; }) };
+  }
+
+  function payoutBox(d, po, payDd) {
+    const box = el('div', 'notice pay-box');
+    const msg = el('p', 'msg');
+    function say2(t, bad) { msg.textContent = t; msg.classList.toggle('error', !!bad); }
+    if (po.wallet && po.contract) {
+      box.append(el('p', '', 'Payout contract created: ' + po.contract + '. The machine switches to it by itself within about 10 minutes ' +
+        '(provider 0.6.8 or newer), then it can be listed again.'));
+      return box;
+    }
+    if (!po.wallet) {
+      box.append(el('p', '', 'Payout problem: ' + (po.note || 'unknown') + (po.note && po.note.indexOf('could not') >= 0 ? ' This is checked again every few minutes.' : '')));
+      return box;
+    }
+    box.append(el('p', '', 'No payout contract yet. This machine is paid to the plain wallet ' + po.address + ', so it is not listed ' +
+      '(a listed one is suspended). You can create its payout contract and pay the network fee yourself, about $0.01 in ETH on Base. ' +
+      'The contract pays that wallet 97.5% and the network 2.5%; nobody can change that. The machine then switches to it by itself.'));
+    const qr = el('div', 'qr'); qr.hidden = true;
+    const link = el('a', '', 'Open your wallet app'); link.hidden = true;
+    async function pay(phone) {
+      const W = window.InnernetWallet;
+      const n = await network(po.network);
+      if (!n.net || !n.net.factory) throw new Error('No payout factory on ' + po.network + ' yet.');
+      let account;
+      if (phone) {
+        say2('Preparing a QR code… scan it with your wallet app.');
+        account = await W.connectPhone(I.BASE, n.cfg, n.net, function (uri, svg) {
+          qr.innerHTML = svg; qr.hidden = false; link.href = uri; link.hidden = false;
+          say2('Scan with your wallet app and approve the connection, then approve the transaction.');
+        });
+      } else {
+        account = await W.connect(n.net.chain_id);
+      }
+      qr.hidden = true; link.hidden = true;
+      const split = await W.findOrCreate(n.net.factory, account, po.address, function (t) {
+        say2(t === 'Confirm in your wallet…' ? 'Approve the transaction in your wallet (network fee about $0.01)…' : t);
+      });
+      say2('Payout contract ready: ' + split + '. Paid by ' + account + '. The machine switches to it within about 10 minutes.');
+    }
+    function run(phone) { return pay(phone).catch(function (err) { qr.hidden = true; link.hidden = true; say2(window.InnernetWallet.friendly(err), true); }); }
+    const row = el('div', 'admin-row');
+    const b1 = el('button', 'btn btn-sm', 'Pay the fee with my phone wallet (QR)'); b1.type = 'button';
+    const b2 = el('button', 'btn btn-sm', 'Pay with a browser wallet'); b2.type = 'button';
+    b1.addEventListener('click', function () { run(true); });
+    b2.addEventListener('click', function () { run(false); });
+    row.append(b1, b2);
+    box.append(row, qr, link, msg);
+    // The payout address itself starts the phone payment.
+    if (payDd) {
+      payDd.textContent = '';
+      const a = el('button', 'linkish mono', po.address + ' · no payout contract: pay the fee'); a.type = 'button';
+      a.addEventListener('click', function () { box.scrollIntoView({ behavior: 'smooth', block: 'center' }); run(true); });
+      payDd.append(a);
+    }
+    return box;
   }
 
   // ---- owners, setups, admins, audit ----

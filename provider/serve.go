@@ -102,6 +102,7 @@ func cmdServe(args []string) error {
 	}()
 	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
 		go s.presenceLoop(registryURL(c))
+		go s.adoptLoop(registryURL(c))
 	}
 	addr := orDefault(*listen, fmt.Sprintf(":%d", c.Port))
 	log.Printf("innernet-provider %s serving STO-1 over ST81 and HTTP on %s (provider %s)", version, addr, providerID(priv))
