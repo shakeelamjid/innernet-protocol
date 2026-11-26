@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Machine code (permanent until rekey); setup codes that keep working
+
+- Each machine has a machine code (16 characters, `XXXX-XXXX-XXXX-XXXX`) that stays the same until the owner runs `innernet-provider rekey`. `start` shows it; `innernet-provider code` shows it again. The machine registers only its SHA-256, in a request signed by the machine key (`pairing-set` intent), so only the machine can set or change it.
+- On the claim page the machine code opens the machine's waiting setup, or, when the machine is not waiting, adds a passkey and opens the dashboard. It cannot sign or change anything by itself: listings and payouts are still signed and confirmed on the machine.
+- `rekey` replaces the code; the old one stops working at once.
+
+- The terminal waits up to 24 hours (it gave up after 31 minutes, which expired the code). The registry renews a code every time its terminal checks in, up to 24 hours after it was made, and expires it 30 minutes after the terminal stops.
+- Running `start` again replaces every older code of that machine; the website says plainly whether a code is unknown, replaced by a newer one, expired, or already used.
+- Signing in with the machine's passkey opens a waiting setup without any code; the claim page links to it.
+- `provider/LATEST` is `provider-v0.5.2`.
+
 ### Terms for both sides; storage holdback
 
 - Provider terms and client terms (drafts, to be reviewed by a lawyer), published at `/registry/terms` and `/registry/v1/terms`, each identified by the SHA-256 of its text.

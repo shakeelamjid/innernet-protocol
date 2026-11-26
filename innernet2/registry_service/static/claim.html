@@ -14,14 +14,15 @@
   <section class="center">
     <div class="panel frame">
       <h1>Connect your machine</h1>
-      <p>Enter the code your terminal shows. Then add a passkey so you can manage this machine from any device. If this device already has one for this machine, you just confirm it.</p>
-      <label for="code">Code from your terminal</label>
-      <input id="code" class="code-input" maxlength="9" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX">
+      <p>Enter your machine code (it stays the same until you change it with <code>innernet-provider rekey</code>; see it any time with <code>innernet-provider code</code>). Then add a passkey so you can manage this machine from any device. If this device already has one for this machine, you just confirm it.</p>
+      <label for="code">Machine code</label>
+      <input id="code" class="code-input" maxlength="19" autocomplete="off" autocapitalize="characters" spellcheck="false" placeholder="XXXX-XXXX">
       <label for="pk-name">Name for this passkey</label>
       <input id="pk-name" maxlength="40" autocomplete="off" placeholder="e.g. Laptop, Phone">
       <button class="btn btn-light" id="go">Continue</button>
       <p class="msg" id="msg" role="status"></p>
-      <p class="note">Do not have a code? On the machine, run <code>innernet-provider start</code>.</p>
+      <p class="note">Do not have a code? On the machine, run <code>innernet-provider start</code>. The code keeps working while that terminal stays open.</p>
+      <p class="note">This machine already has a passkey? <a href="dashboard">Sign in with it</a> instead: no code needed while <code>innernet-provider start</code> is waiting.</p>
     </div>
   </section>
 </body>

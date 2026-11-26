@@ -1,6 +1,9 @@
 package main
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseMacGPUs(t *testing.T) {
 	out := `{"SPDisplaysDataType":[{"_name":"Apple M1 Pro","sppci_model":"Apple M1 Pro","sppci_cores":"16",
@@ -61,5 +64,17 @@ func TestGPUDescriptor(t *testing.T) {
 	}
 	if e["limits"].(map[string]any)["GPU-1"].(map[string]any)["max_gpus"] != 1 {
 		t.Fatalf("%v", e["limits"])
+	}
+}
+
+func TestMachineCodeFormat(t *testing.T) {
+	a, b := newMachineCode(), newMachineCode()
+	if len(a) != 19 || a == b || a[4] != '-' || a[9] != '-' || a[14] != '-' {
+		t.Fatal(a, b)
+	}
+	for _, r := range a {
+		if r != '-' && !strings.ContainsRune(codeAlphabet, r) {
+			t.Fatal(a)
+		}
 	}
 }

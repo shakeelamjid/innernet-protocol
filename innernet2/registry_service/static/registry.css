@@ -145,7 +145,7 @@ strong { color: var(--text); font-weight: 500; }
 #gpu-block { margin-top: 4px; }
 .offer .toggle strong { display: block; color: var(--text); }
 .offer .fields { padding-left: 28px; }
-.code-input { font-family: var(--mono) !important; font-size: 1.4rem !important; letter-spacing: .12em; text-align: center; height: 52px !important; }
+.code-input { font-family: var(--mono) !important; font-size: clamp(.95rem, 3.6vw, 1.3rem) !important; letter-spacing: .08em; text-align: center; height: 52px !important; }
 .offer .group .msg { padding-left: 32px; margin-top: 10px; }
 .terms h2 { font-size: 1.25rem; margin-bottom: 12px; }
 .terms h3 { font-size: 1rem; margin-top: 22px; }

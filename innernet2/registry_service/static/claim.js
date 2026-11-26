@@ -5,15 +5,17 @@
   const fromLink = new URLSearchParams(location.hash.slice(1)).get('code');
   if (fromLink) { $('code').value = fromLink.toUpperCase(); history.replaceState(null, '', location.pathname); }
   $('code').addEventListener('input', function (e) {
-    let v = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
-    if (v.length > 4) v = v.slice(0, 4) + '-' + v.slice(4);
-    e.target.value = v;
+    // 8 characters: a one-time code; 16: the machine code (permanent until rekeyed)
+    const raw = e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 16);
+    e.target.value = raw.match(/.{1,4}/g) ? raw.match(/.{1,4}/g).join('-') : '';
   });
   function say(t, err) { $('msg').textContent = t; $('msg').classList.toggle('error', !!err); }
   if (!I.supported()) { $('go').disabled = true; say('This browser does not support passkeys. Use a current browser.', true); return; }
   $('go').addEventListener('click', async function () {
     const code = $('code').value.trim();
-    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}$/.test(code)) { say('Enter the 8-character code, like K7QM-4XPA.', true); return; }
+    if (!/^[A-Z0-9]{4}-[A-Z0-9]{4}(-[A-Z0-9]{4}-[A-Z0-9]{4})?$/.test(code)) {
+      say('Enter the code from your terminal: the machine code (16 characters) or a one-time code (8).', true); return;
+    }
     $('go').disabled = true;
     say('Waiting for your device…');
     try {
@@ -27,9 +29,10 @@
         return;
       }
       let done = false;
+      const next = start.setup === false ? '/dashboard' : '/setup';
       try {
         const credential = await I.create(start.options);
-        await I.api('/api/claim/verify', { flow: start.flow, credential: credential, name: $('pk-name').value });
+        await I.api('/api/claim/verify', { flow: start.flow, credential: credential, name: $('pk-name').value, pair: !!start.pair });
         done = true;
       } catch (err) {
         // This device already holds a passkey for this machine: sign in with it instead.
@@ -39,7 +42,7 @@
         await I.api('/api/claim/verify', { login: true, flow: start.login_flow, credential: assertion });
         done = true;
       }
-      if (done) location.replace(I.BASE + '/setup');
+      if (done) location.replace(I.BASE + next);
     } catch (err) {
       say(I.friendly(err), true);
       $('go').disabled = false;

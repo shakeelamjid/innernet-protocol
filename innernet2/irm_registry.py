@@ -587,7 +587,8 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
 INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
 INTENT_VERSION = "REG-1-INTENT"
 INTENTS = {"pause", "resume", "leave", "reinstate"}
-MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove"}
+MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set"}
+_TARGETED = {"passkey-remove", "pairing-set"}   # pairing-set: target is SHA-256 hex of the machine code
 
 
 def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, str, str]:
@@ -597,9 +598,11 @@ def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -
     _exact_keys(p, {"version", "provider", "action", "nonce", "issued_at"}, {"target"}, label="intent payload")
     if p["version"] != INTENT_VERSION or p["action"] not in MACHINE_ACTIONS:
         raise BulkError("unsupported intent")
-    if ("target" in p) != (p["action"] == "passkey-remove") or ("target" in p and (
+    if ("target" in p) != (p["action"] in _TARGETED) or ("target" in p and (
             not isinstance(p["target"], str) or not 1 <= len(p["target"]) <= 128)):
         raise BulkError("invalid intent target")
+    if p["action"] == "pairing-set" and not re.match(r"^[0-9a-f]{64}$", p["target"]):
+        raise BulkError("pairing-set needs the SHA-256 of the machine code")
     issued = _int(p["issued_at"], 0, 2**53, "intent issued_at")
     instant = int(time.time()) if now is None else now
     if not instant - max_age <= issued <= instant + FUTURE_SKEW:

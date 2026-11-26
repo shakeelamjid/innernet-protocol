@@ -44,7 +44,7 @@ def test_pipeline_round_trip_any_four_shards_and_mixing_moves_cells():
     plain = os.urandom(64 * 1024)
     cipher = encrypt_chunk(root, obj, 7, plain)
     mixed = interleave(cipher, _mix_key(root, 7), CELL)
-    assert mixed[:CELL] != cipher[:CELL]                          # cells really moved
+    assert mixed != cipher                                        # cells really moved (any one cell may stay put)
     shards = codec.encode(mixed, K, N)
     for drop in [(0, 1), (2, 5), (4, 5)]:
         some = {i: s for i, s in enumerate(shards) if i not in drop}

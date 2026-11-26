@@ -212,13 +212,26 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		fmt.Println("    If that browser tab is still open and signed in, just finish there: " + bold(cr.SetupURL))
 		fmt.Println("    Otherwise use the code below; you will only confirm your passkey.")
 	}
-	fmt.Println("  Open this link, or go to innernetcorp.com/registry/claim and enter the code:")
-	fmt.Println()
-	fmt.Println("    " + bold(cr.URL))
-	fmt.Println()
-	fmt.Println("    Code:  " + bold(cr.Code))
-	fmt.Println()
-	fmt.Println(dim("  The code works once and expires in 30 minutes. Keep this terminal open."))
+	claimURL := strings.TrimSuffix(strings.TrimRight(reg, "/"), "/v1") + "/claim"
+	if code, err := ensureMachineCode(reg, priv); err == nil {
+		// The machine code is the one to remember: it stays the same until innernet-provider rekey.
+		fmt.Println("  Open " + bold(claimURL) + " and enter your machine code:")
+		fmt.Println()
+		fmt.Println("    Machine code:  " + bold(code))
+		fmt.Println()
+		fmt.Println(dim("  It stays the same until you run innernet-provider rekey (see it again: innernet-provider code)."))
+		fmt.Println(dim("  Keep it private. Every listing and payout change is still confirmed here, on this machine."))
+		cr.URL = claimURL
+	} else {
+		fmt.Println(dim("  (Machine code not available: " + err.Error() + "; using a one-time code.)"))
+		fmt.Println("  Open this link, or go to " + claimURL + " and enter the code:")
+		fmt.Println()
+		fmt.Println("    " + bold(cr.URL))
+		fmt.Println()
+		fmt.Println("    Code:  " + bold(cr.Code))
+		fmt.Println()
+		fmt.Println(dim("  The code works as long as this terminal stays open (up to 24 hours)."))
+	}
 	fmt.Println()
 	if n := len(cr.Passkeys); n > 0 {
 		names := make([]string, n)
@@ -278,7 +291,7 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 }
 
 func waitForOffer(reg, poll string) (*webOffer, error) {
-	deadline := time.Now().Add(31 * time.Minute)
+	deadline := time.Now().Add(24 * time.Hour) // the registry keeps the code alive while we poll
 	last := ""
 	for time.Now().Before(deadline) {
 		req, _ := http.NewRequest("GET", reg+"/connect/status", nil)

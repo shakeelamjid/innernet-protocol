@@ -131,6 +131,10 @@ A provider behind a home router or an internet provider's shared address (carrie
 
 A provider tries, in order: direct, its own firewall, the router (NAT-PMP, UPnP), the ST81 relay, the HTTPS tunnel. After a network change it re-tests and switches to a relay by itself when it is no longer reachable.
 
+### 3.4c Machine code (draft)
+
+A provider machine keeps a machine code (16 characters from `ABCDEFGHJKLMNPQRSTUVWXYZ23456789`, about 80 bits, written `XXXX-XXXX-XXXX-XXXX`) until its owner replaces it. The machine sends only `SHA-256(code)` to the registry as a `REG-1-INTENT` with action `pairing-set` and that hash as `target`, signed by the provider key; a new `pairing-set` replaces the old hash at once. Entered on the claim page, the code opens the machine's waiting setup (`/v1/connect`), or, when none is waiting, adds a WebAuthn passkey and opens the dashboard. The code grants web access only; descriptors and payout changes are still signed and confirmed on the machine.
+
 ### 3.5 Registry key rotation
 
 The registry signs with one active key and pins one offline backup key in every client build. A rotation is a document signed by **both** the old key and the backup key, naming the new key. Clients that see a valid rotation replace the old key and keep the backup. If the active key is compromised, the backup alone MAY sign a rotation; clients MUST then require it to carry a `sequence` higher than any seen.

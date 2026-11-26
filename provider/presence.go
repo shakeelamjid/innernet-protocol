@@ -9,6 +9,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
@@ -194,6 +195,11 @@ func machineRequest(action, target string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	return signedIntent(registryURL(c), priv, action, target)
+}
+
+// signedIntent sends an action signed by the machine key (it works before the machine is listed).
+func signedIntent(registry string, priv ed25519.PrivateKey, action, target string) (map[string]any, error) {
 	nb := make([]byte, 16)
 	_, _ = rand.Read(nb)
 	payload := map[string]any{"version": "REG-1-INTENT", "provider": providerID(priv), "action": action,
@@ -206,7 +212,7 @@ func machineRequest(action, target string) (map[string]any, error) {
 		return nil, err
 	}
 	raw, _ := json.Marshal(map[string]any{"payload": payload, "signature": sig})
-	resp, err := httpClient.Post(registryURL(c)+"/providers/"+providerID(priv)+"/intent", "application/json", bytes.NewReader(raw))
+	resp, err := httpClient.Post(strings.TrimRight(registry, "/")+"/providers/"+providerID(priv)+"/intent", "application/json", bytes.NewReader(raw))
 	if err != nil {
 		return nil, fmt.Errorf("could not reach the registry: %v", err)
 	}

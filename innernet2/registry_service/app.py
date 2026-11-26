@@ -87,7 +87,8 @@ def pct(ratio: float | None) -> str:
 
 
 CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"   # no 0/O, 1/I
-CLAIM_TTL = 30 * 60
+CLAIM_TTL = 30 * 60          # a code lives 30 minutes after the machine last checked in…
+CLAIM_MAX = 24 * 3600        # …and never more than a day after it was made
 
 
 def new_claim_code() -> str:
@@ -97,6 +98,8 @@ def new_claim_code() -> str:
 
 def norm_code(code: str) -> str:
     c = "".join(ch for ch in str(code).upper() if ch in CODE_ALPHABET)
+    if len(c) == 16:                       # the machine code: permanent until the machine rekeys
+        return "-".join(c[i:i + 4] for i in range(0, 16, 4))
     return c[:4] + "-" + c[4:] if len(c) == 8 else ""
 
 
@@ -464,6 +467,14 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if action == "passkey-list":
             store.audit(pid, "passkeys-listed", f"machine, nonce {nonce}", ip)
             return {"passkeys": passkey_list(pid)}
+        if action == "pairing-set":
+            target = reg.intent_target(record)
+            now = int(time.time())
+            with store.tx() as db:
+                db.execute("DELETE FROM pairing WHERE provider=? OR code_hash=?", (pid, target))
+                db.execute("INSERT INTO pairing(provider, code_hash, set_at) VALUES (?,?,?)", (pid, target, now))
+            store.audit(pid, "machine-code-set", f"nonce {nonce}", ip)
+            return {"ok": True}
         if action == "passkey-remove":
             target = reg.intent_target(record)
             row = store.one("SELECT * FROM passkeys WHERE provider=? AND (cred_id=? OR name=?) ORDER BY created_at LIMIT 1",
@@ -517,8 +528,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         status, draft, claimed_at = "waiting", None, None
         if prev is not None:
             status, draft, claimed_at = "claimed", prev["draft"], prev["claimed_at"]
-            store.x("UPDATE claims SET status='superseded' WHERE provider=? AND status IN ('waiting','claimed','submitted')",
-                    (pid,))
+        # Only the newest terminal is listening, so only its code works; older ones say so.
+        store.x("UPDATE claims SET status='superseded' WHERE provider=? AND status IN ('waiting','claimed','submitted')",
+                (pid,))
         store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status, draft, "
                 "claimed_at) VALUES (?,?,?,?,?,?,?,?,?)",
                 (token_hash(code), token_hash(poll), pid, json.dumps(detected), now, now + CLAIM_TTL, status, draft,
@@ -544,8 +556,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     def connect_status(request: Request):
         c = claim_by_poll(request)
         status = c["status"]
-        if status in ("waiting", "claimed") and c["expires_at"] < int(time.time()):
+        now = int(time.time())
+        if status in ("waiting", "claimed") and c["expires_at"] < now:
             status = "expired"
+        elif status in ("waiting", "claimed", "submitted"):
+            # The terminal is still waiting: keep its code alive (up to a day after it was made).
+            store.x("UPDATE claims SET expires_at=? WHERE code_hash=?",
+                    (min(now + CLAIM_TTL, c["created_at"] + CLAIM_MAX), c["code_hash"]))
         out = {"status": status}
         if c["draft"] and status == "submitted":
             out["offer"] = json.loads(c["draft"])
@@ -779,10 +796,37 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return response
 
     # ---- claim a machine and set it up on the web -------------------------
+    def pairing_claim(code: str) -> dict:
+        """The machine code opens this machine's waiting setup, or (machine not waiting) a short sign-in
+        that adds a passkey for the dashboard. The machine sets and replaces the code itself."""
+        pr = store.one("SELECT provider FROM pairing WHERE code_hash=?", (token_hash(code),))
+        if pr is None:
+            raise HTTPException(404, "No machine has this code. If you ran innernet-provider rekey, use the new code.")
+        pid = pr["provider"]
+        c = open_claim(pid)
+        if c is None:
+            now = int(time.time())
+            hsh = token_hash(secrets.token_urlsafe(24))
+            store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status) "
+                    "VALUES (?,?,?,?,?,?,'pairing')", (hsh, token_hash(secrets.token_urlsafe(24)), pid, "{}", now, now + 600))
+            c = store.one("SELECT * FROM claims WHERE code_hash=?", (hsh,))
+        return dict(c, via_pair=True)
+
     def live_claim(code: str, allow_claimed: bool = False) -> dict:
+        if len(norm_code(code)) == 19:
+            return pairing_claim(norm_code(code))
         row = store.one("SELECT * FROM claims WHERE code_hash=?", (token_hash(norm_code(code)),))
-        if row is None or row["expires_at"] < int(time.time()) or row["status"] == "superseded":
-            raise HTTPException(404, "This code is wrong or has expired. Run innernet-provider start again for a new one.")
+        if row is None:
+            raise HTTPException(404, "No machine has this code. Check it against your terminal "
+                                     "(codes never use O, 0, I or 1).")
+        if row["status"] == "superseded":
+            raise HTTPException(410, "This machine made a newer code (innernet-provider start ran again). "
+                                     "Use the code your terminal shows now. You can also sign in with this machine's passkey.")
+        if row["status"] == "done":
+            raise HTTPException(409, "This code already finished setting up the machine. Sign in to your dashboard to change it.")
+        if row["expires_at"] < int(time.time()):
+            raise HTTPException(410, "This code expired: the terminal that made it stopped waiting. "
+                                     "Run innernet-provider start again, or sign in with this machine's passkey.")
         if row["status"] == "waiting" or (allow_claimed and row["status"] in ("claimed", "submitted")):
             return dict(row)
         raise HTTPException(409, "This code was already used.")
@@ -794,7 +838,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         c = live_claim((await body_json(request)).get("code", ""), allow_claimed=True)
         pid = c["provider"]
         detected = json.loads(c["detected"])
-        if c["status"] != "waiting":
+        pair = bool(c.get("via_pair"))
+        if c["status"] != "waiting" and not pair:
             # Already claimed (the tab was closed): sign in again with a passkey of this machine.
             rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))
             login = generate_authentication_options(
@@ -812,9 +857,10 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             user_name=name, user_display_name=f"{name} ({pid[:8]})", exclude_credentials=existing,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.PREFERRED))
-        flow = new_flow("claim", options.challenge, pid, None)
+        flow = new_flow("pair" if pair else "claim", options.challenge, pid, None)
         store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], flow))
-        out = {"flow": flow, "options": json.loads(options_to_json(options)), "name": name,
+        out = {"flow": flow, "options": json.loads(options_to_json(options)), "name": name, "pair": pair,
+               "setup": c["status"] != "pairing",
                "machine": {k: detected.get(k) for k in ("host", "os", "arch")}}
         if existing:
             # This machine already has passkeys (it was set up before). If this device holds one of them,
@@ -834,7 +880,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         data = await body_json(request)
         if data.get("login"):
             return claim_with_existing_passkey(request, data, ip)
-        f = take_flow(data.get("flow", ""), "claim")
+        pair = bool(data.get("pair"))
+        f = take_flow(data.get("flow", ""), "pair" if pair else "claim")
         try:
             v = verify_registration_response(credential=data.get("credential"), expected_challenge=f["challenge"],
                                              expected_origin=settings.origin, expected_rp_id=settings.rp_id)
@@ -842,8 +889,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(400, f"passkey was not accepted: {exc}") from None
         now = int(time.time())
         with store.tx() as db:
-            cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
-                             "AND expires_at>?", (now, f["token_hash"], now))
+            if pair:   # the machine code may also add a passkey to a setup already in progress
+                cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' WHEN 'pairing' THEN 'done' "
+                                 "ELSE status END, claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? "
+                                 "AND status IN ('waiting','claimed','submitted','pairing') AND expires_at>?", (now, f["token_hash"], now))
+            else:
+                cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
+                                 "AND expires_at>?", (now, f["token_hash"], now))
             if cur.rowcount != 1:
                 raise HTTPException(409, "This code was already used or has expired.")
             db.execute("INSERT INTO passkeys(cred_id, provider, public_key, sign_count, name, created_at) VALUES (?,?,?,?,?,?)",
@@ -871,8 +923,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(401, f"passkey was not accepted: {exc}") from None
         now = int(time.time())
         with store.tx() as db:
-            cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' ELSE status END, "
-                             "claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? AND status IN ('waiting','claimed','submitted') "
+            cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' WHEN 'pairing' THEN 'done' "
+                             "ELSE status END, claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? "
+                             "AND status IN ('waiting','claimed','submitted','pairing') "
                              "AND expires_at>?", (now, f["token_hash"], now))
             if cur.rowcount != 1:
                 raise HTTPException(409, "This code has expired. Run innernet-provider start again.")
@@ -883,8 +936,10 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         return response
 
     def open_claim(pid: str) -> dict | None:
-        row = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('claimed','submitted') "
-                        "ORDER BY created_at DESC LIMIT 1", (pid,))
+        # Signed in with this machine's passkey: any live setup of the machine is yours, even one
+        # whose code was never entered.
+        row = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('waiting','claimed','submitted') "
+                        "AND expires_at>? ORDER BY created_at DESC LIMIT 1", (pid, int(time.time())))
         return dict(row) if row else None
 
     @app.get(P + "/api/setup")
@@ -927,8 +982,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         s = need_session(request)
         pid = s["provider"]
         p = store.provider(pid)
-        if p is None:
-            raise HTTPException(409, "setup")
+        if p is None or open_claim(pid):
+            raise HTTPException(409, "setup")    # not set up yet, or the machine is waiting for setup now
         now = int(time.time())
         e30 = chain.earnings(store, pid, settings.fee_bps, since=now - 30 * DAY)
         eall = chain.earnings(store, pid, settings.fee_bps, since=0)

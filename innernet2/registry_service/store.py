@@ -57,6 +57,9 @@ CREATE TABLE IF NOT EXISTS chain_cursor (
   network TEXT NOT NULL, payto TEXT NOT NULL, next_block INTEGER NOT NULL, PRIMARY KEY (network, payto)
 );
 CREATE TABLE IF NOT EXISTS meta (k TEXT PRIMARY KEY, v TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS pairing (           -- the machine code: permanent until the machine rekeys
+  provider TEXT PRIMARY KEY, code_hash TEXT NOT NULL UNIQUE, set_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS claims (
   code_hash TEXT PRIMARY KEY, poll_hash TEXT NOT NULL UNIQUE, provider TEXT NOT NULL, detected TEXT NOT NULL,
   created_at INTEGER NOT NULL, expires_at INTEGER NOT NULL,

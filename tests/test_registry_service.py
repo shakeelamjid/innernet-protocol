@@ -637,15 +637,17 @@ def test_go_start_web_setup_end_to_end(tmp_path):
             line = proc.stdout.readline()
             assert line, "".join(lines)
             lines.append(line)
-            if line.strip().startswith("Code:"):
+            if line.strip().startswith(("Code:", "Machine code:")):
                 code = line.split(":", 1)[1].strip()
         out = "".join(lines)
         assert "Internet address" in out and "127.0.0.1" in out and "reachable from the internet" in out   # real dial-back
         assert "[1/6]" in out and "Machine key" in out and "\x1b[" not in out        # steps; no colour codes in a pipe
         web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
         auth = SoftAuthenticator()
+        assert len(code) == 19                                          # the permanent machine code
         opt = web.post(P + "/api/claim/options", json={"code": code}).json()
-        assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])}).status_code == 200
+        assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                       "pair": opt.get("pair", False)}).status_code == 200
         det = web.get(P + "/api/setup").json()["detected"]
         assert det["reachable"] is True and det["host"] == "127.0.0.1" and det["region"] == "asia-south" and det["cpus"] >= 1
         assert det["class"] in ("server", "desktop", "laptop") and det["tz"] == "Asia/Karachi"
@@ -934,4 +936,78 @@ def test_setup_resumes_after_closing_the_terminal_or_the_tab(env):
     assert client.get(P + "/v1/connect/status", headers={"X-Poll-Token": second["poll"]}).json()["status"] == "claimed"
     assert client.get(P + "/v1/connect/status", headers={"X-Poll-Token": first["poll"]}).json()["status"] == "superseded"
     assert client.get(P + "/api/setup").status_code == 200                  # the open tab keeps working
-    assert client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).status_code == 404
+    assert client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).status_code == 410
+
+
+def test_claim_code_stays_alive_while_the_terminal_waits_and_says_why_it_fails(env):
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 50,
+           "cpus": 4, "memory_mib": 8192, "os": "darwin", "arch": "arm64", "reachable": True, "version": "0.5.1"}
+    first = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    poll = {"X-Poll-Token": first["poll"]}
+    # 40 minutes pass while the terminal keeps polling: the code is still good.
+    store.x("UPDATE claims SET expires_at=?, created_at=? WHERE poll_hash IS NOT NULL",
+            (int(time.time()) + 60, int(time.time()) - 40 * 60))
+    assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "waiting"
+    exp = store.one("SELECT expires_at FROM claims")["expires_at"]
+    assert exp > int(time.time()) + 25 * 60
+    r = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H)
+    assert r.status_code == 200
+    # Running start again makes a new code; the old one says so plainly.
+    second = client.post(P + "/v1/connect", json=connect_record(key, det, nonce="cd" * 16)).json()
+    r = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H)
+    assert r.status_code == 410 and "newer code" in r.json()["detail"]
+    r = client.post(P + "/api/claim/options", json={"code": "ZZZZ-ZZZZ"}, headers=H)
+    assert r.status_code == 404 and "No machine has this code" in r.json()["detail"]
+    # The terminal stopped polling long ago: expired, with the reason.
+    store.x("UPDATE claims SET expires_at=? WHERE status='waiting'", (int(time.time()) - 5,))
+    r = client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H)
+    assert r.status_code == 410 and "stopped waiting" in r.json()["detail"]
+
+
+def test_machine_code_is_permanent_until_rekey(env):
+    import hashlib
+    import secrets
+    import innernet2.irm_registry as r
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    pid = key.public_key().public_bytes_raw().hex()
+
+    def intent(action, target=None, nonce=None):
+        p = {"version": "REG-1-INTENT", "provider": pid, "action": action, "nonce": nonce or secrets.token_hex(16),
+             "issued_at": int(time.time())}
+        if target:
+            p["target"] = target
+        return client.post(P + f"/v1/providers/{pid}/intent", json={"payload": p, "signature": key.sign(r.INTENT_DOMAIN + r.canonical(p)).hex()})
+
+    code = "ABCD-EFGH-JKLM-NPQR"
+    assert intent("pairing-set", hashlib.sha256(code.encode()).hexdigest()).status_code == 200
+    other = Ed25519PrivateKey.generate()                  # someone else cannot set this machine's code
+    p = {"version": "REG-1-INTENT", "provider": pid, "action": "pairing-set", "nonce": "cd" * 16,
+         "issued_at": int(time.time()), "target": "00" * 32}
+    bad = client.post(P + f"/v1/providers/{pid}/intent", json={"payload": p, "signature": other.sign(r.INTENT_DOMAIN + r.canonical(p)).hex()})
+    assert bad.status_code == 422
+
+    # Machine not running start: the code adds a passkey and opens the dashboard (no setup page).
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": code.lower().replace("-", "")}, headers=H).json()
+    assert opt["pair"] is True and opt["setup"] is False
+    v = client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                     "name": "Phone", "pair": True}, headers=H)
+    assert v.status_code == 200
+    assert store.one("SELECT name FROM passkeys WHERE provider=?", (pid,))["name"] == "Phone"
+    # Days later the same code still works, now while the machine waits for setup.
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 50,
+           "cpus": 4, "memory_mib": 8192, "os": "darwin", "arch": "arm64", "reachable": True, "version": "0.5.2"}
+    client.post(P + "/v1/connect", json=connect_record(key, det))
+    client.cookies.clear()
+    opt = client.post(P + "/api/claim/options", json={"code": code}, headers=H).json()
+    assert opt["pair"] is True and opt["setup"] is True and "login_flow" in opt      # the passkey exists: confirm it
+    v = client.post(P + "/api/claim/verify", json={"login": True, "flow": opt["login_flow"],
+                                                     "credential": auth.get(opt["login_options"])}, headers=H)
+    assert v.status_code == 200 and client.get(P + "/api/setup").json()["detected"]["host"] == "203.0.113.7"
+    # Rekey: the old code stops working at once.
+    assert intent("pairing-set", hashlib.sha256(b"WXYZ-WXYZ-WXYZ-WXYZ").hexdigest()).status_code == 200
+    r2 = client.post(P + "/api/claim/options", json={"code": code}, headers=H)
+    assert r2.status_code == 404 and "rekey" in r2.json()["detail"]
