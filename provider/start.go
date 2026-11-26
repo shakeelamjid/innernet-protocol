@@ -48,6 +48,7 @@ func cmdStart(args []string) error {
 	if ms, err := strconv.Atoi(os.Getenv("INNERNET_POLL_MS")); err == nil && ms > 0 {
 		pollEvery = time.Duration(ms) * time.Millisecond
 	}
+	updateBeforeStart()
 	banner("provider setup", "base-sepolia")
 	fmt.Println(dim("  Test network: no real money moves yet. Your key never leaves this machine."))
 	fmt.Println()

@@ -57,6 +57,8 @@ func main() {
 		err = cmdPasskeys(args)
 	case "relay":
 		err = cmdRelay(args)
+	case "update":
+		err = cmdUpdate(args)
 	case "st81-echo", "st81-ping":
 		err = cmdST81Debug(cmd, args)
 	case "uninstall":
@@ -113,6 +115,8 @@ Registry
   passkeys [remove N]  list the passkeys that open your dashboard; remove a lost one
 
 Other
+  update [--check]     install the newest release (start and serve also update by themselves;
+                       INNERNET_NO_UPDATE=1 turns that off)
   uninstall [--all]    remove the background service and this program (--all: also the key)
   version, help
 

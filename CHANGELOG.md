@@ -2,6 +2,12 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Provider updates itself; releases publish themselves
+
+- `start` checks for a newer release first and restarts into it; `serve` checks every 6 hours and restarts into a new release (in place on Linux and macOS, so systemd and launchd keep tracking it; on Windows a new process takes over the port). Downloads must match the release's `SHA256SUMS`. New `update [--check]`; `INNERNET_NO_UPDATE=1` turns it off; development builds never update.
+- The release workflow now runs on uploads to `main` that touch `provider/`: when `provider/LATEST` names a version with no release, it tests, builds all six systems and publishes the release. No manual release step.
+- `provider/LATEST` is `provider-v0.4.2` (includes the GPU category).
+
 ### GPU category (GPU-1), wallet guidance
 
 - `start` detects GPUs on macOS, Linux and Windows with the system's own tools (model, memory, cores, CUDA/Metal/ROCm), shows them in step 1 and reports them to the registry.

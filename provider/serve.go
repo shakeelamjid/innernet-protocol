@@ -90,10 +90,11 @@ func cmdServe(args []string) error {
 	log.Printf("innernet-provider %s serving STO-1 over ST81 and HTTP on %s (provider %s)", version, addr, providerID(priv))
 	srv := &http.Server{Handler: s, ReadHeaderTimeout: 10 * time.Second, ReadTimeout: 60 * time.Second,
 		WriteTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
-	ln, err := net.Listen("tcp", addr)
+	ln, err := listenRetry(addr)
 	if err != nil {
 		return err
 	}
+	go updateLoop(func() { _ = ln.Close() })
 	return s.serveBoth(ln, srv)
 }
 
@@ -485,4 +486,17 @@ func keepPortOpen(port int) {
 		}
 		time.Sleep(20 * time.Minute)
 	}
+}
+
+// listenRetry waits up to 15 s for the port: after an update on Windows the old process may still hold it.
+func listenRetry(addr string) (net.Listener, error) {
+	var err error
+	for i := 0; i < 15; i++ {
+		var ln net.Listener
+		if ln, err = net.Listen("tcp", addr); err == nil {
+			return ln, nil
+		}
+		time.Sleep(time.Second)
+	}
+	return nil, err
 }

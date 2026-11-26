@@ -131,4 +131,8 @@ Never put the contents of `identity.key`, a wallet seed phrase or any private ke
 
 Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_REGISTRY_SERVICE.md`); until it is deployed, `apply` keeps your signed form and tells you so. `serve` implements storage (STO-1). Relay (RLY-1) and compute (CMP-1) serving follow; until then those offers are listed but not served.
 
+**Updates.** Releases update installed machines by themselves. `start` checks first and restarts into the newest release before it does anything; `serve` checks every 6 hours and restarts into a new release (on Linux and macOS in place, so the background service keeps running). The program is downloaded from the GitHub release named in `provider/LATEST` and must match that release's `SHA256SUMS`, or nothing changes. `innernet-provider update` does it by hand, `update --check` only looks; `INNERNET_NO_UPDATE=1` turns automatic updates off. Development builds never update themselves.
+
+For maintainers: a release is built and published by itself when `provider/LATEST` names a version that has no release yet, so bump it (e.g. `provider-v0.4.3`) in the same upload as the provider changes.
+
 **GPUs.** `start` reports the machine's GPUs (model, memory, cores, and whether CUDA, Metal or ROCm can use them). The setup page offers the best one for rent per GPU-hour, with the market price for that model; in the terminal, `init --gpus N --price-gpu 0.25` or the interactive questions do the same. GPU listings show supply and price; renting GPU time opens when GPU jobs launch. A GPU shows as "display only" when no compute driver is installed (for NVIDIA, install the driver that provides `nvidia-smi`).
