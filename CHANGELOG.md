@@ -2,6 +2,15 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### GPU jobs on WebGPU (llama.cpp removed)
+
+- GPU-1 is now GPU jobs, like CPU jobs: the client sends a JavaScript/TypeScript module that uses WebGPU, with its input; the provider runs it in Deno with no permissions (no files, network, environment or other programs), a time limit and a memory limit, and returns the output with a signed receipt, billed per GPU-hour by the second. Any WebGPU workload fits (AI via ONNX Runtime Web/Transformers.js/WebLLM, image processing, simulation, maths). `/gpu/v1/jobs`; large programs by URL and SHA-256.
+- llama.cpp and GPU sessions (`/gpu/v1/sessions`) are removed. Deno comes from PATH (`brew install deno`) or is downloaded and checked against GitHub's SHA-256, in the background when the machine offers GPU.
+- GPU detection: Intel and AMD GPUs count too (WebGPU runs on Metal, Vulkan and DirectX); only a card without a working driver is not offered. New `api` values `vulkan`, `directx`.
+- Python client: `Provider.run_gpu_job` replaces `gpu_start`/`gpu_chat`/`gpu_end`.
+- Tests run real WebGPU compute (a shader doubling numbers) and check that files, network, environment and programs are blocked.
+- `provider/LATEST` is `provider-v0.6.0`.
+
 ### Machine code (permanent until rekey); setup codes that keep working
 
 - Each machine has a machine code (16 characters, `XXXX-XXXX-XXXX-XXXX`) that stays the same until the owner runs `innernet-provider rekey`. `start` shows it; `innernet-provider code` shows it again. The machine registers only its SHA-256, in a request signed by the machine key (`pairing-set` intent), so only the machine can set or change it.

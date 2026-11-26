@@ -33,7 +33,7 @@ DESCRIPTOR_VERSION = "REG-1-DESCRIPTOR"
 TICKET_VERSION = "PAY-1-TICKET"
 
 SERVICES = frozenset({"STO-1", "RLY-1", "CMP-1", "GPU-1"})
-GPU_APIS = frozenset({"cuda", "metal", "rocm", "oneapi", "none"})
+GPU_APIS = frozenset({"cuda", "metal", "vulkan", "directx", "rocm", "oneapi", "none"})
 _HWTEXT = re.compile(r"^[A-Za-z0-9 ()._+/,-]{1,80}$")
 ASSETS = frozenset({"USDC"})
 MAX_SEQUENCE = 2**63 - 1

@@ -217,7 +217,7 @@ func cmdInit(args []string) error {
 	gpuN := fs.Int("gpus", 0, "GPUs to offer (0 = none); the model is detected")
 	acceptTerms := fs.Bool("accept-terms", false, "agree to the current provider terms (read them first: innernet-provider terms)")
 	reserveGiB := fs.Int("reserve-gib", -1, "memory compute never uses, kept for you (default 4, servers 1)")
-	fs.IntVar(&c.PerClient, "per-client", 2, "CPU jobs and GPU sessions one client may run at once")
+	fs.IntVar(&c.PerClient, "per-client", 2, "CPU and GPU jobs one client may run at once")
 	pg := fs.String("price-gpu", c.Prices["GPU-1"], "USDC per GPU-hour")
 	force := fs.Bool("force", false, "overwrite an existing config (the identity key is kept)")
 	if err := fs.Parse(args); err != nil {

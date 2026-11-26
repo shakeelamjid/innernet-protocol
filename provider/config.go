@@ -58,7 +58,7 @@ type Config struct {
 	GPUVRAM    int               `json:"gpu_vram_mib,omitempty"`
 	TermsSHA   string            `json:"terms_sha256,omitempty"`        // provider terms agreed to
 	ReserveMiB int               `json:"reserve_memory_mib,omitempty"`  // memory compute never uses (for the owner)
-	PerClient  int               `json:"max_jobs_per_client,omitempty"` // running CPU jobs + GPU sessions per client
+	PerClient  int               `json:"max_jobs_per_client,omitempty"` // running CPU + GPU jobs per client
 	Prices     map[string]string `json:"prices_usdc"`
 	Created    string            `json:"created_at"`
 	PortMap    string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive

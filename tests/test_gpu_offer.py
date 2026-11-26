@@ -15,7 +15,7 @@ INTEL = {"vendor": "Intel", "model": "Intel UHD Graphics 770", "api": "none"}
 
 def test_detected_gpus_validated():
     reg.validate_gpus([L4, INTEL, {"vendor": "Apple", "model": "Apple M1 Pro", "cores": 16, "vram_mib": 16384, "api": "metal"}])
-    for bad in ([{"vendor": "NVIDIA"}], [dict(L4, api="vulkan")], [dict(L4, model="<script>")], [L4] * 17,
+    for bad in ([{"vendor": "NVIDIA"}], [dict(L4, api="opencl")], [dict(L4, model="<script>")], [L4] * 17,
                 [dict(L4, extra=1)], "L4"):
         with pytest.raises(BulkError):
             reg.validate_gpus(bad)

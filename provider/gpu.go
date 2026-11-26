@@ -12,8 +12,9 @@ import (
 	"time"
 )
 
-// gpuInfo is one graphics processor the machine found. API says what jobs could use it:
-// cuda (NVIDIA), metal (Apple), rocm (AMD), oneapi (Intel) or none (display only).
+// gpuInfo is one graphics processor the machine found. API is the native interface WebGPU jobs
+// run through: cuda (NVIDIA driver present; WebGPU uses Vulkan or DirectX on it), metal (Apple),
+// vulkan (Linux), directx (Windows), rocm/oneapi, or none (no working driver).
 type gpuInfo struct {
 	Vendor  string `json:"vendor"`
 	Model   string `json:"model"`
@@ -128,7 +129,7 @@ func parseMacGPUs(out string, memMiB int) []gpuInfo {
 		case strings.Contains(strings.ToLower(vendor), "amd") || strings.Contains(strings.ToLower(vendor), "ati"):
 			x.Vendor = "AMD"
 		case strings.Contains(strings.ToLower(vendor), "intel"):
-			x.Vendor, x.API = "Intel", "none"
+			x.Vendor = "Intel"
 		case strings.Contains(strings.ToLower(vendor), "nvidia"):
 			x.Vendor = "NVIDIA"
 		default:
@@ -184,12 +185,9 @@ func parseLspci(out string) []gpuInfo {
 		case strings.Contains(lv, "nvidia"):
 			x.Vendor = "NVIDIA" // no nvidia-smi: the driver is missing, so CUDA cannot run yet
 		case strings.Contains(lv, "amd") || strings.Contains(lv, "ati"):
-			x.Vendor = "AMD"
-			if runTool("rocminfo") != "" {
-				x.API = "rocm"
-			}
+			x.Vendor, x.API = "AMD", "vulkan"
 		case strings.Contains(lv, "intel"):
-			x.Vendor = "Intel"
+			x.Vendor, x.API = "Intel", "vulkan"
 		default:
 			x.Vendor = vendor
 		}
@@ -217,7 +215,7 @@ func parseWinVideo(out string) []gpuInfo {
 	}
 	var g []gpuInfo
 	for _, r := range rows {
-		x := gpuInfo{Model: r.Name, Driver: r.Version, API: "none"}
+		x := gpuInfo{Model: r.Name, Driver: r.Version, API: "directx"}
 		lm := strings.ToLower(r.Maker + " " + r.Name)
 		switch {
 		case strings.Contains(lm, "nvidia"):

@@ -13,7 +13,7 @@ func TestParseMacGPUs(t *testing.T) {
 		t.Fatalf("%+v", g)
 	}
 	intel := parseMacGPUs(`{"SPDisplaysDataType":[{"sppci_model":"Intel Iris Plus Graphics","spdisplays_vendor":"Intel","spdisplays_vram_shared":"1536 MB"}]}`, 8192)
-	if intel[0].API != "none" || intel[0].VRAMMiB != 1536 {
+	if intel[0].API != "metal" || intel[0].VRAMMiB != 1536 { // WebGPU runs on it through Metal
 		t.Fatalf("%+v", intel)
 	}
 }
@@ -37,11 +37,11 @@ func TestParseLspciAndWindowsSkipVirtual(t *testing.T) {
 	}
 	w := clean(parseWinVideo(`[{"Name":"Microsoft Basic Display Adapter","AdapterCompatibility":"(Standard display types)","AdapterRAM":0},
 	{"Name":"AMD Radeon RX 7900 XTX","AdapterCompatibility":"Advanced Micro Devices, Inc.","AdapterRAM":4293918720,"DriverVersion":"31.0.24027.1012"}]`))
-	if len(w) != 1 || w[0].Vendor != "AMD" || w[0].VRAMMiB != 0 {
+	if len(w) != 1 || w[0].Vendor != "AMD" || w[0].VRAMMiB != 0 || w[0].API != "directx" {
 		t.Fatalf("%+v", w)
 	}
-	if _, _, ok := bestGPU(w); ok {
-		t.Fatal("a display-only GPU must not be rentable")
+	if _, _, ok := bestGPU(g); ok {
+		t.Fatal("an NVIDIA card without its driver must not be rentable")
 	}
 }
 

@@ -67,26 +67,3 @@ func TestLedgerHoldSettle(t *testing.T) {
 		t.Fatal(usdc(1234500), micro("3/2", "0.20"), micro("90/3600", "0.36"))
 	}
 }
-
-func TestCleanChat(t *testing.T) {
-	c, maxTok, err := cleanChat(map[string]any{"messages": []any{map[string]any{"role": "user", "content": "hi"}},
-		"stream": true, "max_tokens": 99999.0, "tools": "x", "temperature": 0.0})
-	if err != nil || c["stream"] != false || maxTok != 8192 || c["tools"] != nil || c["temperature"] != 0.0 {
-		t.Fatalf("%v %d %v", c, maxTok, err)
-	}
-	if _, _, err := cleanChat(map[string]any{}); err == nil {
-		t.Fatal("accepted a request without messages")
-	}
-}
-
-func TestLlamaAssetChoice(t *testing.T) {
-	names := []string{"llama-b6100-bin-macos-arm64.zip", "llama-b6100-bin-ubuntu-x64.zip", "llama-b6100-bin-ubuntu-vulkan-x64.zip",
-		"llama-b6100-bin-win-cuda-12.4-x64.zip", "llama-b6100-bin-win-vulkan-x64.zip", "cudart-llama-bin-win-cuda-12.4-x64.zip"}
-	got := llamaAsset(names, nil)
-	if got == "" {
-		t.Skip("no build for this test machine's system")
-	}
-	if strings.Contains(got, "cudart") {
-		t.Fatal(got)
-	}
-}

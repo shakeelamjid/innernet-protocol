@@ -12,7 +12,7 @@
     $('share-fields').hidden = $('share-msg').hidden = !compute;
     if (compute) {
       const left = machineGiB ? Math.max(0, machineGiB - num('reserve-gib')) : 0;
-      $('share-msg').textContent = 'Several clients can use this machine at once. Storage always goes first; CPU jobs and GPU sessions ' +
+      $('share-msg').textContent = 'Several clients can use this machine at once. Storage always goes first; CPU and GPU jobs ' +
         'share ' + (left ? left + ' GiB of memory' : 'the memory you do not keep') + ', and new work waits while you need the memory yourself. ' +
         'When it is full, clients are told at once and go to another provider.';
     }
@@ -22,7 +22,7 @@
   function gpuLine(g) {
     const mem = g.vram_mib ? ' · ' + Math.round(g.vram_mib / 1024) + ' GiB' + (g.api === 'metal' ? ' shared' : '') : '';
     const cores = g.cores ? ' · ' + g.cores + ' cores' : '';
-    const api = g.api && g.api !== 'none' ? ' · ' + ({ cuda: 'CUDA', metal: 'Metal', rocm: 'ROCm', oneapi: 'oneAPI' }[g.api] || g.api) : ' · display only';
+    const api = g.api && g.api !== 'none' ? ' · ' + ({ cuda: 'NVIDIA', metal: 'Metal', vulkan: 'Vulkan', directx: 'DirectX', rocm: 'ROCm', oneapi: 'oneAPI' }[g.api] || g.api) : ' · no driver';
     return g.model + cores + mem + api;
   }
   function gpuText(gpus) {
@@ -80,7 +80,7 @@
       const mm = m && m.by_model && m.by_model[g.model];
       $('gpu-market').textContent = (mm ? 'Others with ' + g.model + ' ask ' + mm.median + ' USDC per GPU-hour (typical ' + mm.low + '–' + mm.high + ', ' + mm.providers + ' listed).'
         : 'No other ' + g.model + ' is listed yet, so there is no market price to compare with.') +
-        ' A client\'s model is downloaded to this machine the first time it is used (up to 64 GiB; the oldest are removed past 40 GiB).';
+        ' Programs use WebGPU; the GPU runtime (Deno, about 40 MB) is downloaded and checked the first time.';
     }
     machineGiB = det.memory_mib ? Math.round(det.memory_mib / 1024) : 0;
     $('reserve-gib').value = draft && draft.reserve_gib != null ? draft.reserve_gib : (det.class === 'server' ? 1 : 4);

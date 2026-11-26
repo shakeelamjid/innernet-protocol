@@ -63,8 +63,6 @@ type server struct {
 	terms    clientTerms
 	sched    *scheduler
 	stoSlots chan struct{}
-	gpuMu    sync.Mutex
-	gpu      map[string]*gpuSession
 }
 
 func cmdServe(args []string) error {
@@ -92,7 +90,7 @@ func cmdServe(args []string) error {
 	}
 	s.startReachability(registryURL(c))
 	go s.terms.keepFresh(registryURL(c))
-	defer s.stopGPUSessions()
+	s.prepareGPU()
 	go func() {
 		for range time.Tick(5 * time.Second) {
 			s.sched.kick() // the owner's own memory use changes; waiting work may fit now
@@ -110,8 +108,7 @@ func cmdServe(args []string) error {
 		return err
 	}
 	go updateLoop(func() {
-		s.sched.drain(30 * time.Minute) // let running jobs finish; GPU sessions end after that
-		s.stopGPUSessions()
+		s.sched.drain(30 * time.Minute) // let running jobs finish first
 		_ = ln.Close()
 	})
 	return s.serveBoth(ln, srv)
@@ -124,7 +121,6 @@ func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, e
 	s := &server{cfg: c, priv: priv, data: data, rpc: rpc, seen: map[string]int64{}, used: map[string]bool{},
 		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now(),
 		credits: openLedger(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64),
-		gpu: map[string]*gpuSession{},
 	}
 	if raw, err := os.ReadFile(s.usedLog); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {
@@ -303,9 +299,7 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 // computeRoute serves CMP-1 (CPU) and GPU-1 (GPU); every request is signed by the client.
 func (s *server) computeRoute(w http.ResponseWriter, r *http.Request, body []byte) bool {
 	p := r.URL.Path
-	g := reGPUPath.FindStringSubmatch(p)
-	known := p == "/cmp/v1/credit" || p == "/cmp/v1/balance" || p == "/cmp/v1/jobs" ||
-		p == "/gpu/v1/sessions" || g != nil
+	known := p == "/cmp/v1/credit" || p == "/cmp/v1/balance" || p == "/cmp/v1/jobs" || p == "/gpu/v1/jobs"
 	if !known {
 		return false
 	}
@@ -322,10 +316,8 @@ func (s *server) computeRoute(w http.ResponseWriter, r *http.Request, body []byt
 		s.reply(w, 200, map[string]any{"balance": usdc(s.credits.balance(client)), "asset": "USDC"})
 	case p == "/cmp/v1/jobs" && r.Method == "POST":
 		s.cpuJob(w, client, body)
-	case p == "/gpu/v1/sessions" && r.Method == "POST":
-		s.gpuStart(w, client, body)
-	case g != nil:
-		s.gpuSessionRoute(w, r, client, g[1], g[2], body)
+	case p == "/gpu/v1/jobs" && r.Method == "POST":
+		s.gpuJobHandler(w, client, body)
 	default:
 		s.fail(w, 405, "method not allowed")
 	}

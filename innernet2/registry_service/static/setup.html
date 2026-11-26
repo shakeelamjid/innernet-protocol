@@ -64,7 +64,7 @@
                 <label>USDC per CPU-hour<input id="cmp-price" class="field" inputmode="decimal"></label>
               </div>
               <div id="gpu-block" hidden>
-                <label class="toggle"><input type="checkbox" id="gpu-on"> <span><strong>GPU</strong> <span id="gpu-name">Your GPU</span>. Clients run their own model files on it.</span></label>
+                <label class="toggle"><input type="checkbox" id="gpu-on"> <span><strong>GPU</strong> <span id="gpu-name">Your GPU</span>. Clients' GPU programs (WebGPU) run sealed off from your files and network.</span></label>
                 <div class="fields" data-for="gpu-on">
                   <label>GPUs to offer<input id="gpu-count" class="field" type="number" min="1"></label>
                   <label>USDC per GPU-hour<input id="gpu-price" class="field" inputmode="decimal"></label>

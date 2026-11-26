@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-// The scheduler shares the machine between storage, CPU jobs, GPU sessions and the owner.
+// The scheduler shares the machine between storage, CPU jobs, GPU jobs and the owner.
 //
 //   - Storage never waits for compute: chunk transfers have their own pool (stoSlots).
 //   - Compute is admitted against a budget of CPU slots, GPUs and memory. The memory budget is

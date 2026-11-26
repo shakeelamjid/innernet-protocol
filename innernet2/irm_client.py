@@ -293,31 +293,25 @@ class Provider:
         return {"output": output, "exit_code": out["exit_code"], "stderr": out.get("stderr", ""),
                 "seconds": out["seconds"], "error": out.get("error"), "receipt": receipt}
 
-    def gpu_start(self, url: str, sha256: str, max_seconds: int = 3600, context: int = 8192, idle_seconds: int = 900) -> str:
-        """GPU-1: load your own model file (GGUF) on this provider's GPU; billed per GPU-hour while loaded.
-        The session ends by itself after idle_seconds without requests, which stops the charge."""
-        body = json.dumps({"url": url, "sha256": sha256, "max_seconds": max_seconds, "context": context,
-                           "idle_seconds": idle_seconds}).encode()
-        return self._json(self._request("POST", "/gpu/v1/sessions", body))["session"]
-
-    def gpu_status(self, session: str) -> dict:
-        return self._json(self._request("GET", f"/gpu/v1/sessions/{session}"))
-
-    def gpu_wait(self, session: str, timeout: float = 3600, every: float = 2.0) -> dict:
-        end = time.monotonic() + timeout
-        while True:
-            st = self.gpu_status(session)
-            if st["status"] == "ready" or st["status"].startswith(("error", "ended")) or time.monotonic() > end:
-                return st
-            time.sleep(every)
-
-    def gpu_chat(self, session: str, messages: list, **opts) -> dict:
-        body = json.dumps({"messages": messages, **opts}).encode()
-        return self._json(self._request("POST", f"/gpu/v1/sessions/{session}/chat/completions", body, timeout=600))
-
-    def gpu_end(self, session: str) -> dict:
-        out = self._json(self._request("DELETE", f"/gpu/v1/sessions/{session}"))
-        return {"status": out["status"], "receipt": self._receipt(out["receipt"])}
+    def run_gpu_job(self, program: bytes | str | None = None, stdin: bytes = b"", args: tuple = (), lang: str = "js",
+                    max_seconds: int = 300, program_url: str | None = None, program_sha256: str | None = None,
+                    queue_seconds: int = 30, max_memory_mib: int = 1024) -> dict:
+        """GPU-1: run a JavaScript or TypeScript module that uses WebGPU (navigator.gpu). It reads standard
+        input and writes standard output; it has no files, network or environment. Billed per GPU-hour."""
+        job = {"input": base64.b64encode(stdin).decode(), "args": list(args), "lang": lang, "max_seconds": max_seconds,
+               "queue_seconds": queue_seconds, "max_memory_mib": max_memory_mib}
+        if program is not None:
+            job["program"] = base64.b64encode(program.encode() if isinstance(program, str) else program).decode()
+        else:
+            job["program_url"], job["program_sha256"] = program_url, program_sha256
+        out = self._json(self._request("POST", "/gpu/v1/jobs", json.dumps(job).encode(),
+                                        timeout=max_seconds + queue_seconds + 60))
+        receipt = self._receipt(out["receipt"])
+        output = base64.b64decode(out["output"])
+        if receipt["output_sha256"] != hashlib.sha256(output).hexdigest():
+            raise ProviderError(f"{self.entry['name']}: output does not match its receipt")
+        return {"output": output, "exit_code": out["exit_code"], "stderr": out.get("stderr", ""),
+                "seconds": out["seconds"], "error": out.get("error"), "receipt": receipt}
 
 
 # ---- choosing providers -----------------------------------------------------
