@@ -42,10 +42,12 @@ type setupStatus struct {
 	Offer  *webOffer       `json:"offer"`
 	Setup  json.RawMessage `json:"setup"`
 	Auth   *passkeyAuth    `json:"auth"`
+	// Request: the person asked on the website to test the port again ("retest") or connect out ("outgoing").
+	Request string `json:"request"`
 }
 
 // waitForSetup polls until the website submitted a passkey-confirmed setup.
-func waitForSetup(reg, poll string, max time.Duration, say func(string)) (*setupStatus, error) {
+func waitForSetup(reg, poll string, max time.Duration, say func(string), onRequest func(string), keys <-chan string) (*setupStatus, error) {
 	deadline := time.Now().Add(max)
 	last := ""
 	for time.Now().Before(deadline) {
@@ -69,6 +71,10 @@ func waitForSetup(reg, poll string, max time.Duration, say func(string)) (*setup
 				}
 				last = st.Status
 			}
+			if st.Request != "" && onRequest != nil {
+				onRequest(st.Request) // the website asked: test the port again, or connect out
+				continue
+			}
 			if st.Status == "submitted" {
 				if len(st.Setup) == 0 || st.Auth == nil {
 					return nil, errors.New("the registry sent an offer without your passkey confirmation; nothing was applied")
@@ -76,7 +82,13 @@ func waitForSetup(reg, poll string, max time.Duration, say func(string)) (*setup
 				return &st, nil
 			}
 		}
-		time.Sleep(pollEvery)
+		select {
+		case k := <-keys:
+			if onRequest != nil {
+				onRequest(k)
+			}
+		case <-time.After(pollEvery):
+		}
 	}
 	return nil, errors.New("timed out waiting for the website; run innernet-provider start again")
 }
@@ -460,7 +472,7 @@ func (s *server) joinWebSetup(reg string) error {
 		return fmt.Errorf("registry refused to join the setup (%s)", resp.Status)
 	}
 	log.Printf("website setup: joined; waiting for the owner to apply")
-	st, err := waitForSetup(reg, poll, 2*time.Hour, func(string) {})
+	st, err := waitForSetup(reg, poll, 2*time.Hour, func(string) {}, nil, nil)
 	if err != nil {
 		return err
 	}

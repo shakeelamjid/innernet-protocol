@@ -510,7 +510,7 @@ def valid_seal_key(value) -> bool:
 CONNECT_VERSION = "REG-1-CONNECT"
 _DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
                   "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str, "class": str,
-                  "tz": str, "port_map": str, "path": str, "gpus": list, "seal_key": str}
+                  "tz": str, "port_map": str, "path": str, "gpus": list, "seal_key": str, "reach_note": str}
 
 
 def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:

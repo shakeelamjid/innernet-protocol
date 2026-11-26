@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Registry admin · INNERnet</title>
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/admin.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Registry admin</span></a>
+      <span class="spacer"></span>
+      <button class="btn btn-sm" id="add-admin" hidden>Add admin passkey</button>
+      <button class="btn btn-sm" id="logout" hidden>Sign out</button>
+    </div>
+  </header>
+  <main>
+    <div class="wrap">
+      <section class="card frame step" id="signin" hidden>
+        <h2>Sign in</h2>
+        <p id="signin-text">Sign in with your admin passkey.</p>
+        <button class="btn btn-light" id="signin-btn">Sign in with passkey</button>
+        <p class="msg" id="signin-msg" role="status"></p>
+      </section>
+
+      <div id="panel" hidden>
+        <div class="head"><div><h1>Machines</h1><p id="summary"></p></div></div>
+        <p class="msg" id="act-msg" role="status"></p>
+        <div id="machines" class="admin-list"></div>
+
+        <h2 class="admin-h">Setups never applied</h2>
+        <div id="pending" class="admin-list"></div>
+
+        <h2 class="admin-h">Admin passkeys</h2>
+        <div id="admins" class="admin-list"></div>
+
+        <h2 class="admin-h">Audit log</h2>
+        <div class="card frame"><table class="admin-audit"><tbody id="audit"></tbody></table></div>
+      </div>
+    </div>
+  </main>
+</body>
+</html>

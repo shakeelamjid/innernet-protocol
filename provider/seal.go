@@ -8,9 +8,7 @@ import (
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
-	"crypto/hkdf"
 	"crypto/rand"
-	"crypto/sha256"
 	"errors"
 )
 
@@ -57,10 +55,7 @@ func (s *sealBox) open(b *sealed) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	key, err := hkdf.Key(sha256.New, shared, nil, sealInfo, 32)
-	if err != nil {
-		return "", err
-	}
+	key := hkdfSHA256(shared, nil, []byte(sealInfo), 32)
 	blk, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(blk)
 	pt, err := gcm.Open(nil, iv, ct, []byte(sealAAD))
@@ -85,7 +80,7 @@ func sealTo(pubB64 string, msg string) (*sealed, error) {
 	if err != nil {
 		return nil, err
 	}
-	key, _ := hkdf.Key(sha256.New, shared, nil, sealInfo, 32)
+	key := hkdfSHA256(shared, nil, []byte(sealInfo), 32)
 	blk, _ := aes.NewCipher(key)
 	gcm, _ := cipher.NewGCM(blk)
 	iv := make([]byte, 12)

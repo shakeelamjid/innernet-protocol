@@ -45,6 +45,11 @@
           <h2>Your machine</h2>
           <dl class="kv" id="facts"></dl>
           <p class="msg" id="reach"></p>
+          <div class="admin-row" id="reach-acts" hidden>
+            <button class="btn btn-sm" type="button" id="reach-retest">Test again</button>
+            <button class="btn btn-sm" type="button" id="reach-out">Connect out instead (relay or HTTPS tunnel)</button>
+          </div>
+          <p class="msg" id="reach-msg" role="status"></p>
           <div class="fields">
             <label>Public name<input id="name" class="field" maxlength="64" autocomplete="off"></label>
             <label>Region<input id="region" class="field" maxlength="32" autocomplete="off"></label>
@@ -71,6 +76,7 @@
               <div class="fields" data-for="rly-on">
                 <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
               </div>
+              <p class="notice" id="vpn-why" hidden></p>
               <label class="toggle"><input type="checkbox" id="vpn-on"> <span><strong>VPN exit</strong> Clients' traffic reaches the internet from your connection, and is seen as coming from your address.</span></label>
               <div class="fields" data-for="vpn-on">
                 <label>USDC per GiB<input id="vpn-price" class="field" inputmode="decimal"></label>

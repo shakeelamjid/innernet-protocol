@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
@@ -10,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -72,6 +74,7 @@ func cmdStart(args []string) error {
 		st.ok("using existing · provider %s…", providerID(priv)[:16])
 	}
 	forceVia = *via
+	autoOutgoing = *yes // agents cannot choose; people do (website or terminal)
 	f := detectSteps(reg, *port, st, !*yes)
 	setupStep = st
 	m := strings.ToLower(*mode)
@@ -137,6 +140,9 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64, sealKey string)
 	}
 	if f.Path != "" {
 		detected["path"] = f.Path
+	}
+	if !f.Reachable && f.reachNote != "" {
+		detected["reach_note"] = f.reachNote
 	}
 	gpus := []any{}
 	for _, g := range f.GPUs {
@@ -214,6 +220,48 @@ func (o *webOffer) config(reg string) *Config {
 	return c
 }
 
+// stdinLines reads what the person types while the terminal waits (empty when stdin is not a terminal).
+func stdinLines() <-chan string {
+	ch := make(chan string, 4)
+	go func() {
+		sc := bufio.NewScanner(os.Stdin)
+		for sc.Scan() {
+			switch strings.ToLower(strings.TrimSpace(sc.Text())) {
+			case "r":
+				ch <- "retest"
+			case "o":
+				ch <- "outgoing"
+			}
+		}
+	}()
+	return ch
+}
+
+// sendFacts tells the website what this machine found after a new reachability test.
+func sendFacts(reg, poll string, priv ed25519.PrivateKey, f *facts, box *sealBox) error {
+	seal := ""
+	if box != nil {
+		seal = box.public()
+	}
+	rec, err := connectRecord(priv, f, time.Now().Unix(), seal)
+	if err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(rec)
+	req, _ := http.NewRequest("POST", reg+"/connect/facts", bytes.NewReader(raw))
+	req.Header.Set("X-Poll-Token", poll)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("registry answered %s", resp.Status)
+	}
+	return nil
+}
+
 func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error {
 	box, err := newSealBox()
 	if err != nil {
@@ -286,9 +334,40 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	if !noOpen {
 		openBrowser(cr.URL)
 	}
+	keys := stdinLines()
+	reachMenu := func() {
+		if f.Reachable {
+			return
+		}
+		fmt.Printf("  %s Clients cannot reach port %d yet (%s). Choose on the website, or here:\n", amber(markWarn), f.Port,
+			orDefault(f.reachNote, "closed"))
+		fmt.Printf("    r + Enter  test again (after opening TCP port %d on your router to this machine)\n", f.Port)
+		fmt.Println("    o + Enter  connect out instead: an INNERnet relay, or the HTTPS tunnel when no relay is available")
+		fmt.Println()
+	}
+	reachMenu()
+	act := func(action string) {
+		switch action {
+		case "retest":
+			f.retestDirect(reg, func(format string, a ...any) { note(format, a...) })
+		case "outgoing":
+			f.Relay, f.Tunnel, f.TunnelHost, f.Path = nil, false, "", ""
+			f.tryOutgoing(reg)
+			if !f.Reachable {
+				note("No relay and no HTTPS tunnel is available right now.")
+			}
+		default:
+			return
+		}
+		if err := sendFacts(reg, cr.Poll, priv, f, box); err != nil {
+			note("Could not update the website: %v", err)
+		}
+		fmt.Println()
+		reachMenu()
+	}
 	st, err := waitForSetup(reg, cr.Poll, 24*time.Hour, func(string) {
 		fmt.Println("  " + green(markOK) + " Signed in on the website. Waiting for you to press Apply…")
-	})
+	}, func(req string) { act(req) }, keys)
 	if err != nil {
 		return err
 	}
@@ -320,6 +399,21 @@ func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wall
 	if old, err := loadConfig(); err == nil {
 		c = old
 		c.Registry = reg
+	}
+	for !f.Reachable && !yes {
+		fmt.Println()
+		fmt.Printf("  Clients cannot reach port %d yet (%s).\n", f.Port, orDefault(f.reachNote, "closed"))
+		fmt.Printf("    r  test again (after opening TCP port %d on your router to this machine)\n", f.Port)
+		fmt.Println("    o  connect out instead: an INNERnet relay, or the HTTPS tunnel when no relay is available")
+		fmt.Println("    q  stop here")
+		switch strings.ToLower(ask("  Choose r, o or q", "r")) {
+		case "o":
+			f.tryOutgoing(reg)
+		case "q":
+			return errors.New("stopped; run innernet-provider start again when ready")
+		default:
+			f.retestDirect(reg, func(format string, a ...any) { note(format, a...) })
+		}
 	}
 	f.fill(c)
 	if !yes {

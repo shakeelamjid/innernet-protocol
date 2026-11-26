@@ -27,6 +27,7 @@ def main(argv: list[str] | None = None) -> int:
     k = sub.add_parser("keygen", help="create the registry signing key file (0600)")
     k.add_argument("path")
     sub.add_parser("list")
+    sub.add_parser("login", help="print a one-time link (10 minutes) that adds an admin passkey for /registry/admin")
     for name in ("approve", "suspend", "remove"):
         s = sub.add_parser(name)
         s.add_argument("provider")
@@ -48,6 +49,12 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     store = Store(Settings.from_env().db_path)
+    if args.cmd == "login":
+        from .admin_web import new_login_link
+        s = Settings.from_env()
+        print("Open within 10 minutes to add your admin passkey:")
+        print("  " + new_login_link(store, s.origin, "/registry"))
+        return 0
     if args.cmd == "list":
         now = int(time.time())
         for p in store.providers():

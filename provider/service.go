@@ -353,6 +353,15 @@ func cmdUninstall(args []string) error {
 		if !askYes("  Delete "+home(), false) {
 			return errors.New("cancelled")
 		}
+		// The key is about to go: take this machine off the registry first, while it can still sign.
+		// That also frees its payout contract for a reinstall.
+		if _, err := loadConfig(); err == nil {
+			if _, err := machineRequest("leave", ""); err == nil {
+				fmt.Printf("  %s Told the registry this machine is leaving (its payout contract is free again)\n", green(markOK))
+			} else if !strings.Contains(err.Error(), "cannot leave while") {
+				fmt.Println(amber("  Could not tell the registry (" + err.Error() + "). Sign in to the dashboard and press Leave."))
+			}
+		}
 		if err := os.RemoveAll(home()); err != nil {
 			return err
 		}

@@ -87,6 +87,7 @@ python -m innernet2.registry_service.admin list
 python -m innernet2.registry_service.admin approve <provider id>     # re-checks the payout contract; --force to override
 python -m innernet2.registry_service.admin suspend <provider id> "reason shown to the provider"
 python -m innernet2.registry_service.admin remove  <provider id> "reason shown to the provider"
+python -m innernet2.registry_service.admin login                    # one-time link (10 min) that adds an admin passkey
 ```
 
 ## Not yet built
@@ -98,3 +99,12 @@ python -m innernet2.registry_service.admin remove  <provider id> "reason shown t
 ### ST81 relay
 
 Run `innernet-provider relay` from `deploy/Dockerfile.relay` as a separate Coolify application with TCP port 9444 published and a persistent volume at `/var/lib/innernet-relay`. Its log prints the relay key. Set `INNERNET_RELAYS=<public host>:9444=<relay key>` on the registry and redeploy; providers then find the relay in `/registry/v1/config`.
+
+## Super-admin page
+
+`/registry/admin` is the operator's page, signed in with an admin passkey (user verification required). Add the first one with `registry-admin login` in the registry container: it prints a one-time link valid for 10 minutes. Once signed in, more admin passkeys can be added from the page; the last one cannot be deleted. Admin sessions last 4 hours and are separate from provider sessions.
+
+From the page the operator can approve (list), suspend or remove a machine (a reason is required and shown to the owner), log out its web sessions, delete one of its passkeys, or delete the machine with all its records (setups, machine code, passkeys, sessions, presence, probes). Payment history is kept. Deleting a machine frees its payout contract for another machine; the contract itself is on-chain and cannot be deleted. Setups that were never applied are listed and can be deleted too. Every action goes to the audit log, which the page shows.
+
+A payout contract is also free again when the machine that used it leaves (or is gone): `innernet-provider uninstall --all` now sends `leave` before it deletes the key.
+

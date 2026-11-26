@@ -270,10 +270,12 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         for network, address in entry["payto"].items():
             if network not in settings.fee_payto:
                 raise HTTPException(422, f"payments on {network} are not accepted yet; use Base Sepolia (eip155:84532)")
-            clash = [p for p in store.providers() if p["id"] != pid and p["state"] != "removed"
+            # A machine that left (or was reinstalled with a new key after leaving) frees its payout contract.
+            clash = [p for p in store.providers() if p["id"] != pid and p["state"] not in ("removed", "leaving", "gone")
                      and str(p["entry"]["payto"].get(network, "")).lower() == address.lower()]
             if clash:
-                raise HTTPException(422, "this payout contract is already used by another provider")
+                raise HTTPException(422, "this payout contract is already used by another provider. If that was this "
+                                         "machine before a reinstall, sign in to its dashboard and press Leave, then apply again")
         notes = []
         for network, address in entry["payto"].items():
             ok, why = chain.payout_check(settings, network, address, rpc)
@@ -573,6 +575,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             store.x("UPDATE claims SET expires_at=? WHERE code_hash=?",
                     (min(now + CLAIM_TTL, c["created_at"] + CLAIM_MAX), c["code_hash"]))
         out = {"status": status}
+        if c.get("request") and status in ("waiting", "claimed", "signing"):
+            out["request"] = c["request"]
         if c["draft"] and status == "submitted":
             out["offer"] = json.loads(c["draft"])
             if c.get("signed") and c.get("auth"):
@@ -612,6 +616,20 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         progress = progress_steps(body) if body.get("steps") is not None else c.get("progress")
         store.x("UPDATE claims SET status='done', progress=?, finished_at=? WHERE code_hash=?",
                 (progress, int(time.time()), c["code_hash"]))
+        return {"ok": True}
+
+    @app.post(P + "/v1/connect/facts")
+    async def connect_facts(request: Request):
+        """The machine tested its port again, or connected out: fresh signed facts for the setup page."""
+        c = claim_by_poll(request)
+        if c["status"] not in ("waiting", "claimed", "signing") or c["expires_at"] < int(time.time()):
+            raise HTTPException(409, "this setup is not open")
+        pid, detected = verify_connect(await body_json(request))
+        if pid.hex() != c["provider"]:
+            raise HTTPException(422, "connect record is for another provider")
+        status = "claimed" if c["status"] == "signing" else c["status"]   # an offer signed before must be signed again
+        store.x("UPDATE claims SET detected=?, request=NULL, status=? WHERE code_hash=?",
+                (json.dumps(detected), status, c["code_hash"]))
         return {"ok": True}
 
     @app.get(P + "/v1/providers/{pid}/setup-pending")
@@ -775,6 +793,11 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(400, "this step expired; start again")
         store.x("DELETE FROM webauthn_flows WHERE id=?", (row["id"],))
         return dict(row)
+
+    from . import admin_web
+    admin_web.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, body_json=body_json,
+                       new_flow=new_flow, take_flow=take_flow, limiter=limiter, cookie_secure=settings.cookie_secure,
+                       page=page)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):
@@ -1060,13 +1083,27 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         nets = [{"caip2": n, "name": NETWORK_NAMES.get(n, n), "factory": settings.split_factory.get(n)}
                 for n in settings.fee_payto]
         waiting = c["status"] in ("service", "fetched")
-        return {"provider": pid, "status": c["status"], "detected": detected,
+        return {"provider": pid, "status": c["status"], "detected": detected, "request": c.get("request"),
                 "mode": "service" if c.get("kind") == "service" else "terminal",
                 "waiting_for_machine": waiting, "can_seal": reg.valid_seal_key(detected.get("seal_key")),
                 "draft": json.loads(c["draft"]) if c["draft"] else None,
                 "current": current["entry"] if current else None,
                 "defaults": {"prices": offers.DEFAULT_PRICES, "units": offers.UNITS},
                 "fee_bps": settings.fee_bps, "networks": nets, "market": presence.market(store)}
+
+    @app.post(P + "/api/setup/reach")
+    async def setup_reach(request: Request):
+        """Ask the machine to test its port again ("retest") or to connect out ("outgoing")."""
+        guard(request)
+        s = need_session(request)
+        action = str((await body_json(request)).get("action", ""))
+        if action not in ("retest", "outgoing"):
+            raise HTTPException(422, "action: retest or outgoing")
+        c = open_claim(s["provider"])
+        if c is None or c["status"] not in ("waiting", "claimed", "signing"):
+            raise HTTPException(409, "Your machine is not waiting for setup. Run innernet-provider start on it.")
+        store.x("UPDATE claims SET request=? WHERE code_hash=?", (action, c["code_hash"]))
+        return {"ok": True}
 
     def check_backup(blob, detected: dict) -> dict | None:
         if blob is None:
@@ -1100,6 +1137,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         backup = body.pop("backup", None)
         service = bool(body.pop("service", False))
         detected = json.loads(c["detected"])
+        if detected.get("reachable") is False:
+            raise HTTPException(422, "Clients cannot reach this machine yet. Test again after opening the port on your "
+                                     "router, or connect out through INNERnet (relay or HTTPS tunnel), then apply.")
         o = offers.check_offer(body, set(settings.fee_payto), detected)
         ok, why = chain.payout_check(settings, o["network"], o["payout"], rpc)
         if not ok:

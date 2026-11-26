@@ -10,6 +10,11 @@
 - The website shows each step live (passkey checked, offer signed, backup, service, registry) and then the listing state. New: `/api/setup/confirm`, `/api/setup/progress`, `/v1/connect/progress`.
 - `start` on a machine that is already set up shows its status, machine code and setup link, then exits (`--again` to start over). Dashboard → Change settings: the running background service joins the setup (`setup-pending`, `setup-fetch` intent, `/v1/connect/attach`), applies the passkey-confirmed change and restarts with it.
 - VPN exit is refused while the machine is reachable only through the HTTPS tunnel (it cannot carry VPN traffic).
+- `uninstall --all` tells the registry the machine is leaving before it deletes the key; a payout contract held by a machine that left (or is gone) can be used by the reinstalled machine.
+- The setup page tells the owner to confirm in the terminal when the machine still runs an older provider.
+- No silent fallback when the port is closed: the setup page and the terminal show why and offer Test again or Connect out instead (relay, else HTTPS tunnel); Apply waits until the machine is reachable. `/api/setup/reach`, `/v1/connect/facts`. `--yes` keeps the automatic fallback.
+- The setup page says why VPN exit is off (HTTPS tunnel, or not reachable) and how to turn it on.
+- Super-admin page `/registry/admin` (admin passkeys; first one via `registry-admin login`): approve, suspend, remove or delete machines (frees their payout contract), delete passkeys, log out sessions, audit log.
 - `provider/LATEST` is `provider-v0.6.2`.
 
 ### VPN exit (VPN-1) under Bandwidth; installs and updates from innernetcorp.com

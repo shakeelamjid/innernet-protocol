@@ -47,7 +47,8 @@ PROVIDER_COLUMNS = {"resume_to": "TEXT", "trial_since": "INTEGER", "last_seen": 
 
 
 # Website setup signed with a passkey: what was signed, the signature, the machine's live progress.
-CLAIM_COLUMNS = {"signed": "TEXT", "auth": "TEXT", "progress": "TEXT", "finished_at": "INTEGER", "kind": "TEXT"}
+CLAIM_COLUMNS = {"signed": "TEXT", "auth": "TEXT", "progress": "TEXT", "finished_at": "INTEGER", "kind": "TEXT",
+                 "request": "TEXT"}
 
 
 def migrate(store: Store) -> None:

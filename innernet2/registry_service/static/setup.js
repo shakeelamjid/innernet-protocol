@@ -41,6 +41,51 @@
         'When it is full, clients are told at once and go to another provider.';
     }
   }
+  // ---- reachability: the person decides what happens when the port is closed ----
+  let unreachable = false;
+  function reachState(det, pending) {
+    const port = det.port || 9443;
+    unreachable = det.reachable === false;
+    let text, err = false;
+    if (det.path === 'tunnel') text = 'Clients reach this machine through the INNERnet HTTPS tunnel: it connects out, so no router settings are needed, and requests stay signed end to end. A direct connection is faster: open TCP port ' + port + ' on your router to this machine, then press Test again.';
+    else if (det.path === 'relay') text = 'Clients reach this machine through an INNERnet relay: it connects out, and data stays encrypted end to end.';
+    else if (!unreachable) text = 'Clients reach ' + det.host + ':' + port + ' directly' + (det.path === 'router' ? ' (port opened on your router).' : '.');
+    else {
+      err = true;
+      text = 'Clients cannot reach ' + (det.host || 'this machine') + ':' + port + ' yet' + (det.reach_note ? ' (' + det.reach_note + ')' : '') +
+        '. Open TCP port ' + port + ' on your router to this machine and press Test again, or connect out through INNERnet instead (an INNERnet relay, or the HTTPS tunnel when no relay is available). You can also type r or o in the terminal.';
+    }
+    say('reach', text, err);
+    $('reach-acts').hidden = !(unreachable || det.path === 'tunnel' || det.path === 'relay');
+    $('reach-out').hidden = !unreachable;
+    $('reach-retest').disabled = $('reach-out').disabled = !!pending;
+    say('reach-msg', pending ? (pending === 'retest' ? 'Your machine is testing the port again…' : 'Your machine is connecting out…') : '');
+    // VPN exit needs a real path to the machine: say exactly why it is off.
+    const why = det.path === 'tunnel'
+      ? 'VPN exit is off: clients reach this machine through the HTTPS tunnel, which carries only signed INNERnet requests, not VPN traffic. To offer VPN exit, open TCP port ' + port + ' on your router to this machine and press Test again, or use an INNERnet relay when one is available.'
+      : unreachable ? 'VPN exit is off until clients can reach this machine (see Your machine above).' : '';
+    $('vpn-why').textContent = why; $('vpn-why').hidden = !why;
+    if (why) $('vpn-on').checked = false;
+    $('vpn-on').disabled = !!why;
+    $('send').disabled = unreachable;
+    if (unreachable) say('send-msg', 'Make this machine reachable first (see Your machine above).', true);
+    else if ($('send-msg').textContent.indexOf('reachable first') >= 0) say('send-msg', '');
+    sync();
+  }
+  async function reach(action) {
+    try {
+      await I.api('/api/setup/reach', { action: action });
+      reachState(setup.detected, action);
+      for (let i = 0; i < 90; i++) {
+        await new Promise(function (r) { setTimeout(r, 2000); });
+        const d = await I.api('/api/setup');
+        if (!d.request) { setup.detected = d.detected; fillFacts(d.detected); reachState(d.detected, null); return; }
+      }
+      say('reach-msg', 'Your machine did not answer. Is innernet-provider start still running on it?', true);
+      reachState(setup.detected, null);
+    } catch (err) { say('reach-msg', I.friendly(err), true); }
+  }
+
   function num(id) { const v = parseInt($(id).value, 10); return isNaN(v) ? 0 : v; }
 
   function gpuLine(g) {
@@ -61,9 +106,9 @@
       .sort(function (a, b) { return (b.vram_mib || 0) - (a.vram_mib || 0) || (b.cores || 0) - (a.cores || 0); })[0] || null;
   }
 
-  function fill(d) {
-    const det = d.detected || {}, draft = d.draft, cur = d.current;
+  function fillFacts(det) {
     const facts = $('facts');
+    facts.textContent = '';
     [['System', (det.os || '?') + ' / ' + (det.arch || '?')], ['CPUs', String(det.cpus || '?')],
       ['Free disk', det.storage_free_gib ? det.storage_free_gib + ' GiB' : 'unknown'],
       ['Memory', det.memory_mib ? Math.round(det.memory_mib / 1024) + ' GiB' : 'unknown'],
@@ -72,11 +117,10 @@
       const dd = document.createElement('dd'); dd.textContent = r[1];
       facts.append(dt, dd);
     });
-    if (det.path === 'tunnel') say('reach', 'Reachability: clients reach this machine through the INNERnet HTTPS tunnel (it connects out, so no router settings are needed). Requests stay signed end to end.');
-    else if (det.path === 'relay') say('reach', 'Reachability: clients reach this machine through the INNERnet relay (it connects out, so no router settings are needed). Data stays encrypted end to end.');
-    else if (det.reachable === true) say('reach', 'Reachability: other machines can reach ' + det.host + ':' + det.port + (det.path === 'router' ? ' (port opened on your router).' : '.'));
-    else say('reach', 'Reachability: we could not reach ' + (det.host || 'your machine') + ':' + (det.port || '') +
-      ' from the internet. Open this TCP port on your firewall or router, or use a server with a public address.', true);
+  }
+  function fill(d) {
+    const det = d.detected || {}, draft = d.draft, cur = d.current;
+    fillFacts(det);
     const src = draft || {};
     $('name').value = src.name || (cur && cur.name) || det.name || '';
     $('region').value = src.region || (cur && cur.region) || det.region || '';
@@ -109,10 +153,6 @@
         : 'No other ' + g.model + ' is listed yet, so there is no market price to compare with.') +
         ' Programs use WebGPU; the GPU runtime (Deno, about 40 MB) is downloaded and checked the first time.';
     }
-    if (det.path === 'tunnel') {
-      $('vpn-on').checked = false; $('vpn-on').disabled = true;
-      $('vpn-on').parentElement.querySelector('span').append(' Not available yet: VPN traffic needs clients to reach this machine directly or through an INNERnet relay, not the HTTPS tunnel.');
-    }
     $('backup-block').hidden = !d.can_seal;
     $('backup-old').hidden = !!d.can_seal;
     $('backup-on').checked = !!d.can_seal && d.mode !== 'service';
@@ -124,9 +164,11 @@
     $('payout').value = (draft && draft.payout) || (cur && cur.payto && Object.values(cur.payto)[0]) || '';
     $('share-you').textContent = (100 - d.fee_bps / 100) + '%';
     $('share-fee').textContent = (d.fee_bps / 100) + '%';
-    sync();
+    reachState(det, d.request);
   }
 
+  $('reach-retest').addEventListener('click', function () { reach('retest'); });
+  $('reach-out').addEventListener('click', function () { reach('outgoing'); });
   ['sto-on', 'rly-on', 'vpn-on', 'cmp-on', 'gpu-on', 'reserve-gib', 'backup-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
   $('reserve-gib').addEventListener('input', sync);
 
@@ -208,7 +250,9 @@
     let again = Date.now() - started < 30 * 60 * 1000;
     if (p) {
       const list = $('prog-steps'); list.textContent = '';
-      if (!p.steps.length) list.append(row({ state: 'run', label: 'Machine', text: 'Your machine received the offer and is checking your passkey…' }));
+      if (!p.steps.length) list.append(row({ state: 'run', label: 'Machine', text: setup && !setup.can_seal
+        ? 'Your machine runs an older provider: go to its terminal and confirm there. (Update it with: innernet-provider update)'
+        : 'Your machine received the offer and is checking your passkey…' }));
       p.steps.forEach(function (st) { list.append(row(st)); });
       const failed = p.steps.some(function (st) { return st.state === 'fail'; });
       if (failed) {

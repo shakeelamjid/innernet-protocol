@@ -113,13 +113,30 @@ func detectSteps(registry string, port int, st *stepper, interactive bool) *fact
 		}
 	}
 	f.tryRouter(registry, port, func(format string, a ...any) { note(format, a...) })
-	if !f.Reachable {
+	if !f.Reachable && autoOutgoing {
 		f.tryOutgoing(registry)
 	}
-	if !f.Reachable {
-		note("You can finish setup now; the registry keeps checking and lists you once reachable.")
-	}
 	return f
+}
+
+// autoOutgoing: when the port stays closed, fall back to a relay or the HTTPS tunnel by itself.
+// `start` turns it off for people: they choose (test again, or connect out) on the website or here.
+var autoOutgoing = true
+
+// retestDirect tests the port again (after the person opened it on the router), asking the
+// router once more. It clears an outgoing path chosen before.
+func (f *facts) retestDirect(registry string, say func(string, ...any)) {
+	f.Relay, f.Tunnel, f.TunnelHost, f.Path, f.PortMap = nil, false, "", "", ""
+	say("Testing port %d from the internet again…", f.Port)
+	if f.Reachable, f.reachNote = reachable(registry, f.Port); f.Reachable {
+		f.Path = "direct"
+		say("Port %d is reachable from the internet.", f.Port)
+		return
+	}
+	f.tryRouter(registry, f.Port, say)
+	if !f.Reachable {
+		say("Still not reachable (%s).", f.reachNote)
+	}
 }
 
 func osName(goos string) string {

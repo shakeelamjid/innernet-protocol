@@ -771,7 +771,7 @@ def test_go_start_web_setup_end_to_end(tmp_path):
         confirm_setup(web, auth, dict(offer, backup=seal_to(det["seal_key"], "a long backup passphrase"), service=False))
         rest, _ = proc.communicate(timeout=60)
         assert proc.returncode == 0, out + rest
-        assert "Setup finished" in rest and "Application received" in rest and "(y/n)" not in rest
+        assert "Setup finished" in rest and "sent to the registry" in rest and "(y/n)" not in rest
         home = tmp_path / "home"
         pid = json.loads((home / "descriptor.json").read_text())["payload"]["provider"]["id"]
         p = store.provider(pid)
@@ -792,6 +792,62 @@ def test_go_start_web_setup_end_to_end(tmp_path):
         server.should_exit = True
         th.join(timeout=5)
 
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_closed_port_waits_for_the_owner_to_choose(tmp_path):
+    """No silent fallback: a closed port is shown on the website; the owner tests again (or connects out)."""
+    import httpx
+    server, th, port, fake, store = live_registry(tmp_path)
+    blocker = socket.socket()
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        offer_port = free_tcp_port()
+        blocker.bind(("0.0.0.0", offer_port))
+        blocker.listen(1)                                            # another program holds the port: not reachable
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "home"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
+               "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1", "INNERNET_NO_UPDATE": "1",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
+        proc = subprocess.Popen([str(binary), "start", "--no-browser", "--port", str(offer_port)], env=env,
+                                stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        code, out = None, ""
+        while code is None:
+            line = proc.stdout.readline()
+            assert line, out
+            out += line
+            if line.strip().startswith("Machine code:"):
+                code = line.split(":", 1)[1].strip()
+        assert "Trying an INNERnet relay" not in out and "HTTPS tunnel" not in out    # nothing chosen for the owner
+        web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
+        auth = SoftAuthenticator()
+        opt = web.post(P + "/api/claim/options", json={"code": code}).json()
+        assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                       "pair": opt.get("pair", False)}).status_code == 200
+        page = web.get(P + "/api/setup").json()
+        det = page["detected"]
+        assert det["reachable"] is False and "path" not in det and "in use" in det["reach_note"]
+        offer = {"name": det["name"], "region": det["region"], "host": "127.0.0.1", "port": offer_port, "storage_gib": 5,
+                 "network": SEPOLIA, "payout": "0x" + "c3" * 20, "terms": current_terms("provider")["sha256"]}
+        r = web.post(P + "/api/setup", json=offer)
+        assert r.status_code == 422 and "cannot reach" in r.text                    # Apply waits for a choice
+        assert web.post(P + "/api/setup/reach", json={"action": "bogus"}).status_code == 422
+        blocker.close()                                                              # the owner opened the port
+        assert web.post(P + "/api/setup/reach", json={"action": "retest"}).json() == {"ok": True}
+        for _ in range(100):
+            page = web.get(P + "/api/setup").json()
+            if not page["request"]:
+                break
+            time.sleep(0.1)
+        assert page["request"] is None and page["detected"]["reachable"] is True and page["detected"]["path"] == "direct"
+        confirm_setup(web, auth, offer)
+        rest, _ = proc.communicate(timeout=60)
+        assert proc.returncode == 0 and "Setup finished" in rest, out + rest
+        assert "reachable from the internet" in rest
+    finally:
+        blocker.close()
+        server.should_exit = True
+        th.join(timeout=5)
 
 @pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
 def test_go_serve_applies_a_change_made_on_the_website(tmp_path):
@@ -1097,10 +1153,10 @@ def test_go_passkeys_list_and_remove_with_the_machine_key(tmp_path):
         for _ in range(60):
             line = proc.stdout.readline()
             seen += line
-            if "already has 1 passkey" in line or not line:
+            if "Passkeys for this machine" in line or not line:
                 break
         proc.kill()
-        assert "already has 1 passkey(s): Mac" in seen, seen
+        assert "Passkeys for this machine: Mac (" in seen, seen
     finally:
         server.should_exit = True
         th.join(timeout=5)
@@ -1216,3 +1272,63 @@ def test_download_routes_forward_to_release_files(env):
     r = client.get(P + "/install.sh", follow_redirects=False)
     assert r.status_code == 302 and r.headers["location"].endswith("/provider/install.sh")
     assert client.get(P + "/claim").status_code == 200 and client.get(P + "/terms").status_code == 200
+
+
+def test_super_admin_page(env):
+    client, store, fake, s = env
+    from innernet2.registry_service.admin_web import new_login_link
+    assert client.get(P + "/admin").status_code == 200
+    assert client.get(P + "/api/admin/overview").status_code == 401
+    assert client.post(P + "/api/admin/login/options", json={}, headers=H).status_code == 404   # no admin yet
+    assert client.post(P + "/api/admin/enroll/options", json={"token": "nope"}, headers=H).status_code == 401
+    link = new_login_link(store, ORIGIN, P)
+    token = link.split("#token=")[1]
+    admin = SoftAuthenticator()
+    o = client.post(P + "/api/admin/enroll/options", json={"token": token}, headers=H).json()
+    assert client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])},
+                       headers=H).status_code == 200
+    assert client.post(P + "/api/admin/enroll/options", json={"token": token}, headers=H).status_code == 401  # used once
+    # Two machines; the first holds a payout contract the second wants.
+    k1, k2 = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    payto = "0x" + "ab" * 20
+    assert client.post(P + "/v1/apply", json=provider_record(k1, payto=payto)).status_code == 200
+    assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 422
+    p1 = k1.public_key().public_bytes_raw().hex()
+    store.x("INSERT INTO passkeys(cred_id, provider, public_key, sign_count, name, created_at) VALUES ('pk1',?,?,0,'Mac',1)",
+            (p1, b"k"))
+    ov = client.get(P + "/api/admin/overview").json()
+    m = [x for x in ov["machines"] if x["id"] == p1][0]
+    assert m["payto"][SEPOLIA] == payto and m["passkeys"][0]["name"] == "Mac" and ov["admins"][0]["name"]
+    assert client.post(P + f"/api/admin/machines/{p1}/state", json={"state": "suspended"}, headers=H).status_code == 422
+    assert client.post(P + f"/api/admin/machines/{p1}/state", json={"state": "suspended", "reason": "test"},
+                       headers=H).status_code == 200
+    assert store.provider(p1)["state"] == "suspended"
+    assert client.post(P + f"/api/admin/machines/{p1}/state", json={"state": "listed"}, headers=H).status_code == 200
+    assert client.post(P + "/api/admin/passkeys/pk1/delete", headers=H).status_code == 200
+    assert store.one("SELECT 1 FROM passkeys WHERE cred_id='pk1'") is None
+    assert client.post(P + f"/api/admin/machines/{p1}/delete", json={"confirm": "wrong"}, headers=H).status_code == 422
+    assert client.post(P + f"/api/admin/machines/{p1}/delete", json={"confirm": p1[:8]}, headers=H).status_code == 200
+    assert store.provider(p1) is None
+    assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 200   # payout free again
+    assert client.post(P + f"/api/admin/admins/{b64u(admin.cred_id)}/delete", headers=H).status_code == 409  # last one
+    events = {a["event"] for a in client.get(P + "/api/admin/overview").json()["audit"]}
+    assert {"admin-passkey-added", "admin-suspended", "admin-deleted", "admin-passkey-deleted"} <= events
+    # A provider session is not an admin session, and the admin can sign in again later.
+    assert client.post(P + "/api/admin/logout", headers=H).status_code == 200
+    assert client.get(P + "/api/admin/overview").status_code == 401
+    o = client.post(P + "/api/admin/login/options", json={}, headers=H).json()
+    assert client.post(P + "/api/admin/login/verify", json={"flow": o["flow"], "credential": admin.get(o["options"])},
+                       headers=H).status_code == 200
+    assert client.get(P + "/api/admin/overview").status_code == 200
+
+
+def test_leaving_machine_frees_its_payout_contract(env):
+    client, store, fake, s = env
+    k1, k2 = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    payto = "0x" + "ad" * 20
+    assert client.post(P + "/v1/apply", json=provider_record(k1, payto=payto)).status_code == 200
+    r = client.post(P + "/v1/apply", json=provider_record(k2, payto=payto))
+    assert r.status_code == 422 and "press Leave" in r.text
+    p1 = k1.public_key().public_bytes_raw().hex()
+    assert client.post(P + f"/v1/providers/{p1}/intent", json=intent_record(k1, "leave")).status_code == 200
+    assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 200
