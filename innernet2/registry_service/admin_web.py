@@ -476,6 +476,31 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
         log(state, p["id"], (reason or "by admin") + (" (held by admin)" if lock else ""), request)
         return {"ok": True, "state": state}
 
+    @app.post(P + "/api/admin/machines/{pid}/check")
+    async def ask_machine_check(pid: str, request: Request):
+        """Ask one machine to check now: for a new release and/or its payout contract."""
+        guard(request)
+        admin_session(request)
+        what = str((await body_json(request)).get("what") or "update,payout")
+        p = machine(pid)
+        own.ask_check(store, p["id"], what)
+        log("check-now", p["id"], what, request)
+        return {"ok": True}
+
+    @app.post(P + "/api/admin/check-all")
+    async def ask_all_check(request: Request):
+        """Ask every machine that is not removed to check now."""
+        guard(request)
+        admin_session(request)
+        what = str((await body_json(request)).get("what") or "update,payout")
+        n = 0
+        for p in store.providers():
+            if p["state"] not in ("removed", "gone"):
+                own.ask_check(store, p["id"], what)
+                n += 1
+        log("check-now", "", f"{what} on {n} machines", request)
+        return {"ok": True, "machines": n}
+
     @app.post(P + "/api/admin/machines/{pid}/delete")
     async def delete_machine(pid: str, request: Request):
         """Delete a machine and everything that belongs to it. Its payout contract is free again."""

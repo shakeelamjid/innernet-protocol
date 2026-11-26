@@ -144,6 +144,11 @@
     if (d.state !== 'suspended') acts.append(btn('Suspend', function () { return setState([d.id], 'suspended'); }));
     if (d.state !== 'removed') acts.append(btn('Remove', function () { return setState([d.id], 'removed'); }, true));
     if (d.held || d.state === 'suspended' || d.state === 'removed') acts.append(btn('Return to automatic', function () { return setState([d.id], 'auto'); }));
+    acts.append(btn('Ask machine to check now', function () {
+      return I.api('/api/admin/machines/' + d.id + '/check', { what: 'update,payout' }).then(function () {
+        say('act-msg', d.name + ' will check for a new release and its payout contract within about a minute (provider 0.6.9 or newer).');
+      });
+    }));
     acts.append(btn('Log out owner', function () { return I.api('/api/admin/machines/' + d.id + '/logout', {}); }));
     acts.append(btn('Delete machine', function () {
       const typed = prompt('This deletes the machine, its setups, machine code and presence. Its payout contract becomes free. Payment history is kept.\n\nType the first 8 characters of the machine id (' + d.id.slice(0, 8) + ') to confirm:');
@@ -211,7 +216,8 @@
       const split = await W.findOrCreate(n.net.factory, account, po.address, function (t) {
         say2(t === 'Confirm in your wallet…' ? 'Approve the transaction in your wallet (network fee about $0.01)…' : t);
       });
-      say2('Payout contract ready: ' + split + '. Paid by ' + account + '. The machine switches to it within about 10 minutes.');
+      say2('Payout contract ready: ' + split + '. Paid by ' + account + '. The machine is asked to switch to it now.');
+      await I.api('/api/admin/machines/' + d.id + '/check', { what: 'payout' }).catch(function () {});
     }
     function run(phone) { return pay(phone).catch(function (err) { qr.hidden = true; link.hidden = true; say2(window.InnernetWallet.friendly(err), true); }); }
     const row = el('div', 'admin-row');
@@ -334,6 +340,12 @@
   $('a-prev').addEventListener('click', function () { A.page--; loadAudit(); });
   $('a-next').addEventListener('click', function () { A.page++; loadAudit(); });
   $('d-close').addEventListener('click', function () { $('drawer').hidden = true; });
+  $('check-all').addEventListener('click', async function () {
+    try {
+      const r = await I.api('/api/admin/check-all', { what: 'update,payout' });
+      say('act-msg', r.machines + ' machines will check for a new release and their payout contract within about a minute (provider 0.6.9 or newer; older ones check every 6 hours).');
+    } catch (err) { say('act-msg', I.friendly(err), true); }
+  });
   $('signin-btn').addEventListener('click', signIn);
   $('pw-form').addEventListener('submit', async function (e) {
     e.preventDefault();

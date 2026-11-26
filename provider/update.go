@@ -252,11 +252,16 @@ func updateBeforeStart() {
 
 // updateLoop keeps a serving machine current: it checks every 6 hours and restarts into a new release.
 // Pieces, keys and settings live in ~/.innernet/provider, so a restart loses nothing.
+var updateNow = make(chan struct{}, 1) // the registry relays the operator's "update now"
+
 func updateLoop(stop func()) {
 	if updatesOff() {
 		return
 	}
-	time.Sleep(2 * time.Minute)
+	select {
+	case <-time.After(2 * time.Minute):
+	case <-updateNow:
+	}
 	for {
 		tag, err := selfUpdate()
 		switch {
@@ -267,7 +272,10 @@ func updateLoop(stop func()) {
 			stop()
 			restartSelf()
 		}
-		time.Sleep(6 * time.Hour)
+		select {
+		case <-time.After(6 * time.Hour):
+		case <-updateNow:
+		}
 	}
 }
 

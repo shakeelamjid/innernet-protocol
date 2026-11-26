@@ -479,10 +479,15 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         """Signed live presence from a provider's service (about once a minute)."""
         ip = client_ip(request)
         limiter.check("presence", ip, 30, 600)
+        body = await body_json(request)
         try:
-            return presence.record_presence(store, await body_json(request), ip, info, relay=tunnels.attached)
+            out = presence.record_presence(store, body, ip, info, relay=tunnels.attached)
         except BulkError as exc:
             raise HTTPException(422, str(exc))
+        # Anything the operator asked this machine to check now (update, payout contract).
+        pid = str(((body.get("payload") or {}).get("provider")) or "").lower()
+        what = own.take_check(store, pid) if re.fullmatch(r"[0-9a-f]{64}", pid) else ""
+        return {**out, "check": what} if what else out
 
     @app.get(P + "/v1/presence/{pid}")
     def get_presence(pid: str):

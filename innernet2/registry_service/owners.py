@@ -12,6 +12,11 @@ import time
 from .store import Store
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS machine_checks (
+  provider TEXT PRIMARY KEY,        -- asked to check now: "update", "payout" or "update,payout"
+  what TEXT NOT NULL,
+  asked_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS machine_owner (
   provider TEXT PRIMARY KEY, owner TEXT NOT NULL, linked_at INTEGER NOT NULL
 );
@@ -55,3 +60,20 @@ def link(store: Store, machine: str, owner: str) -> None:
             (machine, owner, int(time.time())))
     # Machines that had joined this machine's own account follow it.
     store.x("UPDATE machine_owner SET owner=? WHERE owner=?", (owner, machine))
+
+
+def ask_check(store, pid: str, what: str) -> None:
+    """Ask a machine to check now; it is told with its next presence (within about a minute)."""
+    row = store.one("SELECT what FROM machine_checks WHERE provider=?", (pid,))
+    parts = set(row["what"].split(",")) if row else set()
+    parts.update(w for w in what.split(",") if w in ("update", "payout"))
+    store.x("INSERT INTO machine_checks(provider, what, asked_at) VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+            "what=excluded.what, asked_at=excluded.asked_at", (pid, ",".join(sorted(parts)), int(time.time())))
+
+
+def take_check(store, pid: str) -> str:
+    row = store.one("SELECT what FROM machine_checks WHERE provider=?", (pid,))
+    if not row:
+        return ""
+    store.x("DELETE FROM machine_checks WHERE provider=?", (pid,))
+    return row["what"]

@@ -1707,3 +1707,35 @@ def test_a_machine_suspended_for_its_payout_returns_once_it_applies_with_a_contr
             (now - 3600, pid))
     assert client.post(P + "/v1/apply", json=provider_record(k, payto="0x" + "cd" * 20)).status_code == 200
     assert store.provider(pid)["state"] == "listed"
+
+
+def test_admin_asks_machines_to_check_now_through_their_next_presence(tmp_path, monkeypatch):
+    from innernet2 import irm_registry as r
+    from innernet2.registry_service import presence
+    from innernet2.registry_service.admin_web import new_login_link
+    fake = FakeChain()
+    st = settings(tmp_path)
+    st.trust_proxy = True
+    app = create_app(st, rpc=fake, connect=lambda h, p, t: 3.0)
+    client, store = TestClient(app, base_url=ORIGIN), app.state.store
+    monkeypatch.setattr(presence, "info_check", lambda *a, **k: True, raising=False)
+    k = Ed25519PrivateKey.generate()
+    pid = k.public_key().public_bytes_raw().hex()
+    assert client.post(P + "/v1/apply", json=provider_record(k, host="203.0.113.9")).status_code == 200
+    tok = new_login_link(store, ORIGIN, P).split("#token=")[1]
+    admin = SoftAuthenticator()
+    o = client.post(P + "/api/admin/enroll/options", json={"token": tok}, headers=H).json()
+    client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])}, headers=H)
+    assert client.post(P + f"/api/admin/machines/{pid}/check", json={"what": "payout"}, headers=H).status_code == 200
+    assert client.post(P + "/api/admin/check-all", json={"what": "update"}, headers=H).json()["machines"] == 1
+
+    def ping(seq):
+        now = int(time.time())
+        p = {"version": "REG-1-PRESENCE", "provider": pid, "endpoint": {"host": "203.0.113.9", "port": 9443},
+             "path": "router", "seq": now * 1000 + seq, "issued_at": now, "software": "innernet-provider/0.6.9", "stats": {}}
+        return client.post(P + "/v1/presence", json={"payload": p, "signature": k.sign(r.PRESENCE_DOMAIN + r.canonical(p)).hex()},
+                           headers={"X-Forwarded-For": "203.0.113.9"})
+    first = ping(1)
+    assert first.status_code == 200, first.text
+    assert first.json()["check"] == "payout,update"
+    assert "check" not in ping(2).json()                                  # told once

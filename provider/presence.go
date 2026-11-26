@@ -176,6 +176,7 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 		State     string `json:"state"`
 		Reachable bool   `json:"reachable"`
 		Detail    string `json:"detail"`
+		Check     string `json:"check"` // the operator asks this machine to check now: update, payout
 	}
 	_ = json.Unmarshal(body, &out)
 	if resp.StatusCode != 200 {
@@ -183,6 +184,15 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 		return st
 	}
 	st.State, st.Reachable = out.State, out.Reachable
+	if strings.Contains(out.Check, "payout") {
+		go s.adoptPayout(registry)
+	}
+	if strings.Contains(out.Check, "update") {
+		select {
+		case updateNow <- struct{}{}:
+		default:
+		}
+	}
 	if path == "direct" || path == "router" {
 		if !out.Reachable {
 			s.nudgeKeeper() // the registry could not reach the port: reopen it now
