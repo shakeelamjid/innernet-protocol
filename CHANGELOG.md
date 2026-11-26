@@ -14,7 +14,7 @@
 - The setup page tells the owner to confirm in the terminal when the machine still runs an older provider.
 - No silent fallback when the port is closed: the setup page and the terminal show why and offer Test again or Connect out instead (relay, else HTTPS tunnel); Apply waits until the machine is reachable. `/api/setup/reach`, `/v1/connect/facts`. `--yes` keeps the automatic fallback.
 - The setup page says why VPN exit is off (HTTPS tunnel, or not reachable) and how to turn it on.
-- Super-admin page `/registry/admin` (admin passkeys; first one via `registry-admin login`): approve, suspend, remove or delete machines (frees their payout contract), delete passkeys, log out sessions, audit log.
+- Super-admin page `/registry/admin` (sign in with `INNERNET_ADMIN_USER` / `INNERNET_ADMIN_PASSWORD`, 16+ characters, rate limited; or an admin passkey): approve, suspend, remove or delete machines (frees their payout contract), delete passkeys, log out sessions, audit log.
 - `provider/LATEST` is `provider-v0.6.2`.
 
 ### VPN exit (VPN-1) under Bandwidth; installs and updates from innernetcorp.com

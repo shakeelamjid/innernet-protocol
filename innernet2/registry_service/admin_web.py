@@ -1,7 +1,9 @@
 """Super-admin web page for the registry operator.
 
-The operator signs in with an admin passkey. The first passkey is added through a one-time link
-printed by `registry-admin login` (run inside the registry's container). Admin sessions are separate
+The operator signs in with the username and password set in the registry's environment
+(INNERNET_ADMIN_USER, INNERNET_ADMIN_PASSWORD; the password needs 16+ characters, otherwise password
+sign-in is off), or with an admin passkey. A passkey can be added from the page once signed in, or
+through a one-time link printed by `registry-admin login` (run inside the registry's container). Admin sessions are separate
 from provider sessions; every action is written to the audit log.
 
 What it can do: list every machine, approve (list), suspend, remove, or delete a machine with all its
@@ -11,7 +13,9 @@ deleted; deleting the machine that uses one is what frees it.
 """
 from __future__ import annotations
 
+import hmac
 import json
+import os
 import secrets
 import time
 
@@ -46,6 +50,18 @@ CREATE TABLE IF NOT EXISTS admin_tokens (
 # Tables whose rows belong to one machine (deleted with it). Payments stay: they are history.
 MACHINE_TABLES = ("probes", "passkeys", "sessions", "pairing", "claims", "presence", "presence_log",
                   "enroll_tokens", "login_challenges")
+
+
+MIN_PASSWORD = 16
+
+
+def password_login() -> tuple[str, str] | None:
+    """(user, password) from the environment, or None when password sign-in is off."""
+    user = os.environ.get("INNERNET_ADMIN_USER", "").strip()
+    pw = os.environ.get("INNERNET_ADMIN_PASSWORD", "")
+    if not user or len(pw) < MIN_PASSWORD:
+        return None
+    return user, pw
 
 
 def migrate(store: Store) -> None:
@@ -92,6 +108,32 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
         return page("admin.html")
 
     # ---- sign-in ---------------------------------------------------------
+    @app.get(P + "/api/admin/config")
+    def admin_config():
+        return {"password": password_login() is not None,
+                "passkey": store.one("SELECT 1 FROM admin_passkeys") is not None}
+
+    @app.post(P + "/api/admin/login/password")
+    async def login_password(request: Request):
+        guard(request)
+        ip = client_ip(request)
+        limiter.check("admin-pw", ip, 8, 900)            # per address
+        limiter.check("admin-pw", "*", 60, 3600)         # everyone together
+        creds = password_login()
+        if creds is None:
+            raise HTTPException(404, "Password sign-in is off: set INNERNET_ADMIN_USER and INNERNET_ADMIN_PASSWORD "
+                                     f"({MIN_PASSWORD}+ characters) on the registry.")
+        data = await body_json(request)
+        user_ok = hmac.compare_digest(str(data.get("user", "")).encode(), creds[0].encode())
+        pw_ok = hmac.compare_digest(str(data.get("password", "")).encode(), creds[1].encode())
+        if not (user_ok and pw_ok):
+            log("login-failed", "-", "wrong username or password", request)
+            raise HTTPException(401, "Wrong username or password.")
+        log("login", "-", "password", request)
+        response = JSONResponse({"ok": True})
+        start(request, response)
+        return response
+
     @app.post(P + "/api/admin/enroll/options")
     async def enroll_options(request: Request):
         guard(request)

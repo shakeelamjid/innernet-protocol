@@ -22,8 +22,13 @@
     <div class="wrap">
       <section class="card frame step" id="signin" hidden>
         <h2>Sign in</h2>
-        <p id="signin-text">Sign in with your admin passkey.</p>
-        <button class="btn btn-light" id="signin-btn">Sign in with passkey</button>
+        <form id="pw-form" class="fields" hidden novalidate>
+          <label>Username<input id="pw-user" class="field" autocomplete="username"></label>
+          <label>Password<input id="pw-pass" class="field" type="password" autocomplete="current-password"></label>
+          <p><button class="btn btn-light" type="submit">Sign in</button></p>
+        </form>
+        <p id="signin-text"></p>
+        <button class="btn" type="button" id="signin-btn" hidden>Sign in with passkey</button>
         <p class="msg" id="signin-msg" role="status"></p>
       </section>
 

@@ -1332,3 +1332,32 @@ def test_leaving_machine_frees_its_payout_contract(env):
     p1 = k1.public_key().public_bytes_raw().hex()
     assert client.post(P + f"/v1/providers/{p1}/intent", json=intent_record(k1, "leave")).status_code == 200
     assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 200
+
+
+def test_admin_password_sign_in(env, monkeypatch):
+    client, store, fake, s = env
+    assert client.get(P + "/api/admin/config").json() == {"password": False, "passkey": False}
+    monkeypatch.setenv("INNERNET_ADMIN_USER", "shakeel")
+    monkeypatch.setenv("INNERNET_ADMIN_PASSWORD", "short")
+    assert client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "short"},
+                       headers=H).status_code == 404                     # under 16 characters: password sign-in off
+    monkeypatch.setenv("INNERNET_ADMIN_PASSWORD", "a-long-admin-password-123")
+    assert client.get(P + "/api/admin/config").json()["password"] is True
+    assert client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "wrong-password-xxxxx"},
+                       headers=H).status_code == 401
+    assert client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "a-long-admin-password-123"},
+                       ).status_code == 403                               # browser header required
+    r = client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "a-long-admin-password-123"},
+                    headers=H)
+    assert r.status_code == 200 and client.get(P + "/api/admin/overview").status_code == 200
+    # Signed in with the password, an admin passkey can be added from the page.
+    o = client.post(P + "/api/admin/enroll/options", json={}, headers=H).json()
+    admin = SoftAuthenticator()
+    assert client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])},
+                       headers=H).status_code == 200
+    assert client.get(P + "/api/admin/config").json() == {"password": True, "passkey": True}
+    for _ in range(8):
+        client.post(P + "/api/admin/login/password", json={"user": "x", "password": "y"}, headers=H)
+    assert client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "a-long-admin-password-123"},
+                       headers=H).status_code == 429                      # too many tries from this address
+

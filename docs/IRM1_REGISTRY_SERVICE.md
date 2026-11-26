@@ -61,6 +61,7 @@ Re-applying with the same address and payout contract keeps a listed provider li
 | `INNERNET_REGISTRY_ORIGIN` | `https://innernetcorp.com` | Must match the address bar exactly, or passkeys fail |
 | `INNERNET_REGISTRY_RP_ID` | `innernetcorp.com` | Passkeys are bound to this domain |
 | `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA` | the factory address, once deployed | Deploy it once from your own wallet at `/registry/payout#operator`. Until set, payout contracts are accepted without the split check |
+| `INNERNET_ADMIN_USER`, `INNERNET_ADMIN_PASSWORD` | your choice; the password needs 16+ characters | Sign-in for `/registry/admin`. Use a long random password (a password manager). Unset or shorter: password sign-in is off |
 | `INNERNET_FEE_PAYTO_BASE`, `INNERNET_RPC_BASE` | **do not set yet** | Mainnet stays off until the split contract is audited and you have legal advice |
 
 Never put a private key or seed phrase in these variables. The registry signing key is created on first start inside the volume (`registry_ed25519`, mode 0600).
@@ -102,7 +103,7 @@ Run `innernet-provider relay` from `deploy/Dockerfile.relay` as a separate Cooli
 
 ## Super-admin page
 
-`/registry/admin` is the operator's page, signed in with an admin passkey (user verification required). Add the first one with `registry-admin login` in the registry container: it prints a one-time link valid for 10 minutes. Once signed in, more admin passkeys can be added from the page; the last one cannot be deleted. Admin sessions last 4 hours and are separate from provider sessions.
+`/registry/admin` is the operator's page. Sign in with `INNERNET_ADMIN_USER` and `INNERNET_ADMIN_PASSWORD` (set on the registry in Coolify; 8 tries per address per 15 minutes, 60 per hour in total; failed tries are logged), or with an admin passkey (user verification required). Once signed in, admin passkeys can be added from the page; `registry-admin login` in the registry container also prints a one-time link (10 minutes) that adds one. The last admin passkey cannot be deleted. Admin sessions last 4 hours and are separate from provider sessions.
 
 From the page the operator can approve (list), suspend or remove a machine (a reason is required and shown to the owner), log out its web sessions, delete one of its passkeys, or delete the machine with all its records (setups, machine code, passkeys, sessions, presence, probes). Payment history is kept. Deleting a machine frees its payout contract for another machine; the contract itself is on-chain and cannot be deleted. Setups that were never applied are listed and can be deleted too. Every action goes to the audit log, which the page shows.
 

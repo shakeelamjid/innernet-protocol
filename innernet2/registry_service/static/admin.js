@@ -82,7 +82,13 @@
     catch (err) {
       if (err.status === 401) {
         $('panel').hidden = true; $('signin').hidden = false; $('logout').hidden = $('add-admin').hidden = true;
-        if (/token=/.test(location.hash)) { $('signin-text').textContent = 'Add your admin passkey. The link works once, for 10 minutes.'; $('signin-btn').textContent = 'Add admin passkey'; }
+        const cfg = await I.api('/api/admin/config');
+        const link = /token=/.test(location.hash);
+        $('pw-form').hidden = !cfg.password || link;
+        $('signin-btn').hidden = !(cfg.passkey || link);
+        if (link) { $('signin-text').textContent = 'Add your admin passkey. The link works once, for 10 minutes.'; $('signin-btn').textContent = 'Add admin passkey'; }
+        else if (!cfg.password && !cfg.passkey) $('signin-text').textContent = 'Admin sign-in is not set up. Set INNERNET_ADMIN_USER and INNERNET_ADMIN_PASSWORD (16+ characters) on the registry and redeploy.';
+        else $('signin-text').textContent = cfg.password && cfg.passkey ? 'Or sign in with an admin passkey:' : '';
         return;
       }
       throw err;
@@ -118,6 +124,14 @@
   }
 
   $('signin-btn').addEventListener('click', signIn);
+  $('pw-form').addEventListener('submit', async function (e) {
+    e.preventDefault();
+    try {
+      await I.api('/api/admin/login/password', { user: $('pw-user').value.trim(), password: $('pw-pass').value });
+      $('pw-pass').value = '';
+      await load();
+    } catch (err) { say('signin-msg', I.friendly(err), true); }
+  });
   $('logout').addEventListener('click', async function () { await I.api('/api/admin/logout', {}); location.reload(); });
   $('add-admin').addEventListener('click', async function () {
     try {
