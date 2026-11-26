@@ -6,15 +6,22 @@
   function el(tag, cls, text) { const e = document.createElement(tag); if (cls) e.className = cls; if (text != null) e.textContent = text; return e; }
   function btn(label, fn, danger) {
     const b = el('button', 'btn btn-sm' + (danger ? ' btn-danger' : ''), label); b.type = 'button';
-    b.addEventListener('click', async function () {
+    b.addEventListener('click', async function (ev) {
+      ev.stopPropagation();
       b.disabled = true;
-      try { await fn(); await load(); } catch (err) { say('act-msg', I.friendly(err), true); }
+      try { await fn(); await refresh(); } catch (err) { say('act-msg', I.friendly(err), true); }
       b.disabled = false;
     });
     return b;
   }
-  const short = function (id) { return id.slice(0, 12) + '…'; };
+  const short = function (id) { return id ? id.slice(0, 10) + '…' : ''; };
+  const pct = function (v) { return v == null ? '–' : (v * 100).toFixed(1) + '%'; };
+  const when = function (t) { return t ? I.when(t) : '–'; };
+  function td(tr, text, cls) { const c = el('td', cls, text); tr.append(c); return c; }
+  function stateTag(r) { return el('span', 'state ' + r.state, r.state + (r.held ? ' · held' : '')); }
+  function qs(o) { return Object.keys(o).filter(function (k) { return o[k] !== '' && o[k] != null; }).map(function (k) { return k + '=' + encodeURIComponent(o[k]); }).join('&'); }
 
+  // ---- sign-in ----
   async function signIn() {
     const token = (location.hash.match(/token=([A-Za-z0-9_-]+)/) || [])[1];
     try {
@@ -27,109 +34,248 @@
         const o = await I.api('/api/admin/login/options', {});
         await I.api('/api/admin/login/verify', { flow: o.flow, credential: await I.get(o.options) });
       }
-      await load();
+      await start();
     } catch (err) { say('signin-msg', I.friendly(err), true); }
   }
+  async function showSignIn() {
+    $('panel').hidden = true; $('signin').hidden = false; $('logout').hidden = $('add-admin').hidden = true;
+    const cfg = await I.api('/api/admin/config');
+    const link = /token=/.test(location.hash);
+    $('pw-form').hidden = !cfg.password || link;
+    $('signin-btn').hidden = !(cfg.passkey || link);
+    if (link) { $('signin-text').textContent = 'Add your admin passkey. The link works once, for 10 minutes.'; $('signin-btn').textContent = 'Add admin passkey'; }
+    else if (!cfg.password && !cfg.passkey) $('signin-text').textContent = 'Admin sign-in is not set up. Set INNERNET_ADMIN_USER and INNERNET_ADMIN_PASSWORD (16+ characters) on the registry and redeploy.';
+    else $('signin-text').textContent = cfg.password && cfg.passkey ? 'Or sign in with an admin passkey:' : '';
+  }
 
-  function machineCard(m) {
-    const c = el('section', 'card frame admin-item');
-    const top = el('div', 'admin-row');
-    top.append(el('strong', '', m.name || '(no name)'), el('span', 'state ' + m.state, m.state), el('span', 'mono dim', short(m.id)));
-    c.append(top);
+  // ---- state actions ----
+  function setState(ids, state) {
+    let reason = '';
+    if (state === 'suspended' || state === 'removed') {
+      reason = prompt('Reason (the owner sees it). Suspend and remove are held by you until you return the machine to automatic:');
+      if (!reason) return Promise.resolve();
+    }
+    if (ids.length === 1) return I.api('/api/admin/machines/' + ids[0] + '/state', { state: state, reason: reason });
+    return I.api('/api/admin/bulk', { ids: ids, state: state, reason: reason }).then(function (r) {
+      say('act-msg', r.done + ' changed' + (r.failed.length ? ', ' + r.failed.length + ' failed: ' + r.failed.map(function (f) { return f.error; }).join('; ') : '.'), !!r.failed.length);
+    });
+  }
+
+  // ---- summary and waiting queue ----
+  async function loadSummary() {
+    const s = await I.api('/api/admin/summary');
+    const tiles = $('tiles'); tiles.textContent = '';
+    [[s.machines, 'machines'], [s.online, 'online now'], [s.states.listed || 0, 'listed'], [s.waiting_total, 'waiting for approval'],
+      [(s.states.suspended || 0) + (s.states.gone || 0), 'suspended or gone'], [s.held, 'held by admin'], [s.owners, 'owners']]
+      .forEach(function (t) { const li = el('li'); li.append(el('strong', '', String(t[0])), el('span', '', t[1])); tiles.append(li); });
+    $('n-waiting').textContent = s.waiting_total ? '(' + s.waiting_total + ')' : '';
+    $('n-machines').textContent = '(' + s.machines + ')';
+    $('n-owners').textContent = '(' + s.owners + ')';
+    $('n-setups').textContent = s.setups ? '(' + s.setups + ')' : '';
+    $('waiting-note').textContent = 'Machines are listed automatically after ' + s.auto_list_hours + ' h of checks at 95% reachability with a valid payout contract. Approve to list one now.';
+    const tb = $('waiting'); tb.textContent = '';
+    if (!s.waiting.length) { const tr = el('tr'); td(tr, 'Nobody is waiting.', 'dim').colSpan = 8; tb.append(tr); }
+    s.waiting.forEach(function (r) {
+      const tr = el('tr', 'clickable');
+      td(tr, ''); td(tr, r.name).append(el('div', 'mono dim', short(r.id)));
+      td(tr, short(r.owner), 'mono'); td(tr, when(r.applied_at)); td(tr, r.online ? 'yes' : 'no'); td(tr, pct(r.uptime_7d));
+      td(tr, r.services.join(', '));
+      const c = td(tr, ''); c.append(btn('Approve', function () { return setState([r.id], 'listed'); }));
+      tr.addEventListener('click', function () { openMachine(r.id); });
+      tb.append(tr);
+    });
+  }
+
+  // ---- machines table ----
+  const M = { q: '', state: '', online: '', owner: '', sort: 'applied_at', dir: 'desc', page: 1, size: 50 };
+  const selected = new Set();
+  async function loadMachines() {
+    const d = await I.api('/api/admin/machines?' + qs(M));
+    $('m-count').textContent = d.total + ' machines' + (M.owner ? ' of owner ' + short(M.owner) : '');
+    const pages = Math.max(1, Math.ceil(d.total / d.size));
+    $('m-page').textContent = 'Page ' + d.page + ' of ' + pages;
+    $('m-prev').disabled = d.page <= 1; $('m-next').disabled = d.page >= pages;
+    const tb = $('machines'); tb.textContent = '';
+    if (!d.rows.length) { const tr = el('tr'); td(tr, 'No machines match.', 'dim').colSpan = 9; tb.append(tr); }
+    d.rows.forEach(function (r) {
+      const tr = el('tr', 'clickable');
+      const c0 = td(tr, ''); const cb = el('input'); cb.type = 'checkbox'; cb.checked = selected.has(r.id);
+      cb.addEventListener('click', function (ev) { ev.stopPropagation(); cb.checked ? selected.add(r.id) : selected.delete(r.id); bulkbar(); });
+      c0.append(cb);
+      td(tr, r.name).append(el('div', 'mono dim', short(r.id)));
+      const co = td(tr, short(r.owner), 'mono link');
+      co.addEventListener('click', function (ev) { ev.stopPropagation(); M.owner = r.owner; M.page = 1; loadMachines(); });
+      td(tr, '').append(stateTag(r));
+      td(tr, r.online ? (r.path || 'yes') : 'no');
+      td(tr, r.services.join(', ')); td(tr, r.region); td(tr, pct(r.uptime_7d)); td(tr, when(r.last_seen));
+      tr.addEventListener('click', function () { openMachine(r.id); });
+      tb.append(tr);
+    });
+    bulkbar();
+  }
+  function bulkbar() {
+    $('bulkbar').hidden = !selected.size;
+    $('bulk-n').textContent = selected.size + ' selected';
+  }
+
+  // ---- machine details drawer ----
+  async function openMachine(id) {
+    const d = await I.api('/api/admin/machines/' + id);
+    $('d-title').textContent = d.name + ' · ' + d.state + (d.held ? ' (held by admin)' : '');
+    const b = $('d-body'); b.textContent = '';
     const kv = el('dl', 'kv');
-    function add(k, v) { kv.append(el('dt', '', k), el('dd', '', v)); }
-    add('Machine id', m.id);
-    add('Services', (m.services || []).join(', ') || '–');
-    add('Payout contract', Object.entries(m.payto || {}).map(function (e) { return e[1] + ' (' + e[0] + ')'; }).join('; ') || '–');
-    add('Address', (m.endpoints || []).map(function (e) { return e.host + ':' + e.port; }).join(', ') || '–');
-    add('Applied', I.when(m.applied_at)); add('Last seen', m.last_seen ? I.when(m.last_seen) : 'never');
-    if (m.reason) add('Reason', m.reason);
-    add('Web sessions', String(m.sessions));
-    c.append(kv);
-    const keys = el('div', 'admin-keys');
-    (m.passkeys || []).forEach(function (k) {
-      const r = el('div', 'admin-row');
-      r.append(el('span', '', 'Passkey ' + k.name + ' · added ' + I.when(k.created_at)),
-        btn('Delete passkey', function () { return I.api('/api/admin/passkeys/' + encodeURIComponent(k.id) + '/delete', {}); }, true));
-      keys.append(r);
-    });
-    c.append(keys);
+    function add(k, v) { kv.append(el('dt', '', k), el('dd', '', v == null || v === '' ? '–' : String(v))); }
+    add('Machine id', d.id); add('Owner', d.owner + ' (' + d.owner_machines.length + ' machines)');
+    add('Reason', d.reason); add('Services', d.services.join(', '));
+    add('Prices', Object.keys(d.prices).map(function (k) { return k + ' ' + d.prices[k]; }).join(' · '));
+    add('Payout', Object.keys(d.payto).map(function (k) { return d.payto[k] + ' (' + k + ')'; }).join('; '));
+    add('Listed address', (d.endpoints || []).map(function (e) { return e.host + ':' + e.port; }).join(', '));
+    const pr = d.presence && d.presence.record && d.presence.record.payload;
+    add('Now', pr ? (d.presence.online ? 'online' : 'offline') + ' · ' + pr.path + ' · ' + pr.endpoint.host + ':' + pr.endpoint.port + ' · ' + pr.software : 'no check-in yet');
+    add('Hours', d.availability ? JSON.stringify(d.availability) : 'always on');
+    add('Region / type', (d.region || '?') + ' / ' + (d.class || '?'));
+    add('Applied / listed', when(d.applied_at) + ' / ' + when(d.listed_at));
+    add('Owner signed in', d.sessions + ' sessions');
+    b.append(kv);
     const acts = el('div', 'admin-row admin-acts');
-    function setState(state) {
-      return function () {
-        const reason = state === 'listed' ? '' : prompt('Reason (the owner sees it):');
-        if (state !== 'listed' && !reason) return Promise.resolve();
-        return I.api('/api/admin/machines/' + m.id + '/state', { state: state, reason: reason || '' });
-      };
-    }
-    if (m.state !== 'listed') acts.append(btn('Approve (list)', setState('listed')));
-    if (m.state !== 'suspended') acts.append(btn('Suspend', setState('suspended')));
-    if (m.state !== 'removed') acts.append(btn('Remove', setState('removed'), true));
-    acts.append(btn('Log out web sessions', function () { return I.api('/api/admin/machines/' + m.id + '/logout', {}); }));
+    if (d.state !== 'listed') acts.append(btn('Approve (list)', function () { return setState([d.id], 'listed'); }));
+    if (d.state !== 'suspended') acts.append(btn('Suspend', function () { return setState([d.id], 'suspended'); }));
+    if (d.state !== 'removed') acts.append(btn('Remove', function () { return setState([d.id], 'removed'); }, true));
+    if (d.held || d.state === 'suspended' || d.state === 'removed') acts.append(btn('Return to automatic', function () { return setState([d.id], 'auto'); }));
+    acts.append(btn('Log out owner', function () { return I.api('/api/admin/machines/' + d.id + '/logout', {}); }));
     acts.append(btn('Delete machine', function () {
-      const typed = prompt('This deletes the machine, its passkeys, sessions, setups and machine code. Its payout contract becomes free. ' +
-        'Payment history is kept.\n\nType the first 8 characters of the machine id (' + m.id.slice(0, 8) + ') to confirm:');
+      const typed = prompt('This deletes the machine, its setups, machine code and presence. Its payout contract becomes free. Payment history is kept.\n\nType the first 8 characters of the machine id (' + d.id.slice(0, 8) + ') to confirm:');
       if (!typed) return Promise.resolve();
-      return I.api('/api/admin/machines/' + m.id + '/delete', { confirm: typed.trim().toLowerCase() });
+      return I.api('/api/admin/machines/' + d.id + '/delete', { confirm: typed.trim().toLowerCase() }).then(function () { $('drawer').hidden = true; });
     }, true));
-    c.append(acts);
-    return c;
+    b.append(acts);
+    b.append(el('h3', '', 'Owner passkeys'));
+    const pk = el('div', 'admin-keys');
+    if (!d.passkeys.length) pk.append(el('p', 'dim', 'None.'));
+    d.passkeys.forEach(function (k) {
+      const r = el('div', 'admin-row');
+      r.append(el('span', '', k.name + ' · added ' + when(k.created_at) + ' · last used ' + when(k.last_used)),
+        btn('Delete passkey', function () { return I.api('/api/admin/passkeys/' + encodeURIComponent(k.id) + '/delete', {}); }, true));
+      pk.append(r);
+    });
+    b.append(pk);
+    b.append(el('h3', '', 'Recent events'));
+    const t = el('table', 'adm'); const tb = el('tbody');
+    d.audit.forEach(function (a) { const tr = el('tr'); td(tr, when(a.ts), 'dim'); td(tr, a.event); td(tr, a.detail); tb.append(tr); });
+    t.append(tb); b.append(t);
+    $('drawer').hidden = false;
   }
 
-  async function load() {
-    let d;
-    try { d = await I.api('/api/admin/overview'); }
-    catch (err) {
-      if (err.status === 401) {
-        $('panel').hidden = true; $('signin').hidden = false; $('logout').hidden = $('add-admin').hidden = true;
-        const cfg = await I.api('/api/admin/config');
-        const link = /token=/.test(location.hash);
-        $('pw-form').hidden = !cfg.password || link;
-        $('signin-btn').hidden = !(cfg.passkey || link);
-        if (link) { $('signin-text').textContent = 'Add your admin passkey. The link works once, for 10 minutes.'; $('signin-btn').textContent = 'Add admin passkey'; }
-        else if (!cfg.password && !cfg.passkey) $('signin-text').textContent = 'Admin sign-in is not set up. Set INNERNET_ADMIN_USER and INNERNET_ADMIN_PASSWORD (16+ characters) on the registry and redeploy.';
-        else $('signin-text').textContent = cfg.password && cfg.passkey ? 'Or sign in with an admin passkey:' : '';
-        return;
-      }
-      throw err;
-    }
-    $('signin').hidden = true; $('panel').hidden = false; $('logout').hidden = $('add-admin').hidden = false;
-    const counts = {};
-    d.machines.forEach(function (m) { counts[m.state] = (counts[m.state] || 0) + 1; });
-    $('summary').textContent = d.machines.length + ' machines · ' + Object.keys(counts).map(function (k) { return counts[k] + ' ' + k; }).join(' · ');
-    const list = $('machines'); list.textContent = '';
-    if (!d.machines.length) list.append(el('p', 'msg', 'No machines yet.'));
-    d.machines.forEach(function (m) { list.append(machineCard(m)); });
-    const pend = $('pending'); pend.textContent = '';
-    if (!d.pending.length) pend.append(el('p', 'msg', 'None.'));
-    d.pending.forEach(function (p) {
-      const r = el('section', 'card frame admin-item admin-row');
-      r.append(el('span', '', (p.name || '?') + ' · ' + p.status + ' · ' + I.when(p.created_at)), el('span', 'mono dim', short(p.provider)),
-        btn('Delete', function () { return I.api('/api/admin/machines/' + p.provider + '/delete', { confirm: p.provider.slice(0, 8) }); }, true));
-      pend.append(r);
+  // ---- owners, setups, admins, audit ----
+  const O = { q: '', page: 1 };
+  async function loadOwners() {
+    const d = await I.api('/api/admin/owners?' + qs(O));
+    $('o-count').textContent = d.total + ' owners';
+    const tb = $('owners'); tb.textContent = '';
+    d.rows.forEach(function (o) {
+      const tr = el('tr', 'clickable');
+      td(tr, short(o.owner), 'mono').append(el('div', 'dim', o.names.slice(0, 3).join(', ') + (o.names.length > 3 ? '…' : '')));
+      td(tr, String(o.machines)); td(tr, String(o.online));
+      td(tr, Object.keys(o.states).map(function (k) { return o.states[k] + ' ' + k; }).join(', '));
+      td(tr, o.payouts.map(short).join(', ') || '–', 'mono'); td(tr, String(o.passkeys)); td(tr, String(o.sessions));
+      tr.addEventListener('click', function () { M.owner = o.owner; M.page = 1; tab('machines'); });
+      tb.append(tr);
     });
-    const ad = $('admins'); ad.textContent = '';
-    d.admins.forEach(function (a) {
-      const r = el('section', 'card frame admin-item admin-row');
-      r.append(el('span', '', a.name + ' · added ' + I.when(a.created_at) + (a.last_used ? ' · last used ' + I.when(a.last_used) : '')),
-        btn('Delete', function () { return I.api('/api/admin/admins/' + encodeURIComponent(a.id) + '/delete', {}); }, true));
-      ad.append(r);
-    });
-    const au = $('audit'); au.textContent = '';
-    d.audit.forEach(function (a) {
+  }
+  async function loadSetups() {
+    const d = await I.api('/api/admin/setups');
+    const tb = $('setups'); tb.textContent = '';
+    if (!d.rows.length) { const tr = el('tr'); td(tr, 'None.', 'dim').colSpan = 5; tb.append(tr); }
+    d.rows.forEach(function (r) {
       const tr = el('tr');
-      tr.append(el('td', 'dim', I.when(a.ts)), el('td', 'mono', a.provider === '-' ? 'admin' : short(a.provider)), el('td', '', a.event), el('td', '', a.detail));
-      au.append(tr);
+      td(tr, (r.name || '?')).append(el('div', 'mono dim', short(r.provider)));
+      td(tr, r.os || '?'); td(tr, r.status); td(tr, when(r.created_at));
+      td(tr, '').append(btn('Delete', function () { return I.api('/api/admin/machines/' + r.provider + '/delete', { confirm: r.provider.slice(0, 8) }); }, true));
+      tb.append(tr);
+    });
+  }
+  async function loadAdmins() {
+    const d = await I.api('/api/admin/overview');
+    const tb = $('admins'); tb.textContent = '';
+    d.admins.forEach(function (a) {
+      const tr = el('tr');
+      td(tr, a.name); td(tr, when(a.created_at)); td(tr, when(a.last_used));
+      td(tr, '').append(btn('Delete', function () { return I.api('/api/admin/admins/' + encodeURIComponent(a.id) + '/delete', {}); }, true));
+      tb.append(tr);
+    });
+  }
+  const A = { q: '', page: 1 };
+  async function loadAudit() {
+    const d = await I.api('/api/admin/audit?' + qs(A));
+    const pages = Math.max(1, Math.ceil(d.total / d.size));
+    $('a-count').textContent = d.total + ' events'; $('a-page').textContent = 'Page ' + d.page + ' of ' + pages;
+    $('a-prev').disabled = d.page <= 1; $('a-next').disabled = d.page >= pages;
+    const tb = $('audit'); tb.textContent = '';
+    d.rows.forEach(function (a) {
+      const tr = el('tr');
+      td(tr, when(a.ts), 'dim'); td(tr, a.provider === '-' ? 'admin' : short(a.provider), 'mono'); td(tr, a.event); td(tr, a.detail);
+      tb.append(tr);
     });
   }
 
+  // ---- tabs ----
+  let current = 'waiting';
+  const LOAD = { waiting: loadSummary, machines: loadMachines, owners: loadOwners, setups: loadSetups, admins: loadAdmins, audit: loadAudit };
+  function tab(name) {
+    current = name;
+    document.querySelectorAll('[role=tab]').forEach(function (t) { t.setAttribute('aria-selected', String(t.getAttribute('data-tab') === name)); });
+    document.querySelectorAll('.tabpanel').forEach(function (p) { p.hidden = p.getAttribute('data-panel') !== name; });
+    LOAD[name]().catch(function (err) { say('act-msg', I.friendly(err), true); });
+  }
+  async function refresh() {
+    await loadSummary();
+    if (current !== 'waiting') await LOAD[current]();
+  }
+  async function start() {
+    try { await loadSummary(); }
+    catch (err) { if (err.status === 401) { await showSignIn(); return; } throw err; }
+    $('signin').hidden = true; $('panel').hidden = false; $('logout').hidden = $('add-admin').hidden = false;
+    tab(current);
+  }
+
+  document.querySelectorAll('[role=tab]').forEach(function (t) { t.addEventListener('click', function () { tab(t.getAttribute('data-tab')); }); });
+  let timer = null;
+  function debounce(fn) { clearTimeout(timer); timer = setTimeout(fn, 250); }
+  $('m-q').addEventListener('input', function () { M.q = this.value; M.page = 1; debounce(loadMachines); });
+  $('m-state').addEventListener('change', function () { M.state = this.value; M.page = 1; loadMachines(); });
+  $('m-online').addEventListener('change', function () { M.online = this.value; M.page = 1; loadMachines(); });
+  $('m-prev').addEventListener('click', function () { M.page--; loadMachines(); });
+  $('m-next').addEventListener('click', function () { M.page++; loadMachines(); });
+  document.querySelectorAll('[data-sort]').forEach(function (h) {
+    h.classList.add('sortable');
+    h.addEventListener('click', function () {
+      const k = h.getAttribute('data-sort');
+      M.dir = M.sort === k && M.dir === 'desc' ? 'asc' : 'desc'; M.sort = k; loadMachines();
+    });
+  });
+  $('m-all').addEventListener('change', function () {
+    const on = this.checked;
+    document.querySelectorAll('#machines input[type=checkbox]').forEach(function (cb) { cb.checked = on; cb.dispatchEvent(new Event('sync')); });
+    I.api('/api/admin/machines?' + qs(M)).then(function (d) { d.rows.forEach(function (r) { on ? selected.add(r.id) : selected.delete(r.id); }); bulkbar(); });
+  });
+  document.querySelectorAll('[data-bulk]').forEach(function (b) {
+    b.addEventListener('click', async function () {
+      try { await setState(Array.from(selected), b.getAttribute('data-bulk')); selected.clear(); await refresh(); }
+      catch (err) { say('act-msg', I.friendly(err), true); }
+    });
+  });
+  $('o-q').addEventListener('input', function () { O.q = this.value; debounce(loadOwners); });
+  $('a-q').addEventListener('input', function () { A.q = this.value; A.page = 1; debounce(loadAudit); });
+  $('a-prev').addEventListener('click', function () { A.page--; loadAudit(); });
+  $('a-next').addEventListener('click', function () { A.page++; loadAudit(); });
+  $('d-close').addEventListener('click', function () { $('drawer').hidden = true; });
   $('signin-btn').addEventListener('click', signIn);
   $('pw-form').addEventListener('submit', async function (e) {
     e.preventDefault();
     try {
       await I.api('/api/admin/login/password', { user: $('pw-user').value.trim(), password: $('pw-pass').value });
       $('pw-pass').value = '';
-      await load();
+      await start();
     } catch (err) { say('signin-msg', I.friendly(err), true); }
   });
   $('logout').addEventListener('click', async function () { await I.api('/api/admin/logout', {}); location.reload(); });
@@ -137,8 +283,8 @@
     try {
       const o = await I.api('/api/admin/enroll/options', {});
       await I.api('/api/admin/enroll/verify', { flow: o.flow, credential: await I.create(o.options), name: prompt('Name for this passkey:', 'Admin passkey') || 'Admin passkey' });
-      await load();
+      tab('admins');
     } catch (err) { say('act-msg', I.friendly(err), true); }
   });
-  load().catch(function (err) { say('act-msg', I.friendly(err), true); });
+  start().catch(function (err) { say('act-msg', I.friendly(err), true); });
 })();

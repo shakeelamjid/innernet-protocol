@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Owner accounts, shared payout, automatic states, admin at scale, Base mainnet beta
+
+- Owner accounts: one sign-in, many machines. A machine joins an account when the signed-in owner enters its machine code (dashboard "Add a machine", or the claim page). Every page works per machine (`?m=<id>`). The dashboard opens with a table of all the account's machines (state, online, services, region, uptime, earnings) and shows the chosen machine below. A new passkey made with a machine code starts that machine's own account. Each machine still checks the owner's passkey itself before signing.
+- One payout contract for many machines of one account (other accounts are refused). Before crediting a payment, a provider registers it with the registry (`tx-claim` intent); only the first machine may credit a transaction, and payments are attributed to that machine.
+- Automatic states: a new machine is listed by itself after `INNERNET_AUTO_LIST_HOURS` (default 24) of checks at 95%+ with a valid payout contract; listed machines below 95% over 7 days are suspended; suspended machines that are back at 95%+ over 24 h get a 24 h trial and are listed again. An admin's suspend or remove holds the machine (`admin_lock`) until "Return to automatic".
+- Admin page for many machines: summary tiles; tabs for waiting for approval, machines (search, filters, sorting, paging, select and approve/suspend/remove/return to automatic in bulk), owners, setups never applied, admins and a paged, searchable audit log; a details panel per machine.
+- Base mainnet beta: public Base RPC endpoints by default (`INNERNET_RPC_BASE_SEPOLIA`, `INNERNET_RPC_BASE` override); providers check payments on their payout network's RPC. The setup page chooses the network; the payout page deploys and finds contracts on Base too (`?network=eip155:8453`). Limits published in `/v1/config` for mainnet (`INNERNET_BETA_MAX_PAYMENT_USDC` 10, `INNERNET_BETA_MAX_CREDIT_USDC` 50); the client refuses larger payments.
+- Dashboard: activity shows free CPU/GPU slots and bandwidth used this month (new presence stat `bandwidth_used_bytes`); the offer card points to Change settings.
+- `/build`: no inner scrollbars; tables stack on phones.
+- `provider/LATEST` is `provider-v0.6.5`.
+
 ### Schedules, settings that remember, lost keys, live market, provider tester
 
 - Change settings starts from what is applied: the last offer applied from the website (all fields), or the current listing.

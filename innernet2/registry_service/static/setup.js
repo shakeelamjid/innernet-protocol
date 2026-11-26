@@ -185,10 +185,21 @@
       vpn: svc.indexOf('VPN-1') >= 0, vpn_consent: svc.indexOf('VPN-1') >= 0, vpn_ports: (lim['VPN-1'] || {}).all_ports ? 'all' : 'web',
       compute: svc.indexOf('CMP-1') >= 0, cpus: (lim['CMP-1'] || {}).max_cpus || 1, memory_mib: (lim['CMP-1'] || {}).max_memory_mib || 1024,
       gpu: svc.indexOf('GPU-1') >= 0, gpus: (lim['GPU-1'] || {}).max_gpus || 1, prices: pr,
-      payout: Object.values(e.payto || {})[0] || '',
+      payout: Object.values(e.payto || {})[0] || '', network: Object.keys(e.payto || {})[0],
       hours: av && av.weekly ? hoursFromWeekly(av.weekly) : 'always',
       month_days: av && av.monthdays && av.monthdays.length < 31 ? av.monthdays : [], skip_dates: (av && av.skip) || []
     };
+  }
+
+  function pickNet(caip2, clear) {
+    net = (cfg.networks || []).find(function (n) { return n.caip2 === caip2; }) || net;
+    const note = $('net-note');
+    if (net && net.mainnet) {
+      note.textContent = 'Base mainnet: clients pay you real USDC. Beta limits apply: at most ' + ((net.limits || {}).max_payment_usdc || '10') +
+        ' USDC per payment and ' + ((net.limits || {}).max_credit_usdc || '50') + ' USDC of credit per client. Your payout contract on Base is separate from the test one.';
+      note.hidden = false;
+    } else note.hidden = true;
+    if (clear) { $('payout').value = ''; say('pay-msg', 'Create or find your payout contract on ' + (net ? net.name : 'this network') + '.'); }
   }
 
   function num(id) { const v = parseInt($(id).value, 10); return isNaN(v) ? 0 : v; }
@@ -229,6 +240,9 @@
     fillFacts(det);
     const src = draft || {};
     $('tz-name').textContent = det.tz || 'local';
+    if (src.network && (cfg.networks || []).some(function (n) { return n.caip2 === src.network; })) {
+      $('network').value = src.network; pickNet(src.network, false);
+    }
     setSchedule(src.hours || 'always', src.month_days, src.skip_dates);
     $('name').value = src.name || (cur && cur.name) || det.name || '';
     $('region').value = src.region || (cur && cur.region) || det.region || '';
@@ -404,7 +418,16 @@
 
   fetch(I.BASE + '/v1/config').then(function (r) { return r.json(); }).then(function (c) {
     cfg = c;
+    const sel = $('network'); sel.textContent = '';
+    (cfg.networks || []).forEach(function (n) {
+      const o = document.createElement('option'); o.value = n.caip2;
+      o.textContent = n.name + (n.mainnet ? ' (real USDC, beta)' : ' (test network)') + (n.factory ? '' : ' · payout contracts not open yet');
+      sel.append(o);
+    });
     net = (cfg.networks || []).find(function (n) { return n.caip2 === 'eip155:84532'; }) || (cfg.networks || [])[0];
+    if (net) sel.value = net.caip2;
+    sel.addEventListener('change', function () { pickNet(sel.value, true); });
+    pickNet(sel.value, false);
     return load();
   }).catch(function (err) {
     if (err.status === 401) { location.replace(I.BASE + '/claim'); return; }

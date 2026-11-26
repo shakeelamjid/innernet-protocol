@@ -33,6 +33,20 @@
 
   <main id="dash" hidden>
     <div class="wrap">
+      <section class="account">
+        <div class="head"><div><h1>Your machines</h1><p id="acct-sum" class="dim"></p></div>
+          <button class="btn btn-sm btn-light" id="add-machine" type="button">Add a machine</button></div>
+        <div class="card frame add-panel" id="add-panel" hidden>
+          <h2>Add a machine to this account</h2>
+          <p>1. On the new machine, run the installer (Linux and Mac; Windows: <span class="mono">irm https://innernetcorp.com/install.ps1 | iex</span>):</p>
+          <div class="terminal">curl -fsSL https://innernetcorp.com/install.sh | sh</div>
+          <p>2. Enter the machine code it shows. The machine joins this account and you choose what it offers; it can share your payout contract.</p>
+          <div class="fields"><label>Machine code<input id="add-code" class="field mono" placeholder="XXXX-XXXX-XXXX-XXXX" autocomplete="off"></label></div>
+          <button class="btn btn-sm" id="add-go" type="button">Add to my account</button>
+          <p class="msg" id="add-msg" role="status"></p>
+        </div>
+        <div class="tbl-wrap"><table class="adm"><thead><tr><th>Machine</th><th>State</th><th>Online</th><th>Services</th><th>Region</th><th>Uptime 7 d</th><th>Earned 30 d</th><th></th></tr></thead><tbody id="machines"></tbody></table></div>
+      </section>
       <div class="head">
         <div>
           <h1 id="name"></h1>
@@ -95,7 +109,7 @@
         <section class="card frame span-6">
           <h2>Offer</h2>
           <dl class="kv" id="offer"></dl>
-          <p class="note">To change prices, capacity or services, run <code>innernet-provider init --force</code> and then <code>innernet-provider apply</code> on your machine. The dashboard cannot sign for you.</p>
+          <p class="note">To change prices, capacity, services or hours, use <a id="change-link" href="setup">Change settings</a>. Your passkey confirms the change and the machine signs it itself.</p>
         </section>
 
         <section class="card frame span-6">

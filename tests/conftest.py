@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import urllib.parse
 from pathlib import Path
 
@@ -10,6 +11,10 @@ from fastapi.testclient import TestClient
 
 from innernet2.network import MeshClient
 from innernet2.node import create_app, initialize_node
+
+# Providers started by tests have no registry to register payments with (shared payout contracts);
+# the registry side of tx-claim is tested in test_registry_service.py.
+os.environ.setdefault("INNERNET_NO_TX_CLAIM", "1")
 
 
 @pytest.fixture

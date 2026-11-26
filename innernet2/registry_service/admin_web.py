@@ -264,6 +264,155 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
                  for r in store.q("SELECT * FROM audit ORDER BY id DESC LIMIT 200")]
         return {"machines": machines, "pending": pending, "admins": admins, "audit": audit}
 
+    # ---- at scale: summary, paged and filtered tables, details, bulk actions ----
+    from . import owners as own, presence, probe as probe_mod
+
+    def rows_all(now: int) -> list[dict]:
+        out = []
+        for p in store.providers():
+            pid, e = p["id"], p["entry"]
+            live = presence.live(store, pid, now) or {}
+            ratio, n = probe_mod.uptime(store, pid, since=now - 7 * 86400)
+            owner = own.owner_of(store, pid)
+            out.append({"id": pid, "name": e.get("name") or "", "owner": owner, "state": p["state"],
+                        "held": bool(p.get("admin_lock")), "reason": p["reason"], "online": bool(live.get("online")),
+                        "path": ((live.get("record") or {}).get("payload") or {}).get("path"),
+                        "services": e.get("services", []), "region": e.get("region") or "", "class": e.get("class") or "",
+                        "uptime_7d": None if ratio is None else round(ratio, 4), "checks_7d": n,
+                        "last_seen": p.get("last_seen"), "applied_at": p["applied_at"],
+                        "payto": ", ".join(e.get("payto", {}).values())})
+        return out
+
+    @app.get(P + "/api/admin/summary")
+    def summary(request: Request):
+        admin_session(request)
+        now = int(time.time())
+        rows = rows_all(now)
+        states: dict[str, int] = {}
+        for r in rows:
+            states[r["state"]] = states.get(r["state"], 0) + 1
+        waiting = sorted([r for r in rows if r["state"] == "testing" and not r["held"]], key=lambda r: r["applied_at"])
+        setups = store.one("SELECT COUNT(*) AS n FROM claims WHERE provider NOT IN (SELECT id FROM providers) AND expires_at>? "
+                           "AND status NOT IN ('superseded','done')", (now,))["n"]
+        return {"machines": len(rows), "online": sum(r["online"] for r in rows), "states": states,
+                "owners": len({r["owner"] for r in rows}), "held": sum(r["held"] for r in rows),
+                "waiting": waiting[:20], "waiting_total": len(waiting), "setups": setups,
+                "auto_list_hours": presence.auto_list_after() / 3600}
+
+    SORTS = {"name", "owner", "state", "online", "region", "uptime_7d", "last_seen", "applied_at"}
+
+    @app.get(P + "/api/admin/machines")
+    def machines_page(request: Request, q: str = "", state: str = "", online: str = "", owner: str = "", sort: str = "applied_at",
+                      dir: str = "desc", page: int = 1, size: int = 50):
+        admin_session(request)
+        rows = rows_all(int(time.time()))
+        ql = q.strip().lower()
+        if ql:
+            rows = [r for r in rows if ql in r["name"].lower() or r["id"].startswith(ql) or ql in r["owner"]
+                    or ql in r["payto"].lower() or ql in r["region"].lower()]
+        if state:
+            rows = [r for r in rows if r["state"] == state or (state == "held" and r["held"])]
+        if online in ("yes", "no"):
+            rows = [r for r in rows if r["online"] == (online == "yes")]
+        if owner:
+            rows = [r for r in rows if r["owner"] == owner.lower()]
+        key = sort if sort in SORTS else "applied_at"
+        rows.sort(key=lambda r: (r[key] is None, r[key] if r[key] is not None else 0), reverse=dir == "desc")
+        size = max(10, min(200, size))
+        total = len(rows)
+        page = max(1, page)
+        return {"total": total, "page": page, "size": size, "rows": rows[(page - 1) * size: page * size]}
+
+    @app.get(P + "/api/admin/machines/{pid}")
+    def machine_detail(pid: str, request: Request):
+        admin_session(request)
+        p = machine(pid)
+        now = int(time.time())
+        owner = own.owner_of(store, p["id"])
+        e = p["entry"]
+        return {"id": p["id"], "name": e.get("name"), "state": p["state"], "held": bool(p.get("admin_lock")),
+                "reason": p["reason"], "owner": owner, "owner_machines": own.machines_of(store, owner),
+                "services": e.get("services", []), "prices": {k: v.get("amount") for k, v in e.get("prices", {}).items()},
+                "limits": e.get("limits", {}), "endpoints": e.get("endpoints", []), "payto": e.get("payto", {}),
+                "availability": e.get("availability"), "region": e.get("region"), "class": e.get("class"),
+                "applied_at": p["applied_at"], "listed_at": p["listed_at"], "last_seen": p.get("last_seen"),
+                "presence": presence.live(store, p["id"], now),
+                "passkeys": [{"id": r["cred_id"], "name": r["name"], "created_at": r["created_at"], "last_used": r["last_used"]}
+                             for r in store.q("SELECT * FROM passkeys WHERE provider=? ORDER BY created_at", (owner,))],
+                "sessions": store.one("SELECT COUNT(*) AS n FROM sessions WHERE provider=? AND revoked=0 AND expires_at>?",
+                                      (owner, now))["n"],
+                "audit": [dict(ts=r["ts"], event=r["event"], detail=r["detail"], ip=r["ip"])
+                          for r in store.q("SELECT * FROM audit WHERE provider=? ORDER BY id DESC LIMIT 40", (p["id"],))]}
+
+    @app.get(P + "/api/admin/owners")
+    def owners_page(request: Request, q: str = "", page: int = 1, size: int = 50):
+        admin_session(request)
+        now = int(time.time())
+        by: dict[str, dict] = {}
+        for r in rows_all(now):
+            o = by.setdefault(r["owner"], {"owner": r["owner"], "machines": 0, "online": 0, "states": {}, "payouts": set(),
+                                           "names": []})
+            o["machines"] += 1
+            o["online"] += r["online"]
+            o["states"][r["state"]] = o["states"].get(r["state"], 0) + 1
+            if r["payto"]:
+                o["payouts"].add(r["payto"])
+            o["names"].append(r["name"])
+        rows = []
+        for o in by.values():
+            o["payouts"] = sorted(o["payouts"])
+            o["passkeys"] = store.one("SELECT COUNT(*) AS n FROM passkeys WHERE provider=?", (o["owner"],))["n"]
+            o["sessions"] = store.one("SELECT COUNT(*) AS n FROM sessions WHERE provider=? AND revoked=0 AND expires_at>?",
+                                      (o["owner"], now))["n"]
+            rows.append(o)
+        ql = q.strip().lower()
+        if ql:
+            rows = [o for o in rows if o["owner"].startswith(ql) or any(ql in n.lower() for n in o["names"])
+                    or any(ql in x.lower() for x in o["payouts"])]
+        rows.sort(key=lambda o: -o["machines"])
+        page, size = max(1, page), max(10, min(200, size))
+        return {"total": len(rows), "page": page, "size": size, "rows": rows[(page - 1) * size: page * size]}
+
+    @app.get(P + "/api/admin/setups")
+    def setups_page(request: Request):
+        admin_session(request)
+        now = int(time.time())
+        return {"rows": [{"provider": r["provider"], "status": r["status"], "created_at": r["created_at"],
+                          "name": (json.loads(r["detected"] or "{}") or {}).get("name"),
+                          "os": (json.loads(r["detected"] or "{}") or {}).get("os")}
+                         for r in store.q("SELECT * FROM claims WHERE provider NOT IN (SELECT id FROM providers) AND expires_at>? "
+                                          "AND status NOT IN ('superseded','done') ORDER BY created_at DESC LIMIT 200", (now,))]}
+
+    @app.get(P + "/api/admin/audit")
+    def audit_page(request: Request, q: str = "", page: int = 1, size: int = 100):
+        admin_session(request)
+        page, size = max(1, page), max(20, min(500, size))
+        like = f"%{q.strip()}%"
+        where = "WHERE provider LIKE ? OR event LIKE ? OR detail LIKE ?" if q.strip() else ""
+        args = (like, like, like) if q.strip() else ()
+        total = store.one(f"SELECT COUNT(*) AS n FROM audit {where}", args)["n"]
+        rows = [dict(ts=r["ts"], provider=r["provider"], event=r["event"], detail=r["detail"], ip=r["ip"])
+                for r in store.q(f"SELECT * FROM audit {where} ORDER BY id DESC LIMIT ? OFFSET ?", (*args, size, (page - 1) * size))]
+        return {"total": total, "page": page, "size": size, "rows": rows}
+
+    @app.post(P + "/api/admin/bulk")
+    async def bulk(request: Request):
+        guard(request)
+        admin_session(request)
+        data = await body_json(request)
+        ids = data.get("ids") or []
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 500:
+            raise HTTPException(422, "ids: 1 to 500 machine ids")
+        state, reason = str(data.get("state", "")), str(data.get("reason", "")).strip()[:200]
+        done, failed = 0, []
+        for pid in ids:
+            try:
+                set_machine_state(str(pid), state, reason, request)
+                done += 1
+            except HTTPException as exc:
+                failed.append({"id": pid, "error": exc.detail})
+        return {"done": done, "failed": failed}
+
     def machine(pid: str) -> dict:
         p = store.provider(str(pid).lower())
         if p is None:
@@ -277,16 +426,30 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
         data = await body_json(request)
         state = str(data.get("state", ""))
         reason = str(data.get("reason", "")).strip()[:200]
-        if state not in ("listed", "suspended", "removed"):
-            raise HTTPException(422, "state: listed, suspended or removed")
-        if state != "listed" and not reason:
+        return set_machine_state(pid, state, reason, request)
+
+    def set_machine_state(pid: str, state: str, reason: str, request: Request) -> dict:
+        """listed (approve; automation keeps watching), suspended or removed (held by the admin: automation
+        leaves it alone), auto (give it back to automation)."""
+        if state not in ("listed", "suspended", "removed", "auto"):
+            raise HTTPException(422, "state: listed, suspended, removed or auto")
+        if state in ("suspended", "removed") and not reason:
             raise HTTPException(422, "give a reason; the owner sees it")
         p = machine(pid)
         now = int(time.time())
-        store.x("UPDATE providers SET state=?, reason=?, listed_at=CASE WHEN ?='listed' THEN COALESCE(listed_at, ?) "
-                "ELSE listed_at END, updated_at=? WHERE id=?", (state, reason, state, now, now, p["id"]))
-        log(state, p["id"], reason or "by admin", request)
-        return {"ok": True}
+        if state == "auto":
+            new = "testing" if p["state"] in ("suspended", "removed") else p["state"]
+            store.x("UPDATE providers SET admin_lock=0, state=?, reason=?, trial_since=CASE WHEN ?='testing' THEN ? "
+                    "ELSE trial_since END, updated_at=? WHERE id=?",
+                    (new, "" if new != "testing" else "checked again before listing", new, now, now, p["id"]))
+            log("automatic", p["id"], f"{p['state']} -> {new}, automation resumed", request)
+            return {"ok": True, "state": new}
+        lock = 0 if state == "listed" else 1
+        store.x("UPDATE providers SET state=?, reason=?, admin_lock=?, trial_since=NULL, listed_at=CASE WHEN ?='listed' "
+                "THEN COALESCE(listed_at, ?) ELSE listed_at END, updated_at=? WHERE id=?",
+                (state, reason, lock, state, now, now, p["id"]))
+        log(state, p["id"], (reason or "by admin") + (" (held by admin)" if lock else ""), request)
+        return {"ok": True, "state": state}
 
     @app.post(P + "/api/admin/machines/{pid}/delete")
     async def delete_machine(pid: str, request: Request):

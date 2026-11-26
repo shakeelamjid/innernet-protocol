@@ -618,6 +618,7 @@ class Client:
             held = amount * HOLDBACK_BPS // 10000
             released = h.get("held", 0)
             pay_now = amount - held + released
+            self.check_payment(h["network"], pay_now)
             tx = payer(h["network"], h["payto"], pay_now)
             ticket = self.provider(h["entry"]).pay(h["lease"], format(units, "f"), tx, held=held, released=released)
             verify_ticket(ticket, bytes.fromhex(h["provider"]), now=int(self.now()))
@@ -627,6 +628,27 @@ class Client:
             out[_key(h)] = f"paid {pay_now} base units ({held} held back until the next proof), ticket verified"
         self.save(rec)
         return out
+
+    def limits(self, network: str) -> dict | None:
+        """Mainnet beta limits published by the registry (max_payment_usdc, max_credit_usdc), or None."""
+        if not self.registry_url:
+            return None
+        if not hasattr(self, "_config"):
+            try:
+                self._config = httpx.get(self.registry_url.rstrip("/") + "/config", timeout=20).json()
+            except (httpx.HTTPError, ValueError):
+                self._config = {}
+        for n in self._config.get("networks", []):
+            if n.get("caip2") == network:
+                return n.get("limits")
+        return None
+
+    def check_payment(self, network: str, amount: int) -> None:
+        """Refuse a single payment above the network's beta limit (amount in USDC base units)."""
+        lim = self.limits(network)
+        if lim and amount > int(Decimal(lim["max_payment_usdc"]) * 1_000_000):
+            raise BulkError(f"payment of {Decimal(amount) / 1_000_000} USDC is above the beta limit of "
+                            f"{lim['max_payment_usdc']} USDC per payment on this network")
 
     # repair
     def repair(self, obj: str, grace: int = GRACE, force: bool = False) -> list[dict]:

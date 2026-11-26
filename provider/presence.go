@@ -150,6 +150,9 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 	if relayKey != "" {
 		payload["relay_key"] = relayKey
 	}
+	if s.meter != nil && (s.cfg.VPN || (s.cfg.RelayCap > 0 && !s.cfg.NoRelay)) {
+		payload["stats"].(map[string]any)["bandwidth_used_bytes"] = s.meter.used()
+	}
 	if s.sched != nil && (s.cfg.Compute || s.cfg.GPU) {
 		stats := payload["stats"].(map[string]any)
 		for k, v := range s.sched.snapshot() {

@@ -35,7 +35,8 @@ def uptime(store: Store, pid: str, *, since: int) -> tuple[float | None, int]:
     return ((row["good"] or 0) / n if n else None), n
 
 
-def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = None, attached=lambda pid: False) -> None:
+def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = None, attached=lambda pid: False,
+               payout_ok=lambda entry: (True, "")) -> None:
     now = int(time.time()) if now is None else now
     for p in store.providers():
         if p["state"] not in ("testing", "listed", "suspended", "paused", "leaving"):
@@ -66,11 +67,11 @@ def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = N
         store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)",
                 (p["id"], now, int(ok), int(latency) if ok else None))
         store.x("UPDATE providers SET checked_at=? WHERE id=?", (now, p["id"]))
-        if p["state"] == "listed":
+        if p["state"] == "listed" and not p.get("admin_lock"):
             ratio, n = uptime(store, p["id"], since=now - WEEK)
             if n >= MIN_PROBES and ratio is not None and ratio < SUSPEND_BELOW:
                 reason = f"reachable {ratio:.1%} of its promised hours over 7 days (needs 95%); reinstate to start a 24 h trial"
                 store.x("UPDATE providers SET state='suspended', reason=?, updated_at=? WHERE id=?", (reason, now, p["id"]))
                 store.audit(p["id"], "suspended", reason)
-    presence.advance_states(store, uptime, now)
+    presence.advance_states(store, uptime, now, payout_ok)
     store.x("DELETE FROM probes WHERE ts<?", (now - 31 * 86400,))

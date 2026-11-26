@@ -223,7 +223,7 @@ def test_apply_rejections(env):
     assert client.post(P + "/v1/apply", json=provider_record(key)).status_code == 200
     other = provider_record(Ed25519PrivateKey.generate())                        # same payout contract
     r = client.post(P + "/v1/apply", json=other)
-    assert r.status_code == 422 and "already used" in r.json()["detail"]
+    assert r.status_code == 422 and "another account" in r.json()["detail"]
     assert client.post(P + "/v1/apply", content=b"not json").status_code == 400
 
 
@@ -582,7 +582,7 @@ def test_claim_and_setup_api(env):
     opt = client.post(P + "/api/claim/options", json={"code": started["code"].lower().replace("-", " ")}, headers=H).json()
     v = client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]), "name": "Mac"}, headers=H)
     assert v.status_code == 200
-    assert client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).json()["resume"] is True
+    assert client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).json()["link"] is True   # signed in: joins the account
     assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "claimed"
     assert client.get(P + "/api/me").status_code == 409                      # not applied yet -> setup page
     setup = client.get(P + "/api/setup").json()
@@ -1329,7 +1329,7 @@ def test_leaving_machine_frees_its_payout_contract(env):
     payto = "0x" + "ad" * 20
     assert client.post(P + "/v1/apply", json=provider_record(k1, payto=payto)).status_code == 200
     r = client.post(P + "/v1/apply", json=provider_record(k2, payto=payto))
-    assert r.status_code == 422 and "press Leave" in r.text
+    assert r.status_code == 422 and "another account" in r.text
     p1 = k1.public_key().public_bytes_raw().hex()
     assert client.post(P + f"/v1/providers/{p1}/intent", json=intent_record(k1, "leave")).status_code == 200
     assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 200
@@ -1493,3 +1493,75 @@ def test_provider_tester_against_a_real_provider(tmp_path, capsys, monkeypatch):
             proc.kill()
         server.should_exit = True
         th.join(timeout=5)
+
+
+def test_owner_account_many_machines_shared_payout_and_tx_claims(env):
+    client, store, fake, s = env
+    k1, k2, k3 = (Ed25519PrivateKey.generate() for _ in range(3))
+    p1, p2, p3 = (k.public_key().public_bytes_raw().hex() for k in (k1, k2, k3))
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 50,
+           "cpus": 4, "memory_mib": 8192, "os": "linux", "arch": "amd64", "reachable": True, "version": "0.6.5"}
+    payto = "0x" + "a7" * 20
+    # First machine: new passkey, new account.
+    first = client.post(P + "/v1/connect", json=connect_record(k1, det)).json()
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).json()
+    assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])},
+                       headers=H).status_code == 200
+    assert client.post(P + "/v1/apply", json=provider_record(k1, payto=payto)).status_code == 200
+    # Second machine: entered while signed in, it joins the account; same payout contract allowed.
+    second = client.post(P + "/v1/connect", json=connect_record(k2, dict(det, name="box-2"))).json()
+    opt = client.post(P + "/api/claim/options", json={"code": second["code"]}, headers=H).json()
+    assert opt["link"] is True and opt["machine"] == p2
+    assert client.post(P + "/api/claim/link", json={"code": second["code"]}, headers=H).json()["machine"] == p2
+    assert client.post(P + "/v1/apply", json=provider_record(k2, payto=payto)).status_code == 200
+    # A stranger's machine cannot use that payout contract.
+    assert client.post(P + "/v1/apply", json=provider_record(k3, payto=payto)).status_code == 422
+    store.x("UPDATE claims SET status='done' WHERE provider IN (?,?)", (p1, p2))   # both set up
+    me = client.get(P + "/api/me").json()
+    assert {m["id"] for m in me["machines"]} == {p1, p2}
+    assert client.get(P + f"/api/me?m={p2}").json()["machine"] == p2
+    assert client.get(P + f"/api/me?m={p3}").status_code == 403                  # not this account's machine
+    # Setup and settings follow the chosen machine.
+    assert client.get(P + f"/api/setup?m={p2}").json()["provider"] == p2
+    # One payment, two machines sharing the payout: only the first may credit it.
+    tx = "0x" + "be" * 32
+    t = f"{SEPOLIA}:{tx}"
+    assert client.post(P + f"/v1/providers/{p1}/intent", json=intent_record(k1, "tx-claim", t)).status_code == 200
+    assert client.post(P + f"/v1/providers/{p1}/intent", json=intent_record(k1, "tx-claim", t)).status_code == 200  # again: fine
+    r = client.post(P + f"/v1/providers/{p2}/intent", json=intent_record(k2, "tx-claim", t))
+    assert r.status_code == 409 and "another machine" in r.text
+    assert client.post(P + f"/v1/providers/{p2}/intent", json=intent_record(k2, "tx-claim", "nonsense")).status_code == 422
+
+
+def test_states_change_automatically_unless_an_admin_holds_them(env, monkeypatch):
+    from innernet2.registry_service import presence, probe as probe_mod
+    from innernet2.registry_service.admin_web import new_login_link
+    client, store, fake, s = env
+    k = Ed25519PrivateKey.generate()
+    pid = k.public_key().public_bytes_raw().hex()
+    assert client.post(P + "/v1/apply", json=provider_record(k)).status_code == 200
+    monkeypatch.setenv("INNERNET_AUTO_LIST_HOURS", "1")
+    now = int(time.time())
+    store.x("UPDATE providers SET applied_at=? WHERE id=?", (now - 7200, pid))
+    for i in range(20):
+        store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,1,10)", (pid, now - i * 300))
+    presence.advance_states(store, probe_mod.uptime, now, payout_ok=lambda e: (True, "payout contract check postponed"))
+    assert store.provider(pid)["state"] == "testing"                            # waits for the payout check
+    presence.advance_states(store, probe_mod.uptime, now)
+    assert store.provider(pid)["state"] == "listed"                             # listed by itself
+    # Suspended for bad reachability, then reachable again: back on trial by itself.
+    store.x("UPDATE providers SET state='suspended' WHERE id=?", (pid,))
+    presence.advance_states(store, probe_mod.uptime, now)
+    assert store.provider(pid)["state"] == "testing" and store.provider(pid)["trial_since"] == now
+    # An admin hold stops the automation until the admin gives it back.
+    link = new_login_link(store, ORIGIN, P)
+    admin = SoftAuthenticator()
+    o = client.post(P + "/api/admin/enroll/options", json={"token": link.split("#token=")[1]}, headers=H).json()
+    client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])}, headers=H)
+    assert client.post(P + f"/api/admin/machines/{pid}/state", json={"state": "suspended", "reason": "abuse report"},
+                       headers=H).status_code == 200
+    presence.advance_states(store, probe_mod.uptime, now + 10)
+    assert store.provider(pid)["state"] == "suspended" and store.provider(pid)["admin_lock"] == 1
+    assert client.post(P + f"/api/admin/machines/{pid}/state", json={"state": "auto"}, headers=H).json()["state"] == "testing"
+    assert store.provider(pid)["admin_lock"] == 0

@@ -10,6 +10,11 @@
       opts.headers['Content-Type'] = 'application/json';
       opts.body = JSON.stringify(body);
     }
+    // The machine this page is about (owners with several machines): ?m=<id> follows every API call.
+    const m = new URLSearchParams(location.search).get('m');
+    if (m && /^[0-9a-f]{64}$/.test(m) && path.indexOf('/api/') === 0 && path.indexOf('m=') < 0) {
+      path += (path.indexOf('?') < 0 ? '?' : '&') + 'm=' + m;
+    }
     const res = await fetch(BASE + path, opts);
     let data = null;
     try { data = await res.json(); } catch (e) { data = null; }

@@ -119,10 +119,14 @@ def scan_once(store: Store, settings: Settings, rpc: Rpc = http_rpc) -> int:
                         key = (network, block)
                         if key not in block_ts:
                             block_ts[key] = int(rpc(url, "eth_getBlockByNumber", [hex(block), False])["timestamp"], 16)
+                        tx_hash = entry["transactionHash"].lower()
+                        # A shared payout contract: the machine that credited the payment gets it.
+                        claimed = db.execute("SELECT provider FROM tx_claims WHERE network=? AND tx=?",
+                                             (network, tx_hash)).fetchone()
                         cur = db.execute(
                             "INSERT OR IGNORE INTO payments(network, tx_hash, log_index, provider, payto, payer, amount,"
                             " block, ts) VALUES (?,?,?,?,?,?,?,?,?)",
-                            (network, entry["transactionHash"].lower(), int(entry["logIndex"], 16), pid, payto,
+                            (network, tx_hash, int(entry["logIndex"], 16), claimed["provider"] if claimed else pid, payto,
                              "0x" + entry["topics"][1][-40:], int(entry["data"], 16), block, block_ts[key]))
                         added += cur.rowcount
                     db.execute("UPDATE chain_cursor SET next_block=? WHERE network=? AND payto=?",

@@ -80,12 +80,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 1
             if why:
                 print("note:", why)
-        store.x("UPDATE providers SET state='listed', reason='', listed_at=COALESCE(listed_at, ?), updated_at=? WHERE id=?",
+        store.x("UPDATE providers SET state='listed', reason='', admin_lock=0, listed_at=COALESCE(listed_at, ?), updated_at=? WHERE id=?",
                 (now, now, p["id"]))
         store.audit(p["id"], "listed", "approved by operator")
     else:
         state = "suspended" if args.cmd == "suspend" else "removed"
-        store.x("UPDATE providers SET state=?, reason=?, updated_at=? WHERE id=?", (state, args.reason, now, p["id"]))
+        store.x("UPDATE providers SET state=?, reason=?, admin_lock=1, updated_at=? WHERE id=?", (state, args.reason, now, p["id"]))
         store.audit(p["id"], state, args.reason)
     print(p["id"], "->", "listed" if args.cmd == "approve" else state)
     return 0

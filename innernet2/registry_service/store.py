@@ -87,6 +87,8 @@ class Store:
             self._db.executescript(SCHEMA)
         from . import presence          # tables and columns added after the first release
         presence.migrate(self)
+        from . import owners
+        owners.migrate(self)
 
     @contextmanager
     def tx(self):

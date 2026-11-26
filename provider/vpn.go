@@ -96,6 +96,16 @@ func (m *bandwidthMeter) left(capGiB int) int64 {
 	return max(0, int64(capGiB)<<30-m.Bytes)
 }
 
+// used is this month's relayed and VPN traffic, in bytes.
+func (m *bandwidthMeter) used() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.Month != time.Now().UTC().Format("2006-01") {
+		return 0
+	}
+	return m.Bytes
+}
+
 var vpnDial = func(ctx context.Context, ip netip.Addr, port int) (net.Conn, error) {
 	d := net.Dialer{Timeout: 10 * time.Second}
 	return d.DialContext(ctx, "tcp", net.JoinHostPort(ip.String(), strconv.Itoa(port)))

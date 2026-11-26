@@ -43,6 +43,7 @@ class Settings:
     document_ttl: int = 3600
     release_repo: str = "shakeelamjid/innernet-protocol"   # where provider releases are published (GitHub owner/repo)
     relays: list = field(default_factory=list)          # [{"addr": "host:port", "key": hex}] ST81 relays (RLY-0)
+    beta: dict = field(default_factory=lambda: {"max_payment_usdc": "10", "max_credit_usdc": "50"})  # mainnet limits
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,9 +59,13 @@ class Settings:
                 if not _EVM.match(addr):
                     raise SystemExit(f"{var} is not an EVM address")
                 s.fee_payto[net] = addr
-        for var, net in (("INNERNET_RPC_BASE_SEPOLIA", "eip155:84532"), ("INNERNET_RPC_BASE", "eip155:8453")):
-            if _env(var):
-                s.rpc[net] = _env(var)
+        # Public Base endpoints by default, so payout checks and payment tracking always work.
+        for var, net, default in (("INNERNET_RPC_BASE_SEPOLIA", "eip155:84532", "https://sepolia.base.org"),
+                                  ("INNERNET_RPC_BASE", "eip155:8453", "https://mainnet.base.org")):
+            s.rpc[net] = _env(var) or default
+        # Mainnet beta limits (USDC): the most one payment and one client's credit at one provider may be.
+        s.beta = {"max_payment_usdc": _env("INNERNET_BETA_MAX_PAYMENT_USDC", "10"),
+                  "max_credit_usdc": _env("INNERNET_BETA_MAX_CREDIT_USDC", "50")}
         for var, net in (("INNERNET_SPLIT_FACTORY_BASE_SEPOLIA", "eip155:84532"), ("INNERNET_SPLIT_FACTORY_BASE", "eip155:8453")):
             addr = _env(var)
             if addr:

@@ -136,6 +136,8 @@
           <h2>Your payout contract</h2>
           <p>Clients pay this contract. It sends <strong id="share-you">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the network, and nobody can change that.</p>
           <p class="msg">Connect the wallet that should receive your share: a wallet on Base that you control, such as the Coinbase Wallet app, MetaMask, Rabby or a hardware wallet. Do not use an exchange deposit address. You never give anyone its key; the contract only stores its address. The same address works on the test network and later on Base mainnet.</p>
+          <div class="fields"><label>Network<select id="network" class="field"></select></label></div>
+          <p class="notice" id="net-note" hidden></p>
           <button class="btn" type="button" id="connect">Connect wallet and find or create it</button>
           <label>Payout contract<input id="payout" class="field mono" maxlength="42" autocomplete="off" placeholder="0x…"></label>
           <p class="msg" id="pay-msg" role="status"></p>

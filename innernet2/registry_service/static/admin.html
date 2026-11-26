@@ -33,19 +33,70 @@
       </section>
 
       <div id="panel" hidden>
-        <div class="head"><div><h1>Machines</h1><p id="summary"></p></div></div>
+        <ul class="tiles-adm" id="tiles"></ul>
         <p class="msg" id="act-msg" role="status"></p>
-        <div id="machines" class="admin-list"></div>
 
-        <h2 class="admin-h">Setups never applied</h2>
-        <div id="pending" class="admin-list"></div>
+        <nav class="tabs" role="tablist" aria-label="Admin sections">
+          <button role="tab" data-tab="waiting" aria-selected="true">Waiting for approval <span id="n-waiting"></span></button>
+          <button role="tab" data-tab="machines" aria-selected="false">Machines <span id="n-machines"></span></button>
+          <button role="tab" data-tab="owners" aria-selected="false">Owners <span id="n-owners"></span></button>
+          <button role="tab" data-tab="setups" aria-selected="false">Setups never applied <span id="n-setups"></span></button>
+          <button role="tab" data-tab="admins" aria-selected="false">Admins</button>
+          <button role="tab" data-tab="audit" aria-selected="false">Audit log</button>
+        </nav>
 
-        <h2 class="admin-h">Admin passkeys</h2>
-        <div id="admins" class="admin-list"></div>
+        <section class="tabpanel" data-panel="waiting">
+          <p class="note" id="waiting-note"></p>
+          <div class="tbl-wrap"><table class="adm"><thead><tr><th></th><th>Machine</th><th>Owner</th><th>Applied</th><th>Online</th><th>Uptime since applied</th><th>Services</th><th></th></tr></thead><tbody id="waiting"></tbody></table></div>
+        </section>
 
-        <h2 class="admin-h">Audit log</h2>
-        <div class="card frame"><table class="admin-audit"><tbody id="audit"></tbody></table></div>
+        <section class="tabpanel" data-panel="machines" hidden>
+          <div class="toolbar">
+            <input id="m-q" class="field" placeholder="Search name, id, owner, payout, region" autocomplete="off">
+            <select id="m-state" class="field"><option value="">All states</option><option>listed</option><option>testing</option><option>suspended</option><option>paused</option><option>leaving</option><option>gone</option><option>removed</option><option value="held">held by admin</option></select>
+            <select id="m-online" class="field"><option value="">Online and offline</option><option value="yes">Online</option><option value="no">Offline</option></select>
+            <span class="spacer"></span>
+            <span id="m-count" class="dim"></span>
+          </div>
+          <div class="bulkbar" id="bulkbar" hidden>
+            <span id="bulk-n"></span>
+            <button class="btn btn-sm" data-bulk="listed">Approve</button>
+            <button class="btn btn-sm" data-bulk="suspended">Suspend</button>
+            <button class="btn btn-sm btn-danger" data-bulk="removed">Remove</button>
+            <button class="btn btn-sm" data-bulk="auto">Return to automatic</button>
+          </div>
+          <div class="tbl-wrap"><table class="adm"><thead><tr>
+            <th><input type="checkbox" id="m-all" aria-label="Select all on this page"></th>
+            <th data-sort="name">Machine</th><th data-sort="owner">Owner</th><th data-sort="state">State</th><th data-sort="online">Online</th>
+            <th>Services</th><th data-sort="region">Region</th><th data-sort="uptime_7d">Uptime 7 d</th><th data-sort="last_seen">Last seen</th>
+          </tr></thead><tbody id="machines"></tbody></table></div>
+          <div class="pager"><button class="btn btn-sm" id="m-prev">Previous</button><span id="m-page"></span><button class="btn btn-sm" id="m-next">Next</button></div>
+        </section>
+
+        <section class="tabpanel" data-panel="owners" hidden>
+          <div class="toolbar"><input id="o-q" class="field" placeholder="Search owner id, machine name, payout" autocomplete="off"><span class="spacer"></span><span id="o-count" class="dim"></span></div>
+          <div class="tbl-wrap"><table class="adm"><thead><tr><th>Owner</th><th>Machines</th><th>Online</th><th>States</th><th>Payout contracts</th><th>Passkeys</th><th>Signed in</th></tr></thead><tbody id="owners"></tbody></table></div>
+        </section>
+
+        <section class="tabpanel" data-panel="setups" hidden>
+          <div class="tbl-wrap"><table class="adm"><thead><tr><th>Machine</th><th>System</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody id="setups"></tbody></table></div>
+        </section>
+
+        <section class="tabpanel" data-panel="admins" hidden>
+          <div class="tbl-wrap"><table class="adm"><thead><tr><th>Admin passkey</th><th>Added</th><th>Last used</th><th></th></tr></thead><tbody id="admins"></tbody></table></div>
+        </section>
+
+        <section class="tabpanel" data-panel="audit" hidden>
+          <div class="toolbar"><input id="a-q" class="field" placeholder="Search machine id, event, detail" autocomplete="off"><span class="spacer"></span><span id="a-count" class="dim"></span></div>
+          <div class="tbl-wrap"><table class="adm"><thead><tr><th>Time</th><th>Machine</th><th>Event</th><th>Detail</th></tr></thead><tbody id="audit"></tbody></table></div>
+          <div class="pager"><button class="btn btn-sm" id="a-prev">Previous</button><span id="a-page"></span><button class="btn btn-sm" id="a-next">Next</button></div>
+        </section>
       </div>
+
+      <aside class="drawer" id="drawer" hidden aria-label="Machine details">
+        <div class="drawer-head"><h2 id="d-title"></h2><button class="btn btn-sm" id="d-close">Close</button></div>
+        <div id="d-body"></div>
+      </aside>
     </div>
   </main>
 </body>

@@ -43,7 +43,8 @@ CREATE TABLE IF NOT EXISTS presence_log (
 CREATE INDEX IF NOT EXISTS presence_log_by_provider ON presence_log(provider, ts);
 """
 
-PROVIDER_COLUMNS = {"resume_to": "TEXT", "trial_since": "INTEGER", "last_seen": "INTEGER"}
+PROVIDER_COLUMNS = {"resume_to": "TEXT", "trial_since": "INTEGER", "last_seen": "INTEGER",
+                    "admin_lock": "INTEGER NOT NULL DEFAULT 0"}   # 1: an admin set the state; automation leaves it
 
 
 # Website setup signed with a passkey: what was signed, the signature, the machine's live progress.
@@ -209,9 +210,24 @@ def apply_intent(store: Store, pid: str, action: str, *, via: str, ip: str | Non
 
 # ---- states over time (called after each probe round) -----------------------------
 
-def advance_states(store: Store, uptime, now: int | None = None) -> None:
+def auto_list_after() -> int:
+    """How long a new machine is checked before it is listed automatically (INNERNET_AUTO_LIST_HOURS)."""
+    import os
+    try:
+        return max(0, int(float(os.environ.get("INNERNET_AUTO_LIST_HOURS", "24")) * 3600))
+    except ValueError:
+        return 86400
+
+
+def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambda entry: (True, "")) -> None:
+    """Every state change is automatic, unless an admin set the state (admin_lock):
+    testing -> listed after the checking period at 95%+ reachability (and a valid payout contract);
+    listed -> suspended below 95% over 7 days (probe_once); suspended -> testing (24 h trial) once the
+    last 24 h are back at 95%+; trial -> listed; long silence -> gone."""
     now = int(time.time()) if now is None else now
     for p in store.providers():
+        if p.get("admin_lock"):
+            continue
         seen = max(p.get("last_seen") or 0, p.get("checked_at") or 0, p["applied_at"])
         if p["state"] in ("listed", "suspended", "paused") and now - seen > GONE_AFTER:
             good = store.one("SELECT MAX(ts) AS t FROM probes WHERE provider=? AND ok=1", (p["id"],))["t"] or 0
@@ -220,6 +236,33 @@ def advance_states(store: Store, uptime, now: int | None = None) -> None:
                         ("nothing heard for 7 days; reinstate when it is back", now, p["id"]))
                 store.audit(p["id"], "gone", "nothing heard for 7 days")
                 continue
+        # New machine: listed by itself after the checking period, if it was reachable and its payout is valid.
+        if p["state"] == "testing" and not p.get("trial_since") and not p["listed_at"]:
+            wait = auto_list_after()
+            if now - p["applied_at"] >= wait:
+                ratio, n = uptime(store, p["id"], since=p["applied_at"])
+                if n >= (12 if wait >= 3600 else 1) and ratio is not None and ratio >= 0.95:
+                    ok, why = True, ""
+                    for network, address in p["entry"].get("payto", {}).items():
+                        ok, why = payout_ok({"network": network, "payout": address})
+                        if not ok or why:
+                            break
+                    if ok and not why:
+                        store.x("UPDATE providers SET state='listed', reason='', listed_at=?, updated_at=? WHERE id=?",
+                                (now, now, p["id"]))
+                        store.audit(p["id"], "listed", f"checks passed automatically ({ratio:.0%} reachable)")
+                    elif not ok:
+                        store.x("UPDATE providers SET reason=?, updated_at=? WHERE id=?",
+                                (f"payout contract: {why}", now, p["id"]))
+            continue
+        # Suspended for reachability: back on trial once the last 24 hours are good again.
+        if p["state"] == "suspended":
+            ratio, n = uptime(store, p["id"], since=now - 86400)
+            if n >= 12 and ratio is not None and ratio >= 0.95:
+                store.x("UPDATE providers SET state='testing', reason=?, trial_since=?, updated_at=? WHERE id=?",
+                        ("reachable again: 24 h trial before listing", now, now, p["id"]))
+                store.audit(p["id"], "trial", f"reachable again ({ratio:.0%} in 24 h)")
+            continue
         # A reinstated provider that was listed before is listed again after a clean trial.
         trial = p.get("trial_since")
         if p["state"] == "testing" and trial and p["listed_at"] and now - trial >= TRIAL:
@@ -293,6 +336,13 @@ def activity(entry: dict, u: dict) -> dict:
             share = f" of {_size(limit)}" if limit else ""
             out[svc] = (f"{_size(s.get('stored_bytes', 0))}{share} stored · {s.get('leases', 0)} leases · "
                         f"{s.get('requests_24h', 0)} requests and {s.get('challenges_24h', 0)} checks in 24 h")
+        elif svc == "CMP-1":
+            out[svc] = (f"{s.get('cpu_free', 0)} of {s.get('cpu_slots', 0)} CPU slots free · {s.get('queued', 0)} jobs waiting · "
+                        f"{_size((s.get('compute_mem_free_mib') or 0) << 20)} memory free for jobs")
+        elif svc == "GPU-1":
+            out[svc] = f"{s.get('gpu_free', 0)} of {s.get('gpu_slots', 0)} GPUs free · {s.get('queued', 0)} jobs waiting"
         else:
-            out[svc] = "not served yet by this version"
+            used = s.get("bandwidth_used_bytes")
+            out[svc] = (f"{_size(used)} used this month" if used is not None else
+                        "offered; traffic and earnings appear here once clients use it")
     return out

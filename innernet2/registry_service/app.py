@@ -156,7 +156,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     async def lifespan(_app):
         threads = []
         if settings.workers:
-            for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached), settings.probe_interval),
+            payout_ok = lambda e: chain.payout_check(settings, e["network"], e["payout"], rpc)  # noqa: E731
+            for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached, payout_ok=payout_ok),
+                            settings.probe_interval),
                            (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval)):
                 t = threading.Thread(target=worker, args=(fn, iv), daemon=True)
                 t.start()
@@ -218,6 +220,25 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(401, "log in first")
         return s
 
+    from . import owners as own
+
+    def owner_of(pid: str) -> str:
+        return own.owner_of(store, pid)
+
+    def pick(request: Request, owner: str) -> str:
+        """The machine a request is about: ?m=<provider id> (must belong to the signed-in owner), else the
+        owner's machine that is waiting for setup, else the owner's first machine."""
+        m = str(request.query_params.get("m", "")).lower()
+        mine = own.machines_of(store, owner)
+        if m:
+            if owner_of(m) != owner:
+                raise HTTPException(403, "that machine belongs to another account")
+            return m
+        for x in mine:
+            if open_claim(x):
+                return x
+        return mine[0] if mine else owner
+
     def start_session(request: Request, pid: str, response: Response) -> None:
         token = secrets.token_urlsafe(32)
         now = int(time.time())
@@ -271,11 +292,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             if network not in settings.fee_payto:
                 raise HTTPException(422, f"payments on {network} are not accepted yet; use Base Sepolia (eip155:84532)")
             # A machine that left (or was reinstalled with a new key after leaving) frees its payout contract.
+            mine = owner_of(pid)
             clash = [p for p in store.providers() if p["id"] != pid and p["state"] not in ("removed", "leaving", "gone")
+                     and owner_of(p["id"]) != mine
                      and str(p["entry"]["payto"].get(network, "")).lower() == address.lower()]
             if clash:
-                raise HTTPException(422, "this payout contract is already used by another provider. If that was this "
-                                         "machine before a reinstall, sign in to its dashboard and press Leave, then apply again")
+                raise HTTPException(422, "this payout contract belongs to another account's machines. To share one payout "
+                                         "contract, add this machine to that account (sign in, then enter this machine's code)")
         notes = []
         for network, address in entry["payto"].items():
             ok, why = chain.payout_check(settings, network, address, rpc)
@@ -477,6 +500,17 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 db.execute("INSERT INTO pairing(provider, code_hash, set_at) VALUES (?,?,?)", (pid, target, now))
             store.audit(pid, "machine-code-set", f"nonce {nonce}", ip)
             return {"ok": True}
+        if action == "tx-claim":
+            network, _, tx = reg.intent_target(record).rpartition(":")
+            now = int(time.time())
+            with store.tx() as db:
+                row = db.execute("SELECT provider FROM tx_claims WHERE network=? AND tx=?", (network, tx)).fetchone()
+                if row is not None and row["provider"] != pid:
+                    raise HTTPException(409, "this payment was already credited on another machine")
+                if row is None:
+                    db.execute("INSERT INTO tx_claims(network, tx, provider, claimed_at) VALUES (?,?,?,?)", (network, tx, pid, now))
+                    db.execute("UPDATE payments SET provider=? WHERE network=? AND tx_hash=?", (pid, network, tx))
+            return {"ok": True}
         if action == "setup-fetch":
             row = store.one("SELECT * FROM claims WHERE provider=? AND status='service' AND expires_at>? "
                             "ORDER BY created_at DESC LIMIT 1", (pid, int(time.time())))
@@ -489,12 +523,12 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if action == "passkey-remove":
             target = reg.intent_target(record)
             row = store.one("SELECT * FROM passkeys WHERE provider=? AND (cred_id=? OR name=?) ORDER BY created_at LIMIT 1",
-                            (pid, target, target))
+                            (owner_of(pid), target, target))
             if row is None:
                 raise HTTPException(404, "no passkey with that name or id")
             with store.tx() as db:
                 db.execute("DELETE FROM passkeys WHERE cred_id=?", (row["cred_id"],))
-                db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (pid,))   # log out every web session
+                db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (owner_of(pid),))   # log out every web session
             store.audit(pid, "passkey-removed", f"{row['name']} by machine, nonce {nonce}", ip)
             return {"removed": row["name"], "passkeys": passkey_list(pid), "sessions_revoked": True}
         try:
@@ -561,6 +595,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 "passkeys": passkey_list(pid)}
 
     def passkey_list(pid: str) -> list[dict]:
+        pid = owner_of(pid)          # passkeys belong to the machine's owner account
         return [{"id": r["cred_id"], "name": r["name"], "created_at": r["created_at"], "last_used": r["last_used"]}
                 for r in store.q("SELECT * FROM passkeys WHERE provider=? ORDER BY created_at", (pid,))]
 
@@ -703,7 +738,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             nets.append({"caip2": net, "name": NETWORK_NAMES.get(net, net), "chain_id": CHAIN_IDS.get(net),
                          "usdc": USDC.get(net), "fee_wallet": fee_wallet, "factory": settings.split_factory.get(net),
                          "explorer_tx": EXPLORER_TX.get(net, ""),
-                         "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/")})
+                         "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/"),
+                         "mainnet": net == "eip155:8453",
+                         **({"limits": settings.beta} if net == "eip155:8453" else {})})
         host = settings.origin.split("://", 1)[-1].split("/")[0]
         return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays, "terms": terms.summary(),
                 "tunnel": {"url": f"{settings.origin}{P}/v1/tunnel", "endpoint": {"host": host, "port": 443},
@@ -818,11 +855,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                             (token_hash(str(token)), int(time.time())))
             if row is None:
                 raise HTTPException(401, "this link has expired or was used; run innernet-provider login again")
-            pid = row["provider"]
+            pid = owner_of(row["provider"])
         else:
             pid = need_session(request)["provider"]
             token = None
-        p = store.provider(pid)
+        p = store.provider(pid) or next((store.provider(m) for m in own.machines_of(store, pid) if store.provider(m)), None)
+        if p is None:
+            raise HTTPException(409, "finish setting up a machine first")
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
                     for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))]
         options = generate_registration_options(
@@ -954,10 +993,14 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         c = live_claim((await body_json(request)).get("code", ""), allow_claimed=True)
         pid = c["provider"]
         detected = json.loads(c["detected"])
+        if session(request) is not None:
+            # Signed in already: the code adds this machine to your account (no new passkey needed).
+            return {"link": True, "machine": pid, "name": detected.get("name") or "provider",
+                    "setup": c["status"] != "pairing"}
         pair = bool(c.get("via_pair"))
         if c["status"] != "waiting" and not pair:
             # Already claimed (the tab was closed): sign in again with a passkey of this machine.
-            rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))
+            rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (owner_of(pid),))
             login = generate_authentication_options(
                 rp_id=settings.rp_id, user_verification=UserVerificationRequirement.PREFERRED,
                 allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"])) for r in rows])
@@ -967,7 +1010,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                     "name": detected.get("name") or "provider"}
         name = detected.get("name") or "provider"
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
-                    for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))]
+                    for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (owner_of(pid),))]
         options = generate_registration_options(
             rp_id=settings.rp_id, rp_name="INNERnet providers", user_id=bytes.fromhex(pid),
             user_name=name, user_display_name=f"{name} ({pid[:8]})", exclude_credentials=existing,
@@ -1014,6 +1057,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                                  "AND expires_at>?", (now, f["token_hash"], now))
             if cur.rowcount != 1:
                 raise HTTPException(409, "This code was already used or has expired.")
+            # A new passkey made with the machine code starts (or restores) the machine's own account.
+            db.execute("DELETE FROM machine_owner WHERE provider=?", (f["provider"],))
             db.execute("INSERT INTO passkeys(cred_id, provider, public_key, sign_count, name, created_at) VALUES (?,?,?,?,?,?)",
                        (bytes_to_base64url(v.credential_id), f["provider"], v.credential_public_key, v.sign_count,
                         str(data.get("name") or "Passkey").strip()[:40] or "Passkey", now))
@@ -1022,14 +1067,34 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         start_session(request, f["provider"], response)
         return response
 
+    @app.post(P + "/api/claim/link")
+    async def claim_link(request: Request):
+        """Signed in, entering another machine's code: the machine joins this account."""
+        guard(request)
+        s = need_session(request)
+        ip = client_ip(request)
+        limiter.check("claim", ip, 20, 600)
+        c = live_claim((await body_json(request)).get("code", ""), allow_claimed=True)
+        m, owner = c["provider"], s["provider"]
+        before = owner_of(m)
+        now = int(time.time())
+        with store.tx() as db:
+            db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' WHEN 'pairing' THEN 'done' "
+                       "ELSE status END, claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=?", (now, c["code_hash"]))
+        own.link(store, m, owner)
+        if before != owner:
+            store.audit(m, "machine-linked", f"joined account {owner[:12]}…", ip)
+            store.audit(owner, "machine-linked", f"machine {m[:12]}… joined this account", ip)
+        return {"ok": True, "machine": m, "setup": c["status"] != "pairing"}
+
     def claim_with_existing_passkey(request: Request, data: dict, ip: str):
         """Claim the code by signing in with a passkey this machine already has."""
         f = take_flow(data.get("flow", ""), "claim-login")
         cred = data.get("credential") or {}
         row = store.one("SELECT * FROM passkeys WHERE cred_id=? AND provider=?",
-                        (str(cred.get("rawId", cred.get("id", ""))), f["provider"]))
+                        (str(cred.get("rawId", cred.get("id", ""))), owner_of(f["provider"])))
         if row is None:
-            raise HTTPException(401, "That passkey belongs to a different machine.")
+            raise HTTPException(401, "That passkey belongs to a different account.")
         try:
             v = verify_authentication_response(
                 credential=cred, expected_challenge=f["challenge"], expected_rp_id=settings.rp_id,
@@ -1047,8 +1112,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 raise HTTPException(409, "This code has expired. Run innernet-provider start again.")
             db.execute("UPDATE passkeys SET sign_count=?, last_used=? WHERE cred_id=?", (v.new_sign_count, now, row["cred_id"]))
         store.audit(f["provider"], "machine-claimed", f"signed in with passkey {row['name']}", ip)
-        response = JSONResponse({"ok": True, "existing": True})
-        start_session(request, f["provider"], response)
+        response = JSONResponse({"ok": True, "existing": True, "machine": f["provider"]})
+        start_session(request, owner_of(f["provider"]), response)
         return response
 
     OPEN = ("waiting", "claimed", "signing", "submitted")
@@ -1077,7 +1142,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     @app.get(P + "/api/setup")
     def setup_get(request: Request):
         s = need_session(request)
-        pid = s["provider"]
+        pid = pick(request, s["provider"])
         c = open_claim(pid, service=True) or service_claim(pid)
         current = store.provider(pid)
         if c is None:
@@ -1108,7 +1173,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         action = str((await body_json(request)).get("action", ""))
         if action not in ("retest", "outgoing"):
             raise HTTPException(422, "action: retest or outgoing")
-        c = open_claim(s["provider"])
+        c = open_claim(pick(request, s["provider"]))
         if c is None or c["status"] not in ("waiting", "claimed", "signing"):
             raise HTTPException(409, "Your machine is not waiting for setup. Run innernet-provider start on it.")
         store.x("UPDATE claims SET request=? WHERE code_hash=?", (action, c["code_hash"]))
@@ -1143,7 +1208,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     async def setup_post(request: Request):
         guard(request)
         s = need_session(request)
-        pid = s["provider"]
+        pid = pick(request, s["provider"])
         c = open_claim(pid)
         if c is None:
             raise HTTPException(404, "Your machine is not connected to this setup yet. Keep this page open, "
@@ -1160,7 +1225,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if not ok:
             raise HTTPException(422, why)
         backup = check_backup(backup, detected)
-        rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))
+        rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (owner_of(pid),))
         if not rows:
             raise HTTPException(409, "This machine has no passkey yet. Add one on the dashboard first.")
         setup = {"version": reg.SETUP_VERSION, "provider": pid, "offer": o, "service": service,
@@ -1187,16 +1252,16 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         limiter.check("webauthn", ip, 60, 600)
         data = await body_json(request)
         f = take_flow(data.get("flow", ""), "setup-sign")
-        if f["provider"] != s["provider"]:
-            raise HTTPException(401, "this confirmation belongs to another machine")
+        if owner_of(f["provider"]) != s["provider"]:
+            raise HTTPException(401, "this confirmation belongs to another account")
         c = store.one("SELECT * FROM claims WHERE code_hash=? AND status='signing'", (f["token_hash"],))
         if c is None or reg.setup_challenge(json.loads(c["signed"])) != f["challenge"]:
             raise HTTPException(409, "The setup changed in the meantime. Press Apply again.")
         cred = data.get("credential") or {}
         row = store.one("SELECT * FROM passkeys WHERE cred_id=? AND provider=?",
-                        (str(cred.get("rawId", cred.get("id", ""))), f["provider"]))
+                        (str(cred.get("rawId", cred.get("id", ""))), owner_of(f["provider"])))
         if row is None:
-            raise HTTPException(401, "That passkey belongs to a different machine.")
+            raise HTTPException(401, "That passkey belongs to a different account.")
         try:
             v = verify_authentication_response(
                 credential=cred, expected_challenge=f["challenge"], expected_rp_id=settings.rp_id,
@@ -1221,7 +1286,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     def setup_progress(request: Request):
         """Live view after Apply: what the machine did, then what the registry found."""
         s = need_session(request)
-        pid = s["provider"]
+        pid = pick(request, s["provider"])
         c = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('submitted','done') "
                       "ORDER BY COALESCE(submitted_at, created_at) DESC LIMIT 1", (pid,))
         if c is None:
@@ -1239,10 +1304,15 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     @app.get(P + "/api/me")
     def me(request: Request):
         s = need_session(request)
-        pid = s["provider"]
+        owner = s["provider"]
+        pid = pick(request, owner)
         p = store.provider(pid)
         if p is None or open_claim(pid):
-            raise HTTPException(409, "setup")    # a terminal is waiting (a change for the running machine does not count)    # not set up yet, or the machine is waiting for setup now
+            # This machine still needs setup. Show another machine of the account if there is one.
+            ready = [m for m in own.machines_of(store, owner) if store.provider(m) and not open_claim(m)]
+            if request.query_params.get("m") or not ready:
+                raise HTTPException(409, "setup")
+            pid, p = ready[0], store.provider(ready[0])
         now = int(time.time())
         e30 = chain.earnings(store, pid, settings.fee_bps, since=now - 30 * DAY)
         eall = chain.earnings(store, pid, settings.fee_bps, since=0)
@@ -1270,7 +1340,30 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                                           "ORDER BY created_at DESC", (pid, now))],
             "audit": [dict(ts=r["ts"], event=r["event"], detail=r["detail"], ip=r["ip"])
                       for r in store.q("SELECT * FROM audit WHERE provider=? ORDER BY id DESC LIMIT 100", (pid,))],
+            "machine": pid, "owner": owner, "machines": account_machines(owner, now),
         }
+
+    def account_machines(owner: str, now: int) -> list[dict]:
+        """Every machine of the account, for the table at the top of the dashboard."""
+        out = []
+        for m in own.machines_of(store, owner):
+            p = store.provider(m)
+            c = open_claim(m)
+            live = presence.live(store, m, now) or {}
+            e30 = chain.earnings(store, m, settings.fee_bps, since=now - 30 * DAY)
+            if p:
+                e = p["entry"]
+                name, state, services, region = e.get("name"), p["state"], e.get("services", []), e.get("region")
+                payto = next(iter(e.get("payto", {}).values()), "")
+            else:
+                det = json.loads(c["detected"]) if c else {}
+                name, state, services, region, payto = det.get("name"), "setup", [], det.get("region"), ""
+            out.append({"id": m, "name": name, "state": state, "needs_setup": bool(c and c["status"] in OPEN),
+                        "online": bool(live.get("online")), "path": ((live.get("record") or {}).get("payload") or {}).get("path"),
+                        "services": services, "region": region, "payto": payto,
+                        "earned_30d": chain.usdc(e30["net"]),
+                        "uptime_7d": health(m)["7d"]["uptime"] if p else None})
+        return out
 
     @app.post(P + "/api/me/lost-key")
     async def lost_key(request: Request):
@@ -1278,7 +1371,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         contract and set up again. Confirmed by typing the first 8 characters of the machine id."""
         guard(request)
         s = need_session(request)
-        pid = s["provider"]
+        pid = pick(request, s["provider"])
         if str((await body_json(request)).get("confirm", "")).lower() != pid[:8]:
             raise HTTPException(422, "type the first 8 characters of the machine id to confirm")
         p = store.provider(pid)
@@ -1291,7 +1384,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             db.execute("DELETE FROM pairing WHERE provider=?", (pid,))
             db.execute("UPDATE claims SET status='superseded' WHERE provider=? AND status IN "
                        "('waiting','claimed','signing','submitted','service','fetched')", (pid,))
-            db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (pid,))
+            db.execute("DELETE FROM machine_owner WHERE provider=?", (pid,))
+            if len(own.machines_of(store, s["provider"])) <= 1:
+                db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (s["provider"],))
         store.audit(pid, "key-lost", "retired by the owner from the dashboard; payout contract free", client_ip(request))
         return {"ok": True}
 
@@ -1304,7 +1399,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if action not in reg.INTENTS:
             raise HTTPException(400, "unknown action")
         try:
-            return presence.apply_intent(store, s["provider"], action, via="dashboard", ip=client_ip(request))
+            return presence.apply_intent(store, pick(request, s["provider"]), action, via="dashboard", ip=client_ip(request))
         except BulkError as exc:
             raise HTTPException(409, str(exc))
 

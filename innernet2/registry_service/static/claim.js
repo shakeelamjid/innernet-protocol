@@ -20,6 +20,13 @@
     say('Waiting for your device…');
     try {
       const start = await I.api('/api/claim/options', { code: code });
+      if (start.link) {
+        // Signed in already: this machine joins your account.
+        say('Adding ' + start.name + ' to your account…');
+        const r = await I.api('/api/claim/link', { code: code });
+        location.replace(I.BASE + (r.setup ? '/setup' : '/dashboard') + '?m=' + r.machine);
+        return;
+      }
       if (start.resume) {
         // This code was already used to sign in: confirm the passkey again and carry on.
         say('Confirm your passkey to continue setting up this machine…');

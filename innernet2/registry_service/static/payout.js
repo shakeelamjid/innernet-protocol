@@ -33,10 +33,11 @@
     try {
       await eth().request({ method: 'wallet_switchEthereumChain', params: [{ chainId: want }] });
     } catch (err) {
-      if (err && err.code === 4902 && net.chain_id === 84532) {
-        await eth().request({ method: 'wallet_addEthereumChain', params: [{ chainId: want, chainName: 'Base Sepolia',
-          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: ['https://sepolia.base.org'],
-          blockExplorerUrls: ['https://sepolia.basescan.org'] }] });
+      if (err && err.code === 4902 && (net.chain_id === 84532 || net.chain_id === 8453)) {
+        const main = net.chain_id === 8453;
+        await eth().request({ method: 'wallet_addEthereumChain', params: [{ chainId: want, chainName: main ? 'Base' : 'Base Sepolia',
+          nativeCurrency: { name: 'Ether', symbol: 'ETH', decimals: 18 }, rpcUrls: [main ? 'https://mainnet.base.org' : 'https://sepolia.base.org'],
+          blockExplorerUrls: [main ? 'https://basescan.org' : 'https://sepolia.basescan.org'] }] });
       } else { throw err; }
     }
   }
@@ -134,13 +135,24 @@
       const hash = await eth().request({ method: 'eth_sendTransaction', params: [{ from: account, data: art.bytecode + args }] });
       say('deploy-msg', 'Deploying…');
       const r = await waitReceipt(hash);
-      say('deploy-msg', 'Factory deployed at ' + r.contractAddress + '. In Coolify set INNERNET_SPLIT_FACTORY_BASE_SEPOLIA=' + r.contractAddress + ' on the registry and redeploy.');
+      say('deploy-msg', 'Factory deployed at ' + r.contractAddress + '. In Coolify set INNERNET_SPLIT_FACTORY_' + (net.mainnet ? 'BASE' : 'BASE_SEPOLIA') + '=' + r.contractAddress + ' on the registry and redeploy.');
     } catch (err) { say('deploy-msg', friendly(err), true); }
   });
 
   fetch(BASE + '/v1/config').then(function (r) { return r.json(); }).then(function (c) {
     cfg = c;
-    net = (c.networks || []).find(function (n) { return n.caip2 === 'eip155:84532'; }) || (c.networks || [])[0];
+    const want = new URLSearchParams(location.search).get('network') || 'eip155:84532';
+    net = (c.networks || []).find(function (n) { return n.caip2 === want; }) || (c.networks || [])[0];
+    if ((c.networks || []).length > 1 && $('step-connect')) {
+      const box = document.createElement('p'); box.className = 'note';
+      box.textContent = 'Network: ';
+      (c.networks || []).forEach(function (n, i) {
+        const a = document.createElement('a'); a.href = '?network=' + encodeURIComponent(n.caip2) + location.hash;
+        a.textContent = n.name + (n.mainnet ? ' (real USDC)' : ' (test)'); if (n.caip2 === net.caip2) a.style.fontWeight = '600';
+        if (i) box.append(' · '); box.append(a);
+      });
+      $('step-connect').parentNode.insertBefore(box, $('step-connect'));
+    }
     if (!net) { say('unavailable', 'Payouts are not open yet.', true); $('unavailable').hidden = false; $('step-connect').hidden = true; return; }
     $('share-provider').textContent = (100 - c.fee_bps / 100) + '%';
     $('share-fee').textContent = (c.fee_bps / 100) + '%';

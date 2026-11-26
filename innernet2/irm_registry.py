@@ -586,7 +586,8 @@ PATHS = {"direct", "router", "relay", "tunnel"}   # relay: RLY-0 over ST81; tunn
 _STAT_KEYS = {"stored_bytes", "leases", "requests_24h", "served_bytes_24h", "challenges_24h", "payments_24h",
               "uptime_s", "storage_limit_bytes",
               # live compute capacity: clients prefer providers with free CPU or GPU
-              "cpu_slots", "cpu_free", "gpu_slots", "gpu_free", "compute_mem_free_mib", "queued"}
+              "cpu_slots", "cpu_free", "gpu_slots", "gpu_free", "compute_mem_free_mib", "queued",
+              "bandwidth_used_bytes"}   # relay + VPN exit traffic this month
 
 
 def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300) -> dict:
@@ -634,8 +635,8 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
 INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
 INTENT_VERSION = "REG-1-INTENT"
 INTENTS = {"pause", "resume", "leave", "reinstate"}
-MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set", "setup-fetch"}
-_TARGETED = {"passkey-remove", "pairing-set"}   # pairing-set: target is SHA-256 hex of the machine code
+MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set", "setup-fetch", "tx-claim"}
+_TARGETED = {"passkey-remove", "pairing-set", "tx-claim"}   # pairing-set: target is SHA-256 hex of the machine code
 
 
 def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, str, str]:
@@ -650,6 +651,8 @@ def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -
         raise BulkError("invalid intent target")
     if p["action"] == "pairing-set" and not re.match(r"^[0-9a-f]{64}$", p["target"]):
         raise BulkError("pairing-set needs the SHA-256 of the machine code")
+    if p["action"] == "tx-claim" and not re.match(r"^eip155:[0-9]{1,10}:0x[0-9a-f]{64}$", p["target"]):
+        raise BulkError("tx-claim needs network:transaction")
     issued = _int(p["issued_at"], 0, 2**53, "intent issued_at")
     instant = int(time.time()) if now is None else now
     if not instant - max_age <= issued <= instant + FUTURE_SKEW:

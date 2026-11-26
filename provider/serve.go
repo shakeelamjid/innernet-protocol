@@ -85,7 +85,7 @@ func cmdServe(args []string) error {
 		return err
 	}
 	s, err := newServer(c, priv, orDefault(*dataDir, filepath.Join(home(), "data")),
-		orDefault(os.Getenv("INNERNET_RPC"), "https://sepolia.base.org"))
+		rpcFor(c.Network))
 	if err != nil {
 		return err
 	}
@@ -581,7 +581,37 @@ func (s *server) paidTo(tx string) (*big.Int, error) {
 	if total.Sign() == 0 {
 		return nil, errors.New("no USDC transfer to this provider's payout contract in that transaction")
 	}
+	if err := s.claimTx(network, tx); err != nil {
+		return nil, err
+	}
 	return total, nil
+}
+
+// claimTx registers a payment with the registry before it is credited here. Machines of one owner can
+// share a payout contract; the registry lets only the first of them credit a given transaction.
+func (s *server) claimTx(network, tx string) error {
+	if os.Getenv("INNERNET_NO_TX_CLAIM") == "1" {
+		return nil
+	}
+	_, err := signedIntent(registryURL(s.cfg), s.priv, "tx-claim", network+":"+strings.ToLower(tx))
+	if err == nil {
+		return nil
+	}
+	if strings.Contains(err.Error(), "another machine") {
+		return errors.New("this payment was already credited on another machine")
+	}
+	return fmt.Errorf("could not register the payment with the registry (%v); try again", err)
+}
+
+// rpcFor is the JSON-RPC endpoint for the payout network (INNERNET_RPC overrides it).
+func rpcFor(network string) string {
+	if v := os.Getenv("INNERNET_RPC"); v != "" {
+		return v
+	}
+	if network == "base" {
+		return "https://mainnet.base.org"
+	}
+	return "https://sepolia.base.org"
 }
 
 // keepPortOpen renews the router mapping every 20 minutes (it is asked for an hour).

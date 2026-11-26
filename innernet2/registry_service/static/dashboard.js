@@ -227,12 +227,48 @@
     });
   }
 
+  function renderMachines(d) {
+    const tb = $('machines'); tb.textContent = '';
+    let total = 0;
+    (d.machines || []).forEach(function (m) {
+      total += parseFloat(m.earned_30d || '0') || 0;
+      const row = document.createElement('tr');
+      row.className = 'clickable' + (m.id === d.machine ? ' current' : '');
+      function cell(t, cls) { const c = document.createElement('td'); c.textContent = t; if (cls) c.className = cls; row.append(c); return c; }
+      const n = cell(m.name || '(setting up)'); const sub = document.createElement('div'); sub.className = 'mono dim'; sub.textContent = m.id.slice(0, 12) + '…'; n.append(sub);
+      const st = document.createElement('span'); st.className = 'state ' + m.state; st.textContent = m.needs_setup ? 'finish setup' : m.state;
+      cell('').append(st);
+      cell(m.online ? (m.path || 'yes') : 'no'); cell((m.services || []).join(', ') || '–'); cell(m.region || '–');
+      cell(m.uptime_7d || '–'); cell((m.earned_30d || '0.00') + ' USDC');
+      const act = cell('');
+      const a1 = document.createElement('a'); a1.className = 'btn btn-sm'; a1.href = I.BASE + (m.needs_setup ? '/setup' : '/setup') + '?m=' + m.id;
+      a1.textContent = m.needs_setup ? 'Finish setup' : 'Change settings'; act.append(a1);
+      a1.addEventListener('click', function (ev) { ev.stopPropagation(); });
+      row.addEventListener('click', function () { location.href = I.BASE + '/dashboard?m=' + m.id; });
+      tb.append(row);
+    });
+    const n = (d.machines || []).length;
+    $('acct-sum').textContent = n + (n === 1 ? ' machine' : ' machines') + ' · ' + total.toFixed(2) + ' USDC earned in 30 days · details below for the selected machine';
+  }
+
+  $('add-machine').addEventListener('click', function () { $('add-panel').hidden = !$('add-panel').hidden; });
+  $('add-go').addEventListener('click', async function () {
+    const code = $('add-code').value.trim().toUpperCase();
+    try {
+      const r = await I.api('/api/claim/link', { code: code });
+      location.href = I.BASE + (r.setup ? '/setup' : '/dashboard') + '?m=' + r.machine;
+    } catch (err) { $('add-msg').textContent = I.friendly(err); $('add-msg').classList.add('error'); }
+  });
+
   async function load() {
     try {
-      render(await I.api('/api/me'));
+      const d = await I.api('/api/me');
+      renderMachines(d);
+      render(d);
+      $('change-link').href = I.BASE + '/setup?m=' + d.machine;
     } catch (err) {
       if (err.status === 401) showLogin();
-      else if (err.status === 409) location.replace(I.BASE + '/setup');
+      else if (err.status === 409) location.replace(I.BASE + '/setup' + location.search);
       else { $('login-msg').textContent = I.friendly(err); showLogin(); }
     }
   }
