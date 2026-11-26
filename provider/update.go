@@ -20,17 +20,21 @@ import (
 	"time"
 )
 
-// Self-update. The release to run is named in provider/LATEST on the main branch (the same file the
-// installer falls back to); the program and SHA256SUMS come from that GitHub release. The download
-// must match its line in SHA256SUMS, or nothing changes. Development builds never update themselves.
+// Self-update. innernetcorp.com/registry/dl/latest names the newest published release; the program
+// and SHA256SUMS come from that release (the registry forwards to the release host; provider/LATEST on
+// GitHub is the fallback). The download must match its line in SHA256SUMS, or nothing changes.
+// Development builds never update themselves.
 
 const repo = "shakeelamjid/innernet-protocol"
 
 var (
-	latestURL  = "https://raw.githubusercontent.com/" + repo + "/main/provider/LATEST"
-	releaseURL = "https://github.com/" + repo + "/releases/download/"
-	reTag      = regexp.MustCompile(`^provider-v(\d+)\.(\d+)\.(\d+)$`)
-	reVersion  = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
+	// The network's own address forwards to the release files; GitHub is the fallback.
+	latestURL       = "https://innernetcorp.com/registry/dl/latest"
+	releaseURL      = "https://innernetcorp.com/registry/dl/"
+	latestFallback  = "https://raw.githubusercontent.com/" + repo + "/main/provider/LATEST"
+	releaseFallback = "https://github.com/" + repo + "/releases/download/"
+	reTag           = regexp.MustCompile(`^provider-v(\d+)\.(\d+)\.(\d+)$`)
+	reVersion       = regexp.MustCompile(`^(\d+)\.(\d+)\.(\d+)$`)
 )
 
 func updatesOff() bool {
@@ -86,7 +90,9 @@ func fetch(url string, limit int64) ([]byte, error) {
 func latestTag() string {
 	b, err := fetch(latestURL, 64)
 	if err != nil {
-		return ""
+		if b, err = fetch(latestFallback, 64); err != nil {
+			return ""
+		}
 	}
 	t := strings.TrimSpace(string(b))
 	if !reTag.MatchString(t) {
@@ -97,9 +103,13 @@ func latestTag() string {
 
 // download fetches this system's program for tag and checks it against SHA256SUMS.
 func download(tag string) ([]byte, error) {
-	sums, err := fetch(releaseURL+tag+"/SHA256SUMS", 16<<10)
+	base := releaseURL
+	sums, err := fetch(base+tag+"/SHA256SUMS", 16<<10)
 	if err != nil {
-		return nil, fmt.Errorf("release %s is not ready yet (%v)", tag, err)
+		base = releaseFallback
+		if sums, err = fetch(base+tag+"/SHA256SUMS", 16<<10); err != nil {
+			return nil, fmt.Errorf("release %s is not ready yet (%v)", tag, err)
+		}
 	}
 	want := ""
 	sc := bufio.NewScanner(strings.NewReader(string(sums)))
@@ -112,7 +122,7 @@ func download(tag string) ([]byte, error) {
 	if len(want) != 64 {
 		return nil, fmt.Errorf("release %s has no %s", tag, assetName())
 	}
-	bin, err := fetch(releaseURL+tag+"/"+assetName(), 64<<20)
+	bin, err := fetch(base+tag+"/"+assetName(), 64<<20)
 	if err != nil {
 		return nil, err
 	}

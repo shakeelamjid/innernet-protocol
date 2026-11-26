@@ -14,17 +14,22 @@ These terms are between you, the person or company using INNERnet providers ("yo
 2.2 The provider's machine sees what it computes: your programs, inputs, outputs and models. Send private work only to providers you trust.
 2.3 Results are not guaranteed. To check one, run the same job on another provider and compare.
 
-## 3. Acceptable use
-3.1 You must not use providers to store, process or send material or run programs that are illegal where you or the provider are, including malware, attacks on others, material that exploits children, or infringing others' rights.
-3.2 You must not try to break out of the sandbox, harm a provider's machine or network, or avoid paying.
-3.3 The network may refuse service to a client that breaks these terms, and may cooperate with lawful requests.
+## 3. VPN exit
+3.1 A VPN exit sends your traffic to the internet from a provider's connection; websites see the provider's address. The provider's machine can see where you connect and, for traffic that is not encrypted (not HTTPS), what you send.
+3.2 You must not use a VPN exit for anything illegal where you, the provider or the destination are, including attacks, spam, fraud or abuse of others. Your traffic is paid from credit tied to your key, so it can be traced to that key when a provider receives an abuse complaint.
+3.3 Exits refuse private networks and the mail port (25), and stop when your credit or the provider's monthly limit runs out.
 
-## 4. Payments and the network fee
-4.1 You pay the provider's payout contract, which sends the provider's share to the provider and 2.5% to the network. Nobody holds your money in between. Payments on the blockchain cannot be reversed.
-4.2 On the test network, payments use test USDC with no value.
+## 4. Acceptable use
+4.1 You must not use providers to store, process or send material or run programs that are illegal where you or the provider are, including malware, attacks on others, material that exploits children, or infringing others' rights.
+4.2 You must not try to break out of the sandbox, harm a provider's machine or network, or avoid paying.
+4.3 The network may refuse service to a client that breaks these terms, and may cooperate with lawful requests.
 
-## 5. No warranty, limits
-5.1 The software and the network are provided as is. The network is not liable for lost data, lost results, or the conduct of providers, beyond what the law does not allow to be excluded.
+## 5. Payments and the network fee
+5.1 You pay the provider's payout contract, which sends the provider's share to the provider and 2.5% to the network. Nobody holds your money in between. Payments on the blockchain cannot be reversed.
+5.2 On the test network, payments use test USDC with no value.
 
-## 6. Changes
-6.1 New versions are published at innernetcorp.com/registry/terms. Payments after a change must carry the new version's fingerprint.
+## 6. No warranty, limits
+6.1 The software and the network are provided as is. The network is not liable for lost data, lost results, or the conduct of providers, beyond what the law does not allow to be excluded.
+
+## 7. Changes
+7.1 New versions are published at innernetcorp.com/registry/terms. Payments after a change must carry the new version's fingerprint.

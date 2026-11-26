@@ -1,9 +1,9 @@
 # Install innernet-provider on Windows (PowerShell 5.1+).
-#   irm https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.ps1 | iex
-# Optional: $env:INNERNET_VERSION = "provider-v0.3.0"
+#   irm https://innernetcorp.com/install.ps1 | iex
+# Optional: $env:INNERNET_VERSION = "provider-v0.6.0"
 $ErrorActionPreference = "Stop"
 $ProgressPreference = "Continue"   # show the download progress bar
-$Repo = "shakeelamjid/innernet-protocol"
+$DL = if ($env:INNERNET_DL) { $env:INNERNET_DL } else { "https://innernetcorp.com/registry/dl" }
 $BinDir = if ($env:INNERNET_BIN_DIR) { $env:INNERNET_BIN_DIR } else { Join-Path $env:LOCALAPPDATA "innernet\bin" }
 
 Write-Host ""
@@ -22,20 +22,13 @@ $arch = switch ($env:PROCESSOR_ARCHITECTURE) {
 
 $tag = $env:INNERNET_VERSION
 if (-not $tag) {
-  # GitHub API first (60 requests per hour per IP), then provider/LATEST in the repository.
-  try {
-    $releases = Invoke-RestMethod "https://api.github.com/repos/$Repo/releases?per_page=30"
-    $tag = ($releases | Where-Object { $_.tag_name -like "provider-v*" } | Select-Object -First 1).tag_name
-  } catch { $tag = $null }
-  if (-not $tag) {
-    try { $tag = (Invoke-RestMethod "https://raw.githubusercontent.com/$Repo/main/provider/LATEST").Trim() } catch { $tag = $null }
-  }
+  try { $tag = ([string](Invoke-RestMethod "$DL/latest")).Trim() } catch { $tag = $null }
   if (-not $tag) { throw "could not find the latest release; set `$env:INNERNET_VERSION = 'provider-vX.Y.Z'" }
 }
 if ($tag -notlike "provider-v*") { throw "bad version tag: $tag" }
 
 $asset = "innernet-provider-windows-$arch.exe"
-$base = "https://github.com/$Repo/releases/download/$tag"
+$base = "$DL/$tag"
 $tmp = Join-Path ([IO.Path]::GetTempPath()) ([Guid]::NewGuid())
 New-Item -ItemType Directory $tmp | Out-Null
 try {

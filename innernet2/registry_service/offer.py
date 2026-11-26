@@ -7,11 +7,12 @@ import re
 from ..bulk_v080 import BulkError
 from ..irm_registry import _validate_provider
 
-UNITS = {"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
-DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500"}
+UNITS = {"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour", "VPN-1": "GiB"}
+DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500", "VPN-1": "0.0100"}
 _EVM = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _KEYS = {"name", "region", "host", "port", "storage_gib", "relay_gib", "compute", "cpus", "memory_mib",
-         "gpu", "gpus", "reserve_gib", "per_client", "terms", "prices", "network", "payout"}
+         "gpu", "gpus", "reserve_gib", "per_client", "terms", "relay", "vpn", "vpn_consent",
+         "vpn_ports", "prices", "network", "payout"}
 
 
 def _int(v, lo, hi, label):
@@ -44,11 +45,20 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         "gpu": bool(offer.get("gpu", False)),
         "gpus": _int(offer.get("gpus", 1), 1, 16, "GPUs"),
         "reserve_gib": _int(offer.get("reserve_gib", 4), 0, 1024, "memory kept for you"),
+        "relay": bool(offer.get("relay", True)),
+        "vpn": bool(offer.get("vpn", False)),
+        "vpn_consent": bool(offer.get("vpn_consent", False)),
+        "vpn_ports": "all" if offer.get("vpn_ports") == "all" else "web",
         "per_client": _int(offer.get("per_client", 2), 1, 64, "jobs per client"),
         "prices": {k: str(v).strip() for k, v in dict(offer.get("prices") or {}).items() if k in UNITS},
         "network": str(offer.get("network", "")),
         "payout": str(offer.get("payout", "")).strip(),
     }
+    if o["vpn"] and not o["vpn_consent"]:
+        raise BulkError("VPN exit needs your consent: you are allowed to offer internet exit where you operate, "
+                        "and you accept the abuse policy")
+    if o["vpn"] and o["relay_gib"] <= 0:
+        raise BulkError("VPN exit: set the monthly bandwidth (GiB)")
     from . import terms
     if offer.get("terms") != terms.current("provider")["sha256"]:
         raise BulkError("read and agree to the provider terms")
@@ -67,7 +77,7 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         o["gpu_info"] = {k: g[k] for k in ("vendor", "model", "api", "vram_mib") if k in g}
     entry = to_entry(o, "00" * 32)
     if not entry["services"]:
-        raise BulkError("offer at least one of storage, bandwidth, CPU or GPU")
+        raise BulkError("offer at least one of storage, relay, VPN exit, CPU or GPU")
     _validate_provider(entry, registry=False)
     return o
 
@@ -77,9 +87,12 @@ def to_entry(o: dict, provider_id: str) -> dict:
     if o["storage_gib"] > 0:
         services.append("STO-1")
         limits["STO-1"] = {"max_storage_gib": o["storage_gib"]}
-    if o["relay_gib"] > 0:
+    if o["relay_gib"] > 0 and o.get("relay", True):
         services.append("RLY-1")
         limits["RLY-1"] = {"max_gib_per_month": o["relay_gib"]}
+    if o["relay_gib"] > 0 and o.get("vpn") and o.get("vpn_consent"):
+        services.append("VPN-1")
+        limits["VPN-1"] = {"max_gib_per_month": o["relay_gib"], "all_ports": 1 if o.get("vpn_ports") == "all" else 0}
     if o["compute"]:
         services.append("CMP-1")
         limits["CMP-1"] = {"max_cpus": o["cpus"], "max_memory_mib": o["memory_mib"]}

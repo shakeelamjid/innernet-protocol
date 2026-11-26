@@ -2,7 +2,7 @@
 (function () {
   const I = window.Innernet;
   const $ = function (id) { return document.getElementById(id); };
-  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'CPU', 'GPU-1': 'GPU' };
+  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Relay', 'VPN-1': 'VPN exit', 'CMP-1': 'CPU', 'GPU-1': 'GPU' };
   const STATES = {
     testing: 'Testing: being checked before listing',
     listed: 'Listed: visible to everyone',
@@ -48,7 +48,8 @@
     max_gib_per_month: function (v) { return 'up to ' + v + ' GiB a month'; },
     max_cpus: function (v) { return v + (v === 1 ? ' CPU' : ' CPUs'); },
     max_memory_mib: function (v) { return v + ' MiB memory'; },
-    max_gpus: function (v) { return v + (v === 1 ? ' GPU' : ' GPUs'); }
+    max_gpus: function (v) { return v + (v === 1 ? ' GPU' : ' GPUs'); },
+    all_ports: function (v) { return v ? 'all ports but 25' : 'web only'; }
   };
 
   async function showLogin() {

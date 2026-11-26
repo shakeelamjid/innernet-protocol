@@ -1011,3 +1011,13 @@ def test_machine_code_is_permanent_until_rekey(env):
     assert intent("pairing-set", hashlib.sha256(b"WXYZ-WXYZ-WXYZ-WXYZ").hexdigest()).status_code == 200
     r2 = client.post(P + "/api/claim/options", json={"code": code}, headers=H)
     assert r2.status_code == 404 and "rekey" in r2.json()["detail"]
+
+
+def test_download_routes_forward_to_release_files(env):
+    client, store, fake, s = env
+    r = client.get(P + "/dl/provider-v0.6.0/innernet-provider-darwin-arm64", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"].endswith("/releases/download/provider-v0.6.0/innernet-provider-darwin-arm64")
+    assert client.get(P + "/dl/provider-v0.6.0/evil.sh", follow_redirects=False).status_code == 404
+    r = client.get(P + "/install.sh", follow_redirects=False)
+    assert r.status_code == 302 and r.headers["location"].endswith("/provider/install.sh")
+    assert client.get(P + "/claim").status_code == 200 and client.get(P + "/terms").status_code == 200

@@ -7,13 +7,13 @@
 Linux and macOS:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.sh | sh
+curl -fsSL https://innernetcorp.com/install.sh | sh
 ```
 
 Windows (PowerShell):
 
 ```powershell
-irm https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.ps1 | iex
+irm https://innernetcorp.com/install.ps1 | iex
 ```
 
 The installers find the newest `provider-v*` release through the GitHub API, or, when that is unavailable or rate-limited, from `provider/LATEST` in the repository (update that file with every release). They download the build for your system and refuse to install if its SHA-256 does not match `SHA256SUMS` in the same release. Signed releases (so a compromised GitHub account cannot ship a bad binary) are planned. You can also build from source with Go 1.23+: `cd provider && go build -o innernet-provider .`
@@ -136,6 +136,8 @@ Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_R
 **Updates.** Releases update installed machines by themselves. `start` checks first and restarts into the newest release before it does anything; `serve` checks every 6 hours and restarts into a new release (on Linux and macOS in place, so the background service keeps running). The program is downloaded from the GitHub release named in `provider/LATEST` and must match that release's `SHA256SUMS`, or nothing changes. `innernet-provider update` does it by hand, `update --check` only looks; `INNERNET_NO_UPDATE=1` turns automatic updates off. Development builds never update themselves.
 
 For maintainers: a release is built and published by itself when `provider/LATEST` names a version that has no release yet, so bump it (e.g. `provider-v0.4.3`) in the same upload as the provider changes.
+
+**Bandwidth: relay and VPN exit.** One monthly limit (`--relay-gib`, GiB) covers both. Relay carries sealed INNERnet traffic between INNERnet machines. VPN exit (`--vpn --vpn-consent`, price `--price-vpn` per GiB, `--vpn-all-ports` for every port except 25; default web only) lets clients' traffic reach the internet from your connection: it is off unless you switch it on and confirm you are allowed to offer internet exit where you operate and accept the abuse policy. Private networks (your own LAN and router) and port 25 are never reachable through it. Clients use it as a SOCKS5 proxy: `python -m innernet2.vpn --accept-terms <sha256>`.
 
 **Compute: CPU and GPU by the hour.** Clients bring their own programs and models; you rent out the power. CPU time (`init --compute --cpus 2 --price-compute 0.02`, USDC per CPU-hour) runs clients' WebAssembly jobs with no access to your files or network. GPU time (`init --gpus 1 --price-gpu 0.25`, USDC per GPU-hour) runs clients' GPU programs (WebGPU) in Deno with no access to your files or network: `serve` uses a `deno` already installed (macOS: `brew install deno`) or downloads Deno for your system, checked against GitHub's published SHA-256. Clients pay credit in advance; each job is charged per second and comes back with a signed receipt. `start` shows your GPUs (model, memory, cores, and Metal/Vulkan/DirectX); a GPU shows "no driver" when its driver is missing. Your machine sees what it computes, including clients' programs and data.
 

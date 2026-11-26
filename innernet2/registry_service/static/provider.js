@@ -3,7 +3,7 @@
   const pid = location.pathname.split('/').pop().toLowerCase();
   const base = location.pathname.replace(/\/providers\/[^/]*$/, '');
   const $ = function (id) { return document.getElementById(id); };
-  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'CPU', 'GPU-1': 'GPU' };
+  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Relay', 'VPN-1': 'VPN exit', 'CMP-1': 'CPU', 'GPU-1': 'GPU' };
 
   function row(dl, key, value) {
     const dt = document.createElement('dt'); dt.textContent = key;

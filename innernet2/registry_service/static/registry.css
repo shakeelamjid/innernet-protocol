@@ -152,3 +152,4 @@ strong { color: var(--text); font-weight: 500; }
 .terms p { color: var(--muted); line-height: 1.65; }
 .terms .fp { font-family: var(--mono); font-size: .75rem; color: var(--dim); word-break: break-all; margin: 0 0 8px; }
 .offer .terms-box { margin-top: 0; }
+select.field { color: var(--text); background-color: #000; }

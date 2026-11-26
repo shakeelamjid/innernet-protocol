@@ -68,3 +68,16 @@ def test_market_groups_gpu_prices_by_model():
     m = presence.market(S())["GPU-1"]
     assert m["providers"] == 3 and m["unit"] == "GPU-hour"
     assert m["by_model"]["NVIDIA L4"]["median"] == "0.5" and m["by_model"]["NVIDIA GeForce RTX 4090"]["providers"] == 1
+
+
+def test_vpn_exit_offer_needs_consent_and_bandwidth():
+    with pytest.raises(BulkError, match="consent"):
+        offers.check_offer(dict(BASE, relay_gib=100, vpn=True), {NET}, {})
+    with pytest.raises(BulkError, match="monthly bandwidth"):
+        offers.check_offer(dict(BASE, storage_gib=1, vpn=True, vpn_consent=True), {NET}, {})
+    o = offers.check_offer(dict(BASE, relay_gib=100, relay=False, vpn=True, vpn_consent=True, vpn_ports="all",
+                                prices={"VPN-1": "0.02"}), {NET}, {})
+    e = offers.to_entry(o, "ab" * 32)
+    assert e["services"] == ["VPN-1"] and e["limits"]["VPN-1"] == {"max_gib_per_month": 100, "all_ports": 1}
+    assert e["prices"]["VPN-1"] == {"asset": "USDC", "unit": "GiB", "amount": "0.02"}
+    reg._validate_provider(e, registry=False)

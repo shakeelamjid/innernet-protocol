@@ -60,6 +60,7 @@ type server struct {
 	pathUp  atomic.Bool
 
 	credits  *ledger
+	meter    *bandwidthMeter
 	terms    clientTerms
 	sched    *scheduler
 	stoSlots chan struct{}
@@ -120,7 +121,7 @@ func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, e
 	}
 	s := &server{cfg: c, priv: priv, data: data, rpc: rpc, seen: map[string]int64{}, used: map[string]bool{},
 		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now(),
-		credits: openLedger(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64),
+		credits: openLedger(data), meter: openMeter(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64),
 	}
 	if raw, err := os.ReadFile(s.usedLog); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {

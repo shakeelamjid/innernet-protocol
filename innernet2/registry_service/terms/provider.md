@@ -15,9 +15,11 @@ These terms are between you, the person or company running a provider machine ("
 2.3 Clients pay after each passing proof. They may hold back up to 20% of each payment until the next proof passes. If your machine loses pieces or fails proofs, the held-back amount is not paid to you; the client uses it to repair the data elsewhere. That is the only penalty for lost data under these terms.
 2.4 When you leave, keep serving until clients have moved their pieces, or the leave period ends.
 
-## 3. Bandwidth (relay)
+## 3. Bandwidth: relay and VPN exit
 3.1 Relay carries sealed INNERnet traffic between INNERnet machines only. You must not try to read or alter it.
-3.2 Relay is not a VPN: traffic does not leave to the wider internet from your connection. Offering an exit to the wider internet (a VPN) is not covered by these terms and may need a licence where you are.
+3.2 VPN exit is off unless you switch it on. When you do, clients' traffic reaches the internet from your connection and is seen as coming from your address. You confirm that you are allowed to offer internet exit where you operate, including any licence or registration your law requires, and that your internet plan allows it.
+3.3 Abuse policy. You keep the exit's built-in protections on: no access to private networks, no mail port (25), your monthly limit. If you receive a credible abuse complaint about traffic through your exit, you may switch the exit off at once (innernet-provider pause, or untick it), and you should tell the network so the client can be identified by the key that paid for the traffic. You must not keep or sell records of what clients visit beyond what the law requires of you.
+3.4 Traffic through the exit is sealed between the client and your machine; from your machine to the destination it is as the client sent it (usually HTTPS). You must not read, alter or inject into it.
 
 ## 4. CPU and GPU time
 4.1 Clients' programs run in the sandbox built into the provider software. You must not weaken it, inspect clients' inputs or outputs beyond what running them needs, or keep copies after a job ends.

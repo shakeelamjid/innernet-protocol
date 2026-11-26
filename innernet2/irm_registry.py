@@ -32,7 +32,7 @@ ROTATION_VERSION = "REG-1-ROTATE"
 DESCRIPTOR_VERSION = "REG-1-DESCRIPTOR"
 TICKET_VERSION = "PAY-1-TICKET"
 
-SERVICES = frozenset({"STO-1", "RLY-1", "CMP-1", "GPU-1"})
+SERVICES = frozenset({"STO-1", "RLY-1", "VPN-1", "CMP-1", "GPU-1"})
 GPU_APIS = frozenset({"cuda", "metal", "vulkan", "directx", "rocm", "oneapi", "none"})
 _HWTEXT = re.compile(r"^[A-Za-z0-9 ()._+/,-]{1,80}$")
 ASSETS = frozenset({"USDC"})
@@ -421,7 +421,7 @@ def verify_ticket(record: dict, provider_id: bytes, *, now: int | None = None) -
 # receipt signed by the provider: what ran, for how long, what it cost and the balance left.
 
 USAGE_DOMAIN = b"INNERnet/PAY-1/usage-receipt\x00"
-USAGE_SERVICES = {"CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
+USAGE_SERVICES = {"CMP-1": "CPU-hour", "GPU-1": "GPU-hour", "VPN-1": "GiB"}
 
 
 def verify_usage(record: dict, provider_id: bytes, client_hex: str) -> dict:

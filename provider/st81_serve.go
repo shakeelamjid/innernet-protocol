@@ -94,11 +94,17 @@ func (s *server) serveST81(c net.Conn) {
 		return
 	}
 	sess.Timeout = 120 * time.Second // idle limit between requests
+	first := true
 	for {
 		h, body, err := sess.Read()
 		if err != nil {
 			return
 		}
+		if first && h["op"] == "vpn-connect" { // VPN-1: this session carries one exit connection
+			s.serveVPN(sess, h)
+			return
+		}
+		first = false
 		status, hdrs, out := s.dispatchFrame(h, body)
 		sess.Timeout = 60 * time.Second
 		if err := sess.Write(map[string]any{"rid": h["rid"], "status": status, "headers": hdrs}, out); err != nil {

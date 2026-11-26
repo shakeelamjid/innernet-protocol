@@ -49,10 +49,22 @@
               <label>GiB to offer<input id="sto-gib" class="field" type="number" min="1"></label>
               <label>USDC per GiB per day<input id="sto-price" class="field" inputmode="decimal"></label>
             </div>
-            <label class="toggle"><input type="checkbox" id="rly-on"> <span><strong>Bandwidth</strong> Relay encrypted traffic. Check your internet plan allows it.</span></label>
-            <div class="fields" data-for="rly-on">
-              <label>GiB per month<input id="rly-gib" class="field" type="number" min="1"></label>
-              <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
+            <div class="group">
+              <h3>Bandwidth</h3>
+              <p class="note">Your internet connection, by the GiB. Check that your internet plan allows it.</p>
+              <div class="fields" id="bw-fields" hidden>
+                <label>GiB per month, relay and VPN together<input id="rly-gib" class="field" type="number" min="1"></label>
+              </div>
+              <label class="toggle"><input type="checkbox" id="rly-on"> <span><strong>Relay</strong> Carry sealed INNERnet traffic between INNERnet machines. It never leaves INNERnet.</span></label>
+              <div class="fields" data-for="rly-on">
+                <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
+              </div>
+              <label class="toggle"><input type="checkbox" id="vpn-on"> <span><strong>VPN exit</strong> Clients' traffic reaches the internet from your connection, and is seen as coming from your address.</span></label>
+              <div class="fields" data-for="vpn-on">
+                <label>USDC per GiB<input id="vpn-price" class="field" inputmode="decimal"></label>
+                <label>Ports<select id="vpn-ports" class="field"><option value="web">Web only (80, 443)</option><option value="all">All ports except 25</option></select></label>
+              </div>
+              <label class="toggle" data-for="vpn-on"><input type="checkbox" id="vpn-consent"> <span><strong>I confirm I am allowed to offer internet exit where I operate, and I accept the <a href="terms#provider" target="_blank" rel="noopener">abuse policy</a>.</strong> Clients can never reach your own network or router through the exit.</span></label>
             </div>
             <div class="group">
               <h3>Compute</h3>

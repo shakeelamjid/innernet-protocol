@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### VPN exit (VPN-1) under Bandwidth; installs and updates from innernetcorp.com
+
+- Bandwidth is one group with a shared monthly GiB limit: **Relay** (sealed INNERnet traffic) and **VPN exit** (clients' TCP connections reach the internet from the provider's connection), each priced per GiB. VPN exit is opt-in and needs the owner's consent ("allowed to offer internet exit where I operate; accept the abuse policy"); web only by default, or every port except 25.
+- The exit refuses private, loopback, link-local, carrier-grade NAT, multicast and reserved destinations (no access to the owner's network, router or cloud metadata) and port 25; charges each MiB from the client's credit as it flows; stops at the credit or monthly limit; ends each connection with a signed usage receipt. Client terms must be agreed.
+- `python -m innernet2.vpn`: local SOCKS5 proxy, one ST81 session per connection (direct or through a relay). `Provider.open_session()`.
+- Provider and client terms: generic VPN exit sections and abuse policy (both fingerprints change: providers agree again, clients send the new fingerprint). Spec 6a.
+
+- Install with `curl -fsSL https://innernetcorp.com/install.sh | sh` (Windows: `irm https://innernetcorp.com/install.ps1 | iex`). The registry serves `/registry/dl/latest` (newest published provider release) and forwards `/registry/dl/<tag>/<file>` and the installers to the release files; the installer and the provider still check every download against the release's SHA256SUMS.
+- Providers check innernetcorp.com for updates, with GitHub as the fallback. Registry setting `INNERNET_RELEASE_REPO` names the release repository.
+- `provider/LATEST` is `provider-v0.6.1`.
+
 ### GPU jobs on WebGPU (llama.cpp removed)
 
 - GPU-1 is now GPU jobs, like CPU jobs: the client sends a JavaScript/TypeScript module that uses WebGPU, with its input; the provider runs it in Deno with no permissions (no files, network, environment or other programs), a time limit and a memory limit, and returns the output with a signed receipt, billed per GPU-hour by the second. Any WebGPU workload fits (AI via ONNX Runtime Web/Transformers.js/WebLLM, image processing, simulation, maths). `/gpu/v1/jobs`; large programs by URL and SHA-256.

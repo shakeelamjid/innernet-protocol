@@ -41,6 +41,7 @@ func TestDownloadChecksAndReplace(t *testing.T) {
 	}))
 	defer srv.Close()
 	latestURL, releaseURL = srv.URL+"/LATEST", srv.URL+"/"
+	latestFallback, releaseFallback = srv.URL+"/none", srv.URL+"/none/"
 	if tag := latestTag(); tag != "provider-v9.9.9" {
 		t.Fatal(tag)
 	}

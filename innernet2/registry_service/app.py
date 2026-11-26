@@ -15,7 +15,7 @@ from pathlib import Path
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse, Response
 from webauthn import (generate_authentication_options, generate_registration_options, options_to_json,
                       verify_authentication_response, verify_registration_response)
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
@@ -25,7 +25,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
 from ..bulk_v080 import BulkError
 from .. import irm_registry as reg
 from ..irm_registry import make_login_challenge, sign_registry, verify_connect, verify_descriptor, verify_login
-from . import presence, terms, tunnel
+from . import presence, releases as rel, terms, tunnel
 from . import chain, offer as offers, probe
 from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
@@ -575,6 +575,30 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(409, "nothing to finish")
         store.x("UPDATE claims SET status='done' WHERE code_hash=?", (c["code_hash"],))
         return {"ok": True}
+
+    downloads = rel.Releases(settings.release_repo)
+
+    @app.get(P + "/dl/latest")
+    def dl_latest():
+        tag = downloads.latest()
+        if not tag:
+            raise HTTPException(503, "release list not reachable; try again")
+        return PlainTextResponse(tag + "\n", headers={"Cache-Control": "public, max-age=300"})
+
+    @app.get(P + "/dl/{tag}/{name}")
+    def dl_file(tag: str, name: str):
+        url = downloads.file_url(tag, name)
+        if url is None:
+            raise HTTPException(404, "no such release file")
+        return RedirectResponse(url, status_code=302)
+
+    @app.get(P + "/install.sh")
+    def installer_sh():
+        return RedirectResponse(downloads.installer_url("install.sh"), status_code=302)
+
+    @app.get(P + "/install.ps1")
+    def installer_ps1():
+        return RedirectResponse(downloads.installer_url("install.ps1"), status_code=302)
 
     @app.get(P + "/v1/terms")
     def terms_all():

@@ -15,6 +15,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 | `STO-1` | Paid storage of OB80-2 pieces, with proof-of-storage challenges | OB80-2, ST81 |
 | `RLY-1` | Paid relaying between peers that cannot connect directly | ST81 |
 | `CMP-1` | Paid compute: deterministic jobs, verified by replication or hardware attestation | OB80-2, UV10 |
+| `VPN-1` | VPN exit: clients' TCP connections reach the internet from the provider's connection, per GiB (opt-in, with consent) | ST81, PAY-1 |
 | `GPU-1` | GPU time for the client's own WebGPU programs, priced per GPU-hour | REG-1, PAY-1 |
 
 ### 1.1 Principles
@@ -317,6 +318,15 @@ Both peers count bytes sent and received. If the relay drops traffic, the shortf
 ### 6.5 What the relay can see
 
 The relay sees both peers' keys and IP addresses, traffic volume and timing. It cannot see content.
+
+## 6a. VPN-1: VPN exit (draft)
+
+Part of Bandwidth, next to relay (RLY-1), and sharing its monthly limit (`limits.VPN-1.max_gib_per_month`). Off unless the owner switches it on and gives the VPN consent ("I am allowed to offer internet exit where I operate, and I accept the abuse policy"); the provider records when. `limits.VPN-1.all_ports` is 0 (web only: ports 80 and 443) or 1 (every port except 25).
+
+- **Connection.** The client opens an ST81 session to the provider (pinned to its key; directly, or end to end through a relay; providers reachable only through the HTTPS tunnel cannot be exits) and sends, as the first frame, `{"op": "vpn-connect", "host", "port", "terms"}` with the SHA-256 of the client terms. The provider resolves `host` itself and refuses destinations in private, loopback, link-local, carrier-grade NAT, multicast and reserved ranges (IPv4 and IPv6), so an exit can never reach the owner's own network, router or cloud metadata; port 25 is always refused. On success it answers `{"ok": true}` and both sides exchange `{"op": "data"}` frames; any other frame ends the connection. The provider ends with `{"op": "close", "bytes", "receipt"}`.
+- **Payment.** From the client's credit on that provider (section 7.7): each full MiB is charged as it passes, the rest at the end; the connection stops when credit or the monthly limit runs out. The receipt is a PAY-1 usage receipt with `service: "VPN-1"`, `unit: "GiB"` and `bytes`.
+- **Client.** `python -m innernet2.vpn` runs a local SOCKS5 proxy (CONNECT, names resolved at the exit), one ST81 session per connection.
+- **Privacy and abuse.** Traffic is sealed between client and exit; from the exit to the destination it is what the client sent (usually HTTPS). Exits keep no record of destinations beyond what the law requires of their owner. Traffic is paid by a client key, so an abuse complaint can be traced to that key. Both terms carry VPN sections.
 
 ## 7. CMP-1: paid compute
 

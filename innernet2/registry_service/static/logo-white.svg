@@ -1,16 +1,14 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="4 22 615 94" role="img" aria-labelledby="t">
-  <title id="t">INNERnet</title>
-  <defs><clipPath id="cap"><rect x="0" y="26" width="624" height="86"/></clipPath></defs>
-  <g fill="#FFFFFF">
-    <path d="M8 26H18V112H8Z"/>
-    <path d="M233 26H292V36H243V102H292V112H233Z"/>
-    <path d="M491 26H550V36H501V102H550V112H491Z"/>
-    <path d="M556 26H615V112H605V36H556Z"/>
-  </g>
-  <g clip-path="url(#cap)" fill="none" stroke="#FFFFFF" stroke-width="10">
-    <path d="M37 112V26L112 112V26"/>
-    <path d="M137 112V26L212 112V26"/>
-    <path d="M395 112V26L470 112V26"/>
-    <path d="M304 112V31H352A20 20 0 0 1 372 51V55.5A20 20 0 0 1 352 75.5H304M355 75.5L374 112"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 406 90" preserveAspectRatio="xMinYMid meet" role="img" aria-labelledby="t">
+  <title id="t">INNERNET</title>
+  <defs><clipPath id="cap"><rect x="0" y="17" width="406" height="55.5"/></clipPath></defs>
+  <g clip-path="url(#cap)" fill="none" stroke="#FFFFFF" stroke-width="7" stroke-linejoin="miter" stroke-linecap="butt">
+    <path d="M8.5 17V73"/>
+    <path d="M23 72.5V14L73.5 76M72.5 76V17"/>
+    <path d="M88 72.5V14L138.5 76M137.5 76V17"/>
+    <path d="M188 20.5H153.5V69H188M153.5 45H181"/>
+    <path d="M197.5 73V20.5H230A11.5 14.25 0 0 1 230 49H197.5M229.4 49L242.3 73"/>
+    <path d="M255 72.5V14L305.5 76M304.5 76V17"/>
+    <path d="M355 20.5H320.5V69H355M320.5 45H348"/>
+    <path d="M368.5 73V20.5H403"/>
   </g>
 </svg>

@@ -30,45 +30,49 @@ var networks = map[string]string{
 	"base":         "eip155:8453",
 }
 
-var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
+var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour", "VPN-1": "GiB"}
 
 func defaultPrices() map[string]string {
-	return map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500"}
+	return map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500", "VPN-1": "0.0100"}
 }
 
 type Config struct {
-	Version    string            `json:"version"`
-	Name       string            `json:"name"`
-	Region     string            `json:"region"`
-	Host       string            `json:"host"`
-	Port       int               `json:"port"`
-	Network    string            `json:"network"`
-	Payout     string            `json:"payout_contract"`
-	Registry   string            `json:"registry"`
-	Storage    int               `json:"storage_gib"`
-	RelayCap   int               `json:"relay_gib_per_month"`
-	Compute    bool              `json:"compute"`
-	CPUs       int               `json:"compute_max_cpus"`
-	MemMiB     int               `json:"compute_max_memory_mib"`
-	GPU        bool              `json:"gpu,omitempty"`
-	GPUs       int               `json:"gpu_count,omitempty"`
-	GPUVendor  string            `json:"gpu_vendor,omitempty"`
-	GPUModel   string            `json:"gpu_model,omitempty"`
-	GPUAPI     string            `json:"gpu_api,omitempty"`
-	GPUVRAM    int               `json:"gpu_vram_mib,omitempty"`
-	TermsSHA   string            `json:"terms_sha256,omitempty"`        // provider terms agreed to
-	ReserveMiB int               `json:"reserve_memory_mib,omitempty"`  // memory compute never uses (for the owner)
-	PerClient  int               `json:"max_jobs_per_client,omitempty"` // running CPU + GPU jobs per client
-	Prices     map[string]string `json:"prices_usdc"`
-	Created    string            `json:"created_at"`
-	PortMap    string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
-	Hours      string            `json:"hours,omitempty"`    // "always" or e.g. "mon-fri 21:00-08:00"
-	TZ         string            `json:"tz,omitempty"`       // time zone the hours are in
-	Class      string            `json:"class,omitempty"`    // server, desktop or laptop
-	State      string            `json:"state,omitempty"`    // paused or leaving, set by pause/leave
-	Relay      *relayTarget      `json:"relay,omitempty"`    // reached through this ST81 relay (RLY-0)
-	Tunnel     bool              `json:"tunnel,omitempty"`   // reached through the registry's HTTPS tunnel
-	TunnelHost string            `json:"tunnel_host,omitempty"`
+	Version     string            `json:"version"`
+	Name        string            `json:"name"`
+	Region      string            `json:"region"`
+	Host        string            `json:"host"`
+	Port        int               `json:"port"`
+	Network     string            `json:"network"`
+	Payout      string            `json:"payout_contract"`
+	Registry    string            `json:"registry"`
+	Storage     int               `json:"storage_gib"`
+	RelayCap    int               `json:"relay_gib_per_month"`     // Bandwidth: relay and VPN exit together, GiB a month
+	NoRelay     bool              `json:"no_relay,omitempty"`      // bandwidth for VPN exit only
+	VPN         bool              `json:"vpn,omitempty"`           // VPN-1: internet exit
+	VPNAllPorts bool              `json:"vpn_all_ports,omitempty"` // default: web only (80, 443)
+	VPNConsent  string            `json:"vpn_consent,omitempty"`   // when the owner gave the VPN consent (RFC 3339)
+	Compute     bool              `json:"compute"`
+	CPUs        int               `json:"compute_max_cpus"`
+	MemMiB      int               `json:"compute_max_memory_mib"`
+	GPU         bool              `json:"gpu,omitempty"`
+	GPUs        int               `json:"gpu_count,omitempty"`
+	GPUVendor   string            `json:"gpu_vendor,omitempty"`
+	GPUModel    string            `json:"gpu_model,omitempty"`
+	GPUAPI      string            `json:"gpu_api,omitempty"`
+	GPUVRAM     int               `json:"gpu_vram_mib,omitempty"`
+	TermsSHA    string            `json:"terms_sha256,omitempty"`        // provider terms agreed to
+	ReserveMiB  int               `json:"reserve_memory_mib,omitempty"`  // memory compute never uses (for the owner)
+	PerClient   int               `json:"max_jobs_per_client,omitempty"` // running CPU + GPU jobs per client
+	Prices      map[string]string `json:"prices_usdc"`
+	Created     string            `json:"created_at"`
+	PortMap     string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
+	Hours       string            `json:"hours,omitempty"`    // "always" or e.g. "mon-fri 21:00-08:00"
+	TZ          string            `json:"tz,omitempty"`       // time zone the hours are in
+	Class       string            `json:"class,omitempty"`    // server, desktop or laptop
+	State       string            `json:"state,omitempty"`    // paused or leaving, set by pause/leave
+	Relay       *relayTarget      `json:"relay,omitempty"`    // reached through this ST81 relay (RLY-0)
+	Tunnel      bool              `json:"tunnel,omitempty"`   // reached through the registry's HTTPS tunnel
+	TunnelHost  string            `json:"tunnel_host,omitempty"`
 }
 
 func home() string {
@@ -161,8 +165,11 @@ func (c *Config) services() []string {
 	if c.Storage > 0 {
 		s = append(s, "STO-1")
 	}
-	if c.RelayCap > 0 {
+	if c.RelayCap > 0 && !c.NoRelay {
 		s = append(s, "RLY-1")
+	}
+	if c.RelayCap > 0 && c.VPN && c.VPNConsent != "" {
+		s = append(s, "VPN-1")
 	}
 	if c.Compute {
 		s = append(s, "CMP-1")
@@ -192,6 +199,12 @@ func (c *Config) validate(forApply bool) error {
 	}
 	if len(c.services()) == 0 {
 		problems = append(problems, "offer at least one of storage, bandwidth, CPU or GPU")
+	}
+	if c.VPN && c.VPNConsent == "" {
+		problems = append(problems, "vpn exit: give the VPN consent first (you are allowed to offer internet exit where you operate, and accept the abuse policy)")
+	}
+	if c.VPN && c.RelayCap <= 0 {
+		problems = append(problems, "vpn exit: set the monthly bandwidth (GiB)")
 	}
 	if c.GPU && (c.GPUs < 1 || c.GPUs > 16 || c.GPUModel == "" || hwText(c.GPUModel) != c.GPUModel) {
 		problems = append(problems, "gpu: 1-16 GPUs of a model this machine detected")
@@ -227,8 +240,11 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	if c.Storage > 0 {
 		limits["STO-1"] = map[string]any{"max_storage_gib": c.Storage}
 	}
-	if c.RelayCap > 0 {
+	if c.RelayCap > 0 && !c.NoRelay {
 		limits["RLY-1"] = map[string]any{"max_gib_per_month": c.RelayCap}
+	}
+	if c.RelayCap > 0 && c.VPN && c.VPNConsent != "" {
+		limits["VPN-1"] = map[string]any{"max_gib_per_month": c.RelayCap, "all_ports": map[bool]int{true: 1, false: 0}[c.VPNAllPorts]}
 	}
 	if c.Compute {
 		limits["CMP-1"] = map[string]any{"max_cpus": c.CPUs, "max_memory_mib": c.MemMiB}
@@ -294,8 +310,12 @@ func writeDetails(c *Config, id string) error {
 	if c.Storage > 0 {
 		fmt.Fprintf(&b, "  Storage        %d GiB at %s USDC per GiB-day\n", c.Storage, c.Prices["STO-1"])
 	}
-	if c.RelayCap > 0 {
-		fmt.Fprintf(&b, "  Bandwidth      %d GiB/month at %s USDC per GiB\n", c.RelayCap, c.Prices["RLY-1"])
+	if c.RelayCap > 0 && !c.NoRelay {
+		fmt.Fprintf(&b, "  Relay          %d GiB/month at %s USDC per GiB\n", c.RelayCap, c.Prices["RLY-1"])
+	}
+	if c.RelayCap > 0 && c.VPN {
+		fmt.Fprintf(&b, "  VPN exit       %s at %s USDC per GiB (shares the %d GiB/month)\n",
+			map[bool]string{true: "all ports but 25", false: "web only"}[c.VPNAllPorts], c.Prices["VPN-1"], c.RelayCap)
 	}
 	if c.Compute {
 		fmt.Fprintf(&b, "  CPU            %d CPUs, %d MiB at %s USDC per CPU-hour\n", c.CPUs, c.MemMiB, c.Prices["CMP-1"])

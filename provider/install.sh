@@ -1,10 +1,10 @@
 #!/bin/sh
 # Install innernet-provider on Linux or macOS.
-#   curl -fsSL https://raw.githubusercontent.com/shakeelamjid/innernet-protocol/main/provider/install.sh | sh
-# Optional: INNERNET_VERSION=provider-v0.3.0  INNERNET_BIN_DIR=$HOME/.local/bin
+#   curl -fsSL https://innernetcorp.com/install.sh | sh
+# Optional: INNERNET_VERSION=provider-v0.6.0  INNERNET_BIN_DIR=$HOME/.local/bin
 set -eu
 
-REPO="shakeelamjid/innernet-protocol"
+DL="${INNERNET_DL:-https://innernetcorp.com/registry/dl}"   # forwards to the published release files
 BIN_DIR="${INNERNET_BIN_DIR:-$HOME/.local/bin}"
 
 if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
@@ -40,19 +40,13 @@ esac
 
 tag="${INNERNET_VERSION:-}"
 if [ -z "$tag" ]; then
-  # GitHub API first; it allows only 60 unauthenticated requests per hour per IP,
-  # so fall back to provider/LATEST in the repository.
-  tag=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=30" 2>/dev/null \
-    | grep -o '"tag_name": *"provider-v[^"]*"' | head -n 1 | sed 's/.*"\(provider-v[^"]*\)"/\1/') || true
-  if [ -z "$tag" ]; then
-    tag=$(curl -fsSL "https://raw.githubusercontent.com/$REPO/main/provider/LATEST" 2>/dev/null | tr -d ' \r\n') || true
-  fi
+  tag=$(curl -fsSL "$DL/latest" 2>/dev/null | tr -d ' \r\n') || true
   [ -n "$tag" ] || die "could not find the latest release; set INNERNET_VERSION=provider-vX.Y.Z"
 fi
 case "$tag" in provider-v*) ;; *) die "bad version tag: $tag" ;; esac
 
 asset="innernet-provider-$os-$arch"
-base="https://github.com/$REPO/releases/download/$tag"
+base="$DL/$tag"
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT INT TERM
 

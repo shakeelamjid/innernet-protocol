@@ -216,6 +216,10 @@ func cmdInit(args []string) error {
 		fs.String("price-compute", c.Prices["CMP-1"], "USDC per CPU-hour")
 	gpuN := fs.Int("gpus", 0, "GPUs to offer (0 = none); the model is detected")
 	acceptTerms := fs.Bool("accept-terms", false, "agree to the current provider terms (read them first: innernet-provider terms)")
+	vpn := fs.Bool("vpn", false, "offer VPN exit (internet exit; needs --vpn-consent and --relay-gib)")
+	vpnAll := fs.Bool("vpn-all-ports", false, "VPN exit to every port except 25 (default: web only, 80 and 443)")
+	vpnConsent := fs.Bool("vpn-consent", false, "I am allowed to offer internet exit where I operate, and accept the abuse policy")
+	priceVPN := fs.String("price-vpn", c.Prices["VPN-1"], "USDC per GiB of VPN exit traffic")
 	reserveGiB := fs.Int("reserve-gib", -1, "memory compute never uses, kept for you (default 4, servers 1)")
 	fs.IntVar(&c.PerClient, "per-client", 2, "CPU and GPU jobs one client may run at once")
 	pg := fs.String("price-gpu", c.Prices["GPU-1"], "USDC per GPU-hour")
@@ -227,6 +231,13 @@ func cmdInit(args []string) error {
 		return errors.New("already set up here; use --force to redo the setup (your key is kept)")
 	}
 	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc, "GPU-1": *pg}
+	c.Prices["VPN-1"] = *priceVPN
+	if *vpn {
+		if !*vpnConsent {
+			return errors.New("--vpn needs --vpn-consent: you confirm you are allowed to offer internet exit where you operate, and accept the abuse policy")
+		}
+		c.VPN, c.VPNAllPorts, c.VPNConsent = true, *vpnAll, time.Now().UTC().Format(time.RFC3339)
+	}
 	if *acceptTerms {
 		if docs, err := fetchTerms(registryURL(c)); err == nil {
 			c.TermsSHA = docs["provider"].SHA256
@@ -732,10 +743,26 @@ func askOffer(c *Config) {
 	if c.Storage > 0 {
 		c.Prices["STO-1"] = ask("  Price, USDC per GiB per day", c.Prices["STO-1"])
 	}
-	c.RelayCap = askInt("Bandwidth to relay per month, in GiB (0 = none)", c.RelayCap)
+	c.RelayCap = askInt("Bandwidth per month for relay and VPN exit together, in GiB (0 = none)", c.RelayCap)
 	if c.RelayCap > 0 {
 		fmt.Println("  Check that your internet plan allows reselling bandwidth.")
-		c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
+		c.NoRelay = !askYes("  Relay sealed INNERnet traffic between INNERnet machines", !c.NoRelay)
+		if !c.NoRelay {
+			c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
+		}
+		c.VPN = askYes("  Offer VPN exit (clients' traffic reaches the internet from your connection)", c.VPN)
+		if c.VPN {
+			if askYes("  I am allowed to offer internet exit where I operate, and I accept the abuse policy", c.VPNConsent != "") {
+				c.VPNConsent = time.Now().UTC().Format(time.RFC3339)
+				c.VPNAllPorts = askYes("  Allow every port except 25 (no: web only, 80 and 443)", c.VPNAllPorts)
+				if c.Prices["VPN-1"] == "" {
+					c.Prices["VPN-1"] = defaultPrices()["VPN-1"]
+				}
+				c.Prices["VPN-1"] = ask("  Price, USDC per GiB of exit traffic", c.Prices["VPN-1"])
+			} else {
+				c.VPN, c.VPNConsent = false, ""
+			}
+		}
 	}
 	c.Compute = askYes("Rent CPU time? Clients' jobs run sandboxed (WebAssembly), with no network or file access", c.Compute)
 	if c.Compute {

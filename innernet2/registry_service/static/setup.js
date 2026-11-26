@@ -8,6 +8,7 @@
   let machineGiB = 0;
   function sync() {
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = !$(el.getAttribute('data-for')).checked; });
+    $('bw-fields').hidden = !($('rly-on').checked || $('vpn-on').checked);
     const compute = $('cmp-on').checked || (!$('gpu-block').hidden && $('gpu-on').checked);
     $('share-fields').hidden = $('share-msg').hidden = !compute;
     if (compute) {
@@ -61,7 +62,10 @@
     const freeGib = det.storage_free_gib || 100;
     $('sto-on').checked = draft ? draft.storage_gib > 0 : true;
     $('sto-gib').value = draft && draft.storage_gib ? draft.storage_gib : Math.max(1, Math.min(200, Math.floor(freeGib / 2)));
-    $('rly-on').checked = !!(draft && draft.relay_gib > 0);
+    $('rly-on').checked = !!(draft && draft.relay_gib > 0 && draft.relay !== false);
+    $('vpn-on').checked = !!(draft && draft.vpn);
+    $('vpn-consent').checked = !!(draft && draft.vpn_consent);
+    $('vpn-ports').value = (draft && draft.vpn_ports) || 'web';
     $('rly-gib').value = draft && draft.relay_gib ? draft.relay_gib : 500;
     $('cmp-on').checked = !!(draft && draft.compute);
     $('cmp-cpus').value = draft ? draft.cpus : Math.max(1, Math.min(4, (det.cpus || 2) - 1));
@@ -85,14 +89,14 @@
     machineGiB = det.memory_mib ? Math.round(det.memory_mib / 1024) : 0;
     $('reserve-gib').value = draft && draft.reserve_gib != null ? draft.reserve_gib : (det.class === 'server' ? 1 : 4);
     $('per-client').value = draft && draft.per_client ? draft.per_client : 2;
-    $('sto-price').value = prices['STO-1']; $('rly-price').value = prices['RLY-1']; $('cmp-price').value = prices['CMP-1'];
+    $('sto-price').value = prices['STO-1']; $('rly-price').value = prices['RLY-1']; $('vpn-price').value = prices['VPN-1']; $('cmp-price').value = prices['CMP-1'];
     $('payout').value = (draft && draft.payout) || (cur && cur.payto && Object.values(cur.payto)[0]) || '';
     $('share-you').textContent = (100 - d.fee_bps / 100) + '%';
     $('share-fee').textContent = (d.fee_bps / 100) + '%';
     sync();
   }
 
-  ['sto-on', 'rly-on', 'cmp-on', 'gpu-on', 'reserve-gib'].forEach(function (id) { $(id).addEventListener('change', sync); });
+  ['sto-on', 'rly-on', 'vpn-on', 'cmp-on', 'gpu-on', 'reserve-gib'].forEach(function (id) { $(id).addEventListener('change', sync); });
   $('reserve-gib').addEventListener('input', sync);
 
   $('connect').addEventListener('click', async function () {
@@ -111,14 +115,17 @@
     const offer = {
       name: $('name').value.trim().toLowerCase(), region: $('region').value.trim().toLowerCase(),
       host: $('host').value.trim(), port: num('port'),
-      storage_gib: $('sto-on').checked ? num('sto-gib') : 0, relay_gib: $('rly-on').checked ? num('rly-gib') : 0,
+      storage_gib: $('sto-on').checked ? num('sto-gib') : 0,
+      relay_gib: ($('rly-on').checked || $('vpn-on').checked) ? num('rly-gib') : 0, relay: $('rly-on').checked,
+      vpn: $('vpn-on').checked, vpn_consent: $('vpn-on').checked && $('vpn-consent').checked, vpn_ports: $('vpn-ports').value,
       compute: $('cmp-on').checked, cpus: Math.max(1, num('cmp-cpus')), memory_mib: Math.max(64, num('cmp-mem')),
       gpu: !$('gpu-block').hidden && $('gpu-on').checked, gpus: Math.max(1, num('gpu-count')),
       reserve_gib: Math.max(0, num('reserve-gib')), per_client: Math.min(64, Math.max(1, num('per-client'))),
-      prices: { 'STO-1': $('sto-price').value.trim(), 'RLY-1': $('rly-price').value.trim(), 'CMP-1': $('cmp-price').value.trim(),
+      prices: { 'STO-1': $('sto-price').value.trim(), 'RLY-1': $('rly-price').value.trim(), 'CMP-1': $('cmp-price').value.trim(), 'VPN-1': $('vpn-price').value.trim(),
         'GPU-1': $('gpu-price').value.trim() },
       network: net ? net.caip2 : 'eip155:84532', payout: $('payout').value.trim()
     };
+    if ($('vpn-on').checked && !$('vpn-consent').checked) { say('send-msg', 'VPN exit needs your consent (the box under VPN exit), or untick VPN exit.', true); return; }
     if (!$('terms-ok').checked) { say('send-msg', 'Read and agree to the provider terms first.', true); return; }
     offer.terms = cfg.terms.provider.sha256;
     $('send').disabled = true;

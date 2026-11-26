@@ -156,6 +156,10 @@ type webOffer struct {
 	GPUs      int               `json:"gpus"`
 	Reserve   *int              `json:"reserve_gib"`
 	Terms     string            `json:"terms"`
+	Relay     *bool             `json:"relay"`
+	VPN       bool              `json:"vpn"`
+	VPNOK     bool              `json:"vpn_consent"`
+	VPNPorts  string            `json:"vpn_ports"`
 	PerClient int               `json:"per_client"`
 	Prices    map[string]string `json:"prices"`
 	Network   string            `json:"network"`
@@ -270,6 +274,12 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 	}
 	c.PerClient = offer.PerClient
 	c.TermsSHA = offer.Terms // agreed on the website; the registry checked it is the current version
+	if offer.Relay != nil {
+		c.NoRelay = !*offer.Relay
+	}
+	if offer.VPN && offer.VPNOK { // the consent was given on the website; it is confirmed again here below
+		c.VPN, c.VPNAllPorts, c.VPNConsent = true, offer.VPNPorts == "all", time.Now().UTC().Format(time.RFC3339)
+	}
 	if err := c.validate(true); err != nil {
 		return fmt.Errorf("the offer from the website is not valid: %v", err)
 	}
@@ -462,13 +472,17 @@ func printOffer(c *Config) {
 		rows = append(rows, [2]string{"Storage", fmt.Sprintf("%d GiB at %s USDC per GiB-day", c.Storage, c.Prices["STO-1"])})
 	}
 	if c.RelayCap > 0 {
-		rows = append(rows, [2]string{"Bandwidth", fmt.Sprintf("%d GiB/month at %s USDC per GiB", c.RelayCap, c.Prices["RLY-1"])})
+		rows = append(rows, [2]string{"Bandwidth", fmt.Sprintf("%d GiB/month (relay %s USDC per GiB)", c.RelayCap, c.Prices["RLY-1"])})
 	}
 	if c.Compute {
 		rows = append(rows, [2]string{"CPU", fmt.Sprintf("%d CPUs, %d MiB at %s USDC per CPU-hour", c.CPUs, c.MemMiB, c.Prices["CMP-1"])})
 	}
 	if c.GPU {
 		rows = append(rows, [2]string{"GPU", fmt.Sprintf("%d × %s at %s USDC per GPU-hour", c.GPUs, c.GPUModel, c.Prices["GPU-1"])})
+	}
+	if c.VPN {
+		rows = append(rows, [2]string{"VPN exit", fmt.Sprintf("%s at %s USDC per GiB; you confirmed you may offer internet exit and accept the abuse policy",
+			map[bool]string{true: "all ports but 25", false: "web only"}[c.VPNAllPorts], c.Prices["VPN-1"])})
 	}
 	rows = append(rows, [2]string{"Payout", c.Payout + " (" + c.Network + ")"})
 	box("Offer to sign", rows)

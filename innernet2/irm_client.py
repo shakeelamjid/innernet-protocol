@@ -220,6 +220,18 @@ class Provider:
                     _ST81_DOWN[addr] = time.monotonic() + 60
                     raise
 
+    def open_session(self):
+        """A fresh ST81 session to this provider (direct, or end to end through its relay), for streams
+        such as VPN exit. Providers reached only through the HTTPS tunnel cannot carry streams."""
+        if self.route and self.route["path"] == "tunnel":
+            raise ProviderError(f"{self.entry['name']}: reachable only through the HTTPS tunnel; streams need a direct or relayed provider")
+        if self.route and self.route["path"] == "relay":
+            r = self.route
+            return rly0.connect(r["host"], r["port"], bytes.fromhex(r["relay_key"]), bytes.fromhex(self.id), self.key,
+                                timeout=self.timeout)
+        ep = self.endpoint
+        return st81.connect(ep["host"], ep["port"], self.key, bytes.fromhex(self.id), timeout=self.timeout)
+
     def _json(self, r: httpx.Response) -> dict:
         """Verify the provider's signature on a JSON reply; it is our evidence."""
         sig = r.headers.get("x-innernet-signature", "")
