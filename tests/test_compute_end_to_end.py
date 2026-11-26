@@ -75,7 +75,7 @@ def compute(built, tmp_path):
            "INNERNET_TEST_GPUS": json.dumps([{"vendor": "NVIDIA", "model": "NVIDIA L4", "vram_mib": 23034, "api": "cuda"}])}
     run = lambda *a: subprocess.run([str(built / "innernet-provider"), *a], env=env, check=True,  # noqa: E731
                                     capture_output=True, text=True)
-    run("init", "--yes", "--name", "gpu1", "--region", "asia-south", "--host", "127.0.0.1", "--port", str(port),
+    run("init", "--yes", "--network", "base-sepolia", "--name", "gpu1", "--region", "asia-south", "--host", "127.0.0.1", "--port", str(port),
         "--compute", "--cpus", "2", "--memory-mib", "256", "--price-compute", "0.36",
         "--gpus", "1", "--price-gpu", "3.60", "--per-client", "1", "--reserve-gib", "0")
     run("wallet", "set", "0x" + "ab" * 20)

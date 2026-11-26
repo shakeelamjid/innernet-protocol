@@ -2,6 +2,16 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Payout contracts enforced, phone wallets, real USDC by default
+
+- Every listed machine must be paid through a payout contract created by the INNERNET factory. A plain wallet address, or a contract from elsewhere, is refused when applying, an admin cannot list it by hand, and a listed machine whose payout is not a valid split is suspended automatically (it returns once the payout is fixed and its checks are good). Approval waits when the chain cannot be checked, instead of letting the machine through. Verdicts are kept 6 hours.
+- The refusal explains what to do: where to create the contract, that it is one transaction approved in the receiving wallet, and that the network fee (about $0.01 in ETH on Base) is paid by that wallet.
+- Phone wallets: setup and payout pages offer "Use the wallet app on my phone". The page shows a WalletConnect QR code (a link on phones); the owner approves the connection and the transaction in their wallet app. No browser extension needed. Enabled with `INNERNET_WALLETCONNECT_PROJECT_ID`; the bundle is served from the registry (`static/walletconnect.js`).
+- Real USDC is the default: the setup page, payout page and the provider program (`start --network`, `init --network`) choose Base; Base Sepolia stays available with `--network base-sepolia`. Browser wallets missing Base get it added. Website and API docs say real USDC on Base, in beta.
+- Out of beta: no payment or credit limits by default. Optional limits come back with `INNERNET_MAX_PAYMENT_USDC` / `INNERNET_MAX_CREDIT_USDC` (the old `INNERNET_BETA_*` names are gone).
+- Name: INNERNET in all visible text (signature domains and file formats are unchanged).
+- `provider/LATEST` is `provider-v0.6.7`.
+
 ### Forgot your key, one logo everywhere, housekeeping
 
 - Forgot your key: a machine can keep its encrypted key backup with the registry (setup page "Also keep the encrypted backup with INNERnet", or `innernet-provider backup`). The upload is signed by the machine (`backup-store` intent, target = SHA-256 of the file); the registry checks the format and that the file belongs to that machine, and cannot open it. `/registry/recover`: sign in, choose the machine, type the passphrase; the browser opens the backup itself (PBKDF2-SHA256 600000 + AES-GCM) and offers the backup file or the key. Links from the sign-in box, the lost-key card and the website footer.

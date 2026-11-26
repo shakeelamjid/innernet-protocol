@@ -1,6 +1,6 @@
 package main
 
-// ST81: INNERnet's mutually authenticated, encrypted TCP session (RC5 core spec,
+// ST81: INNERNET's mutually authenticated, encrypted TCP session (RC5 core spec,
 // "ST81 handshake"). A Go port of innernet2/stream_v080.py, byte-for-byte compatible:
 //
 //   responder -> S81H || server_ed25519 || challenge32                              (68)

@@ -119,7 +119,7 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
     if o["vpn"] and o["relay_gib"] <= 0:
         raise BulkError("VPN exit: set the monthly bandwidth (GiB)")
     if o["vpn"] and detected is not None and detected.get("path") == "tunnel":
-        raise BulkError("VPN exit needs clients to reach this machine directly or through an INNERnet relay; "
+        raise BulkError("VPN exit needs clients to reach this machine directly or through an INNERNET relay; "
                         "the HTTPS tunnel it uses now cannot carry VPN traffic. Untick VPN exit for now.")
     from . import terms
     if offer.get("terms") != terms.current("provider")["sha256"]:

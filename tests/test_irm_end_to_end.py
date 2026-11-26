@@ -93,7 +93,7 @@ def network(binary, tmp_path):
         port = free_port()
         env = {**os.environ, "INNERNET_HOME": str(home), "INNERNET_RPC": chain.url, "INNERNET_CLIENT_TERMS": CLIENT_TERMS}
         run = lambda *a: subprocess.run([str(binary), *a], env=env, check=True, capture_output=True, text=True)  # noqa: E731
-        run("init", "--yes", "--name", f"p{i}", "--region", region, "--host", "127.0.0.1", "--port", str(port),
+        run("init", "--yes", "--network", "base-sepolia", "--name", f"p{i}", "--region", region, "--host", "127.0.0.1", "--port", str(port),
             "--storage-gib", "1", "--price-storage", "0.0020")
         run("wallet", "set", "0x" + f"{i + 1:02x}" * 20)
         run("apply", "--dry-run")

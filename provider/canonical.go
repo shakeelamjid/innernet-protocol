@@ -11,7 +11,7 @@ import (
 )
 
 // canonicalJSON reproduces Python json.dumps(sort_keys=True, separators=(",",":"),
-// ensure_ascii=True). This is what every INNERnet signature covers.
+// ensure_ascii=True). This is what every INNERNET signature covers.
 func canonicalJSON(v any) ([]byte, error) {
 	// Round-trip through encoding/json with UseNumber so Go structs and maps
 	// both end up as the same generic tree.

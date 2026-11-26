@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Payout contract · INNERnet providers</title>
+  <title>Payout contract · INNERNET providers</title>
   <meta name="description" content="Create the payout contract that pays you 97.5% of every payment and the network 2.5%.">
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
@@ -12,7 +12,7 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERnet" width="90" height="20"><span>Providers</span></a>
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Providers</span></a>
       <span class="spacer"></span>
       <a class="btn btn-sm" href="dashboard">Dashboard</a>
     </div>
@@ -22,16 +22,23 @@
       <div class="head">
         <div>
           <h1>Your payout contract</h1>
-          <p>Clients pay this contract. It sends <strong id="share-provider">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the INNERnet network. It has no owner, so nobody, including INNERnet, can change where the money goes.</p>
+          <p>Clients pay this contract. It sends <strong id="share-provider">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the INNERNET network. It has no owner, so nobody, including INNERNET, can change where the money goes.</p>
         </div>
       </div>
 
       <p class="msg error" id="unavailable" hidden></p>
 
       <section class="card frame step" id="step-connect">
-        <h2>1. Connect your wallet</h2>
-        <p>Use a browser wallet such as MetaMask, Coinbase Wallet or Trust Wallet. You pay a small network fee in test ETH. You can get it free from a Base Sepolia faucet.</p>
-        <button class="btn btn-light" id="connect">Connect wallet</button>
+        <h2>1. Connect a wallet</h2>
+        <p id="fee-note">Creating your payout contract is one transaction, made once. It costs a network fee of about $0.01, paid in ETH on Base by the wallet you connect, so that wallet needs a little ETH on Base. You can buy it in your wallet app, or withdraw it from an exchange and choose the Base network. Collecting payments later costs about the same.</p>
+        <div class="actions">
+          <button class="btn" id="connect-phone" type="button">Use the wallet app on my phone</button>
+          <button class="btn btn-light" id="connect" type="button">Use a browser wallet</button>
+        </div>
+        <div id="wc-box" class="wc-box" hidden>
+          <p>Scan this with your wallet app (Trust Wallet, MetaMask, Rabby, Coinbase Wallet, Binance Wallet, Rainbow and others), then approve the connection there. On this phone? <a id="wc-link" href="#">Open your wallet app</a>.</p>
+          <div id="wc-qr" class="qr" aria-label="QR code to connect your wallet app"></div>
+        </div>
         <p class="msg" id="connect-msg" role="status"></p>
       </section>
 
@@ -39,7 +46,7 @@
         <h2>2. Create the contract</h2>
         <label for="receiver">Wallet that receives your share</label>
         <input id="receiver" class="field mono" spellcheck="false" autocomplete="off">
-        <p class="note">This is usually the wallet you just connected. It can be any wallet you control on <span id="net-name">Base Sepolia</span>. It cannot be changed later.</p>
+        <p class="note">This is usually the wallet you just connected. It can be any wallet you control on <span id="net-name">Base</span>; do not use an exchange deposit address. It cannot be changed later. Your wallet app then asks you to approve the transaction.</p>
         <button class="btn btn-light" id="create">Find or create my payout contract</button>
         <p class="msg" id="create-msg" role="status"></p>
       </section>

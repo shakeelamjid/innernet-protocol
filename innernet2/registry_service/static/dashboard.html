@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>Provider dashboard · INNERnet</title>
+  <title>Provider dashboard · INNERNET</title>
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/passkey.js" defer></script>
@@ -13,7 +13,7 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERnet" width="90" height="20"><span>Providers</span></a>
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Providers</span></a>
       <span class="spacer"></span>
       <span class="who" id="who"></span>
       <a class="btn btn-sm" href="setup">Change settings</a>
@@ -133,7 +133,7 @@
 
         <section class="card frame span-12">
           <h2>Lost this machine or its key?</h2>
-          <p><strong>Kept an encrypted backup with INNERnet?</strong> <a href="recover">Recover the key with your passphrase</a>.</p>
+          <p><strong>Kept an encrypted backup with INNERNET?</strong> <a href="recover">Recover the key with your passphrase</a>.</p>
           <p><strong>You have a key backup:</strong> on the new or reinstalled machine run <span class="mono">innernet-provider restore FILE</span>, then <span class="mono">innernet-provider start</span>. It comes back as this same machine, with its listing, earnings history and passkeys.</p>
           <p><strong>No backup:</strong> the key cannot be recovered (nobody has a copy, not even us). Retire this machine below: clients move their files away, the machine code stops working and the payout contract becomes free. Then install again on any machine (<span class="mono">curl -fsSL https://innernetcorp.com/install.sh | sh</span>) and use the same payout contract.</p>
           <button class="btn btn-sm btn-danger" id="lost-key" type="button">Retire this machine (key lost)</button>

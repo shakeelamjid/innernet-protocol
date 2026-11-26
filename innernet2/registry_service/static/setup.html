@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>Set up your machine · INNERnet providers</title>
+  <title>Set up your machine · INNERNET providers</title>
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/passkey.js" defer></script>
@@ -14,7 +14,7 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERnet" width="90" height="20"><span>Providers</span></a>
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Providers</span></a>
       <span class="spacer"></span>
       <a class="btn btn-sm" href="dashboard">Dashboard</a>
     </div>
@@ -73,7 +73,7 @@
               <div class="fields" id="bw-fields" hidden>
                 <label>GiB per month, relay and VPN together<input id="rly-gib" class="field" type="number" min="1"></label>
               </div>
-              <label class="toggle"><input type="checkbox" id="rly-on"> <span><strong>Relay</strong> Carry sealed INNERnet traffic between INNERnet machines. It never leaves INNERnet.</span></label>
+              <label class="toggle"><input type="checkbox" id="rly-on"> <span><strong>Relay</strong> Carry sealed INNERNET traffic between INNERNET machines. It never leaves INNERNET.</span></label>
               <div class="fields" data-for="rly-on">
                 <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
               </div>
@@ -136,10 +136,18 @@
         <section class="card frame step">
           <h2>Your payout contract</h2>
           <p>Clients pay this contract. It sends <strong id="share-you">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the network, and nobody can change that.</p>
-          <p class="msg">Connect the wallet that should receive your share: a wallet on Base that you control, such as the Coinbase Wallet app, MetaMask, Rabby or a hardware wallet. Do not use an exchange deposit address. You never give anyone its key; the contract only stores its address. The same address works on the test network and later on Base mainnet.</p>
+          <p class="msg">Connect the wallet that should receive your share: a wallet you control, such as Trust Wallet, MetaMask, Rabby, Coinbase Wallet or a hardware wallet. Do not use an exchange deposit address. You never give anyone its key; the contract only stores its address.</p>
+          <p class="msg">Creating the contract is one transaction, made once, approved in that wallet. The network fee is about $0.01 in ETH on Base, so the wallet needs a little ETH on Base (buy it in the wallet app, or withdraw from an exchange choosing the Base network). Payments go only to a payout contract; a plain wallet address is not accepted.</p>
           <div class="fields"><label>Network<select id="network" class="field"></select></label></div>
           <p class="notice" id="net-note" hidden></p>
-          <button class="btn" type="button" id="connect">Connect wallet and find or create it</button>
+          <div class="actions">
+            <button class="btn" type="button" id="connect-phone">Use the wallet app on my phone</button>
+            <button class="btn btn-light" type="button" id="connect">Use a browser wallet</button>
+          </div>
+          <div id="wc-box" class="wc-box" hidden>
+            <p>Scan this with your wallet app, then approve the connection and the transaction there. On this phone? <a id="wc-link" href="#">Open your wallet app</a>.</p>
+            <div id="wc-qr" class="qr" aria-label="QR code to connect your wallet app"></div>
+          </div>
           <label>Payout contract<input id="payout" class="field mono" maxlength="42" autocomplete="off" placeholder="0x…"></label>
           <p class="msg" id="pay-msg" role="status"></p>
         </section>
@@ -153,7 +161,7 @@
                 <label>Backup passphrase (12+ characters)<input id="pass1" class="field" type="password" minlength="12" autocomplete="new-password"></label>
                 <label>Type it again<input id="pass2" class="field" type="password" minlength="12" autocomplete="new-password"></label>
               </div>
-              <label class="toggle" data-for="backup-on"><input type="checkbox" id="escrow-on" checked> <span><strong>Also keep the encrypted backup with INNERnet</strong> Then "Forgot your key?" can give it back from any browser, with this passphrase. INNERnet cannot open it; choose a long passphrase.</span></label>
+              <label class="toggle" data-for="backup-on"><input type="checkbox" id="escrow-on" checked> <span><strong>Also keep the encrypted backup with INNERNET</strong> Then "Forgot your key?" can give it back from any browser, with this passphrase. INNERNET cannot open it; choose a long passphrase.</span></label>
               <p class="msg" data-for="backup-on">Your browser locks the passphrase with a key only your machine has, so this website only passes on scrambled text. The machine writes the encrypted backup to <span class="mono">~/.innernet/provider-backup.json</span>; copy that file somewhere safe and keep the passphrase.</p>
             </div>
             <p class="msg" id="backup-old" hidden>To back up the key from here, update the provider on your machine. For now run <span class="mono">innernet-provider backup FILE</span> on it.</p>

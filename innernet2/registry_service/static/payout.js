@@ -1,5 +1,5 @@
 'use strict';
-// Create or find a provider's INNERnet payout split with the user's own browser wallet.
+// Create or find a provider's INNERNET payout split with the user's own browser wallet.
 // No keys ever reach the server: transactions are signed in the wallet.
 (function () {
   const $ = function (id) { return document.getElementById(id); };
@@ -14,7 +14,8 @@
   function word(hex, i) { return '0x' + hex.slice(2 + 64 * i + 24, 2 + 64 * (i + 1)); }
   function num(hex, i) { return BigInt('0x' + hex.slice(2 + 64 * i, 2 + 64 * (i + 1))); }
   function usdc(units) { const s = units.toString().padStart(7, '0'); return s.slice(0, -6) + '.' + s.slice(-6, -4); }
-  function eth() { return window.ethereum; }
+  let prov = null;                       // a phone wallet over WalletConnect, when the owner chose that
+  function eth() { return prov || window.ethereum; }
   async function call(to, data) { return eth().request({ method: 'eth_call', params: [{ to: to, data: data }, 'latest'] }); }
 
   async function waitReceipt(hash) {
@@ -27,6 +28,7 @@
   }
 
   async function ensureChain() {
+    if (prov) return;                    // the phone wallet was paired for this network
     const want = '0x' + net.chain_id.toString(16);
     const have = await eth().request({ method: 'eth_chainId' });
     if (have === want) return;
@@ -80,18 +82,54 @@
   copy($('copy-addr'), 'split-addr');
   copy($('copy-cmd'), 'cmd');
 
+  function connected(acct) {
+    account = acct;
+    say('connect-msg', 'Connected: ' + account);
+    const pre = new URLSearchParams(location.hash.slice(1)).get('receiver');
+    $('receiver').value = pre && /^0x[0-9a-fA-F]{40}$/.test(pre) ? pre : account;
+    $('step-create').hidden = !net.factory;
+    $('operator').hidden = !(location.hash === '#operator' && !net.factory);
+  }
+
   $('connect').addEventListener('click', async function () {
-    if (!eth()) { say('connect-msg', 'No browser wallet found. Install MetaMask, Coinbase Wallet or Trust Wallet, then reload.', true); return; }
+    if (!window.ethereum) { say('connect-msg', 'No browser wallet here. Use the wallet app on your phone instead, or install MetaMask, Rabby or Trust Wallet in this browser and reload.', true); return; }
     try {
+      prov = null;
       const accounts = await eth().request({ method: 'eth_requestAccounts' });
-      account = accounts[0];
       await ensureChain();
-      say('connect-msg', 'Connected: ' + account);
-      const pre = new URLSearchParams(location.hash.slice(1)).get('receiver');
-      $('receiver').value = pre && /^0x[0-9a-fA-F]{40}$/.test(pre) ? pre : account;
-      $('step-create').hidden = !net.factory;
-      $('operator').hidden = !(location.hash === '#operator' && !net.factory);
+      connected(accounts[0]);
     } catch (err) { say('connect-msg', friendly(err), true); }
+  });
+
+  function loadWC() {
+    if (window.InnernetWC) return Promise.resolve();
+    return new Promise(function (resolve, reject) {
+      const s = document.createElement('script');
+      s.src = BASE + '/static/walletconnect.js';
+      s.onload = resolve;
+      s.onerror = function () { reject(new Error('Could not load the phone wallet module. Reload and try again.')); };
+      document.head.append(s);
+    });
+  }
+
+  $('connect-phone').addEventListener('click', async function () {
+    if (!cfg.walletconnect) { say('connect-msg', 'Phone wallets are not switched on yet. Use a browser wallet for now.', true); return; }
+    try {
+      say('connect-msg', 'Preparing a QR code…');
+      await loadWC();
+      const rpc = (cfg.rpc || {})[net.caip2] || (net.mainnet ? 'https://mainnet.base.org' : 'https://sepolia.base.org');
+      const rpcMap = {}; rpcMap[net.chain_id] = rpc;
+      prov = await window.InnernetWC.connect({ projectId: cfg.walletconnect.project_id, chainId: net.chain_id, rpcMap: rpcMap,
+        onUri: function (uri, svg) {
+          $('wc-qr').innerHTML = svg;
+          $('wc-link').href = uri;
+          $('wc-box').hidden = false;
+          say('connect-msg', 'Waiting for your wallet app…');
+        } });
+      $('wc-box').hidden = true;
+      const accounts = await prov.request({ method: 'eth_accounts' });
+      connected(accounts[0]);
+    } catch (err) { prov = null; $('wc-box').hidden = true; say('connect-msg', friendly(err), true); }
   });
 
   $('create').addEventListener('click', async function () {
@@ -141,7 +179,8 @@
 
   fetch(BASE + '/v1/config').then(function (r) { return r.json(); }).then(function (c) {
     cfg = c;
-    const want = new URLSearchParams(location.search).get('network') || 'eip155:84532';
+    const main = (c.networks || []).find(function (n) { return n.mainnet; });
+    const want = new URLSearchParams(location.search).get('network') || (main ? main.caip2 : 'eip155:84532');
     net = (c.networks || []).find(function (n) { return n.caip2 === want; }) || (c.networks || [])[0];
     if ((c.networks || []).length > 1 && $('step-connect')) {
       const box = document.createElement('p'); box.className = 'note';
@@ -157,6 +196,8 @@
     $('share-provider').textContent = (100 - c.fee_bps / 100) + '%';
     $('share-fee').textContent = (c.fee_bps / 100) + '%';
     $('net-name').textContent = net.name;
+    if (!net.mainnet) $('fee-note').textContent = 'Creating your payout contract is one transaction, made once. On ' + net.name +
+      ' the network fee is paid in test ETH, which you can get free from a ' + net.name + ' faucet.';
     $('op-fee').textContent = net.fee_wallet;
     $('op-bps').textContent = c.fee_bps + ' bps';
     if (!net.factory) {

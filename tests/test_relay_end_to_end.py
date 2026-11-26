@@ -72,7 +72,7 @@ def test_providers_behind_routers_serve_through_the_st81_relay_and_the_https_tun
             env = {**os.environ, "INNERNET_HOME": str(tmp_path / f"p{i}"), "INNERNET_REGISTRY": reg,
                    "INNERNET_NO_SERVICE": "1", "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1",
                    "INNERNET_POLL_MS": "100", "INNERNET_PRESENCE_SEC": "1", "TZ": "Asia/Karachi"}
-            r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--via", via, "--port", str(free_tcp_port()),
+            r = subprocess.run([str(binary), "start", "--network", "base-sepolia", "--yes", "--wallet", wallet, "--via", via, "--port", str(free_tcp_port()),
                                 "--registry", reg], env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
             assert r.returncode == 0, r.stdout + r.stderr
             assert f"through {via}" in r.stdout

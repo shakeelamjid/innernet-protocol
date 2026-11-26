@@ -37,7 +37,7 @@ var (
 	natpmpPort  = 5351            // replaced in tests
 	mapTimeout  = 2 * time.Second // per attempt
 	ssdpAddr    = "239.255.255.250:1900"
-	mapDescribe = "INNERnet provider"
+	mapDescribe = "INNERNET provider"
 )
 
 type mapping struct {

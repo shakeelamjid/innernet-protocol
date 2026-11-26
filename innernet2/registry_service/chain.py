@@ -62,15 +62,16 @@ def payout_check(settings: Settings, network: str, address: str, rpc: Rpc = http
         return True, "payout contract not checked: no RPC configured for this network"
     try:
         code = rpc(url, "eth_getCode", [address, "latest"])
+        how = (f"Create it at {settings.origin}{settings.prefix}/payout: enter the wallet that should receive your "
+               "earnings and approve one transaction in your wallet app (phone or browser). The network fee is about "
+               "$0.01 in ETH on Base, paid from that wallet. Then set the contract address in Change settings.")
         if not code or code == "0x":
-            return False, ("payout address is not a contract; create your payout split at "
-                           f"{settings.origin}{settings.prefix}/payout")
+            return False, f"{address} is a wallet, not a payout contract. Payments must go through a payout contract. {how}"
         factory = settings.split_factory.get(network)
         if not factory:
             return True, "payout is a contract; split check pending (split factory not configured yet)"
         if _call(rpc, url, factory, SEL_IS_SPLIT, address) != 1:
-            return False, ("payout contract was not created by the INNERnet split factory; create one at "
-                           f"{settings.origin}{settings.prefix}/payout")
+            return False, f"{address} was not created by the INNERNET payout factory. {how}"
         fee_wallet = settings.fee_payto.get(network, "")
         if _call(rpc, url, address, SEL_FEE_RECIPIENT) != int(fee_wallet, 16):
             return False, "payout split pays the network fee to a different wallet"

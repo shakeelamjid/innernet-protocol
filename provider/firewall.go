@@ -65,7 +65,7 @@ func firewallFor(port int, exe string) firewallPlan {
 		}
 		return firewallPlan{Name: "no firewall found"}
 	case "windows":
-		rule := "INNERnet Provider " + p
+		rule := "INNERnet Provider " + p // rule name: an identifier existing installs look for; keep it
 		out, _ := run("netsh", "advfirewall", "show", "currentprofile", "state")
 		active := strings.Contains(strings.ToUpper(out), "ON")
 		existing, err := run("netsh", "advfirewall", "firewall", "show", "rule", "name="+rule)
@@ -169,7 +169,7 @@ func rollbackFirewall() {
 			}
 		}
 		if ok {
-			fmt.Printf("  %s Removed the %s rule for INNERnet\n", green(markOK), r.Name)
+			fmt.Printf("  %s Removed the %s rule for INNERNET\n", green(markOK), r.Name)
 		} else {
 			fmt.Println(amber("  Could not remove the " + r.Name + " rule. Remove it yourself: " + r.Undo))
 			left = append(left, r)

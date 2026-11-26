@@ -1,7 +1,7 @@
 package main
 
 // One port, two ways in:
-//   ST81 (INNERnet's own session protocol) - the client waits for the server to speak
+//   ST81 (INNERNET's own session protocol) - the client waits for the server to speak
 //   HTTP (fallback)                        - the client speaks first
 // Each accepted connection gets a short window: bytes from the client mean HTTP,
 // silence means ST81, and the provider sends its ST81 challenge.

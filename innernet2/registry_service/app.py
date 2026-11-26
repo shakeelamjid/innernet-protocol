@@ -37,8 +37,11 @@ ENROLL_TTL = 600
 FLOW_TTL = 300
 MAX_BODY = 64 << 10
 DAY = 86400
+# connect-src: Base RPC (read-only calls from the payout page) and the WalletConnect relay (phone wallets).
 HTML_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; "
-            "connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+            "connect-src 'self' https://mainnet.base.org https://sepolia.base.org wss://relay.walletconnect.org "
+            "wss://relay.walletconnect.com https://*.walletconnect.org https://*.walletconnect.com https://*.reown.com; "
+            "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
 
 
 def load_registry_key(path: str, *, create: bool = True) -> Ed25519PrivateKey | None:
@@ -152,11 +155,24 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             except Exception:  # keep the loop alive; errors are logged
                 log.exception("background task failed")
 
+    # Payout contract verdicts, kept 6 hours when they are definite (a split from the factory, or not one).
+    # "Could not check" is never kept, so the next round asks the chain again.
+    payout_cache: dict = {}
+
+    def payout_ok(entry: dict) -> tuple[bool, str]:
+        key = (entry["network"], str(entry["payout"]).lower())
+        hit = payout_cache.get(key)
+        if hit and hit[0] > time.time():
+            return hit[1]
+        verdict = chain.payout_check(settings, entry["network"], entry["payout"], rpc)
+        if not verdict[1] or not verdict[0]:
+            payout_cache[key] = (time.time() + 6 * 3600, verdict)
+        return verdict
+
     @asynccontextmanager
     async def lifespan(_app):
         threads = []
         if settings.workers:
-            payout_ok = lambda e: chain.payout_check(settings, e["network"], e["payout"], rpc)  # noqa: E731
             for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached, payout_ok=payout_ok),
                             settings.probe_interval),
                            (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval)):
@@ -166,7 +182,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         yield
         stop.set()
 
-    app = FastAPI(title="INNERnet registry", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+    app = FastAPI(title="INNERNET registry", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
     app.state.store = store
 
     # Works whether or not the reverse proxy strips the /registry prefix.
@@ -568,7 +584,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         except (ValueError, TypeError):
             ok = False
         if not ok:
-            raise HTTPException(422, "not an encrypted INNERnet provider backup for this machine")
+            raise HTTPException(422, "not an encrypted INNERNET provider backup for this machine")
         store.x("INSERT INTO key_backups(provider, blob, stored_at) VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET "
                 "blob=excluded.blob, stored_at=excluded.stored_at", (pid, blob, int(time.time())))
         store.audit(pid, "backup-stored", f"encrypted key backup kept for recovery, nonce {nonce}", ip)
@@ -769,9 +785,12 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                          "explorer_tx": EXPLORER_TX.get(net, ""),
                          "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/"),
                          "mainnet": net == "eip155:8453",
-                         **({"limits": settings.beta} if net == "eip155:8453" else {})})
+                         **({"limits": settings.limits} if net == "eip155:8453" and settings.limits else {})})
         host = settings.origin.split("://", 1)[-1].split("/")[0]
         return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays, "terms": terms.summary(),
+                "walletconnect": {"project_id": settings.walletconnect_project_id} if settings.walletconnect_project_id else None,
+                "rpc": {n: u for n, u in settings.rpc.items() if n in settings.fee_payto and u.startswith("https://")
+                        and u.split("/")[2] in ("mainnet.base.org", "sepolia.base.org")},
                 "tunnel": {"url": f"{settings.origin}{P}/v1/tunnel", "endpoint": {"host": host, "port": 443},
                            "public": f"{settings.origin}{P}/t/"}}
 
@@ -871,7 +890,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     from . import admin_web
     admin_web.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, body_json=body_json,
                        new_flow=new_flow, take_flow=take_flow, limiter=limiter, cookie_secure=settings.cookie_secure,
-                       page=page)
+                       page=page, payout_ok=payout_ok)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):
@@ -894,7 +913,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
                     for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))]
         options = generate_registration_options(
-            rp_id=settings.rp_id, rp_name="INNERnet providers", user_id=bytes.fromhex(pid),
+            rp_id=settings.rp_id, rp_name="INNERNET providers", user_id=bytes.fromhex(pid),
             user_name=p["entry"]["name"], user_display_name=f"{p['entry']['name']} ({pid[:8]})",
             exclude_credentials=existing,
             authenticator_selection=AuthenticatorSelectionCriteria(
@@ -1041,7 +1060,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
                     for r in store.q("SELECT cred_id FROM passkeys WHERE provider=?", (owner_of(pid),))]
         options = generate_registration_options(
-            rp_id=settings.rp_id, rp_name="INNERnet providers", user_id=bytes.fromhex(pid),
+            rp_id=settings.rp_id, rp_name="INNERNET providers", user_id=bytes.fromhex(pid),
             user_name=name, user_display_name=f"{name} ({pid[:8]})", exclude_credentials=existing,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.PREFERRED))
@@ -1249,7 +1268,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         detected = json.loads(c["detected"])
         if detected.get("reachable") is False:
             raise HTTPException(422, "Clients cannot reach this machine yet. Test again after opening the port on your "
-                                     "router, or connect out through INNERnet (relay or HTTPS tunnel), then apply.")
+                                     "router, or connect out through INNERNET (relay or HTTPS tunnel), then apply.")
         o = offers.check_offer(body, set(settings.fee_payto), detected)
         ok, why = chain.payout_check(settings, o["network"], o["payout"], rpc)
         if not ok:

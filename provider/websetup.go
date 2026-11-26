@@ -286,9 +286,9 @@ func applyWebSetup(reg, poll string, priv ed25519.PrivateKey, f *facts, box *sea
 				where := "saved on this machine: " + path
 				if ws.Escrow {
 					if raw, rerr := os.ReadFile(path); rerr == nil && uploadBackup(reg, priv, raw) == nil {
-						where += "; an encrypted copy is kept with INNERnet for \"Forgot your key?\""
+						where += "; an encrypted copy is kept with INNERNET for \"Forgot your key?\""
 					} else {
-						where += "; keeping a copy with INNERnet failed (run innernet-provider backup again later)"
+						where += "; keeping a copy with INNERNET failed (run innernet-provider backup again later)"
 					}
 				}
 				p.set("backup", "Key backup", "ok", "encrypted with your passphrase, "+where)

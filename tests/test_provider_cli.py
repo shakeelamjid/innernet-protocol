@@ -44,7 +44,7 @@ def run(binary: Path, home: Path, *args: str, ok: bool = True) -> subprocess.Com
 
 
 def setup(binary: Path, home: Path) -> None:
-    run(binary, home, "init", "--yes", "--name", "lahore-box-1", "--region", "asia-south",
+    run(binary, home, "init", "--yes", "--network", "base-sepolia", "--name", "lahore-box-1", "--region", "asia-south",
         "--host", "node1.example.test", "--port", "9443", "--storage-gib", "200", "--relay-gib", "500",
         "--compute", "--cpus", "4", "--memory-mib", "2048", "--price-storage", "0.0008")
 
@@ -78,7 +78,7 @@ def test_files_and_permissions(binary, tmp_path):
         os.chmod(tmp_path / "identity.key", 0o644)
         assert "readable by other users" in run(binary, tmp_path, "show", ok=True).stdout + \
             run(binary, tmp_path, "apply", "--dry-run", ok=False).stderr
-    run(binary, tmp_path, "init", "--yes", "--name", "x", "--region", "r", "--host", "h", "--storage-gib", "1",
+    run(binary, tmp_path, "init", "--yes", "--network", "base-sepolia", "--name", "x", "--region", "r", "--host", "h", "--storage-gib", "1",
         ok=False)  # already set up
 
 

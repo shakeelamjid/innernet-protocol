@@ -61,10 +61,11 @@ Re-applying with the same address and payout contract keeps a listed provider li
 | `INNERNET_REGISTRY_ORIGIN` | `https://innernetcorp.com` | Must match the address bar exactly, or passkeys fail |
 | `INNERNET_REGISTRY_RP_ID` | `innernetcorp.com` | Passkeys are bound to this domain |
 | `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA` | the factory address, once deployed | Deploy it once from your own wallet at `/registry/payout#operator`. Until set, payout contracts are accepted without the split check |
+| `INNERNET_WALLETCONNECT_PROJECT_ID` | unset | Public WalletConnect (Reown) project id. When set, the setup and payout pages offer "Use the wallet app on my phone" (QR code), so no browser extension is needed |
 | `INNERNET_ADMIN_USER`, `INNERNET_ADMIN_PASSWORD` | your choice; the password needs 16+ characters | Sign-in for `/registry/admin`. Use a long random password (a password manager). Unset or shorter: password sign-in is off |
 | `INNERNET_RPC_BASE_SEPOLIA`, `INNERNET_RPC_BASE` | default `https://sepolia.base.org`, `https://mainnet.base.org` | JSON-RPC used for payout checks and payment tracking |
 | `INNERNET_FEE_PAYTO_BASE`, `INNERNET_SPLIT_FACTORY_BASE` | your fee wallet; the factory you deployed on Base | Turn on Base mainnet (real USDC) |
-| `INNERNET_BETA_MAX_PAYMENT_USDC`, `INNERNET_BETA_MAX_CREDIT_USDC` | 10, 50 | Mainnet beta limits published to clients |
+| `INNERNET_MAX_PAYMENT_USDC`, `INNERNET_MAX_CREDIT_USDC` | unset (no limits) | Optional limits on Base, published to clients; the client refuses a single payment above the first |
 | `INNERNET_AUTO_LIST_HOURS` | 24 | How long a new machine is checked before it is listed automatically |
 | `INNERNET_FEE_PAYTO_BASE`, `INNERNET_RPC_BASE` | **do not set yet** | Mainnet stays off until the split contract is audited and you have legal advice |
 

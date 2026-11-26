@@ -30,7 +30,8 @@ class Settings:
     fee_bps: int = 250                                  # 2.5% network fee
     fee_payto: dict = field(default_factory=dict)       # caip2 -> fee wallet
     rpc: dict = field(default_factory=dict)             # caip2 -> JSON-RPC URL
-    split_factory: dict = field(default_factory=dict)  # caip2 -> INNERnetSplitFactory address
+    split_factory: dict = field(default_factory=dict)  # caip2 -> INNERNETSplitFactory address
+    walletconnect_project_id: str = ""                 # public WalletConnect (Reown) project id: phone wallets
     origin: str = "https://innernetcorp.com"
     rp_id: str = "innernetcorp.com"
     login_host: str = "innernetcorp.com"
@@ -43,7 +44,7 @@ class Settings:
     document_ttl: int = 3600
     release_repo: str = "shakeelamjid/innernet-protocol"   # where provider releases are published (GitHub owner/repo)
     relays: list = field(default_factory=list)          # [{"addr": "host:port", "key": hex}] ST81 relays (RLY-0)
-    beta: dict = field(default_factory=lambda: {"max_payment_usdc": "10", "max_credit_usdc": "50"})  # mainnet limits
+    limits: dict = field(default_factory=dict)          # optional mainnet limits; none by default
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -63,15 +64,19 @@ class Settings:
         for var, net, default in (("INNERNET_RPC_BASE_SEPOLIA", "eip155:84532", "https://sepolia.base.org"),
                                   ("INNERNET_RPC_BASE", "eip155:8453", "https://mainnet.base.org")):
             s.rpc[net] = _env(var) or default
-        # Mainnet beta limits (USDC): the most one payment and one client's credit at one provider may be.
-        s.beta = {"max_payment_usdc": _env("INNERNET_BETA_MAX_PAYMENT_USDC", "10"),
-                  "max_credit_usdc": _env("INNERNET_BETA_MAX_CREDIT_USDC", "50")}
+        # Optional limits (USDC) on mainnet: the most one payment / one client's credit may be. Off unless set.
+        for key, var in (("max_payment_usdc", "INNERNET_MAX_PAYMENT_USDC"), ("max_credit_usdc", "INNERNET_MAX_CREDIT_USDC")):
+            if _env(var):
+                s.limits[key] = _env(var)
         for var, net in (("INNERNET_SPLIT_FACTORY_BASE_SEPOLIA", "eip155:84532"), ("INNERNET_SPLIT_FACTORY_BASE", "eip155:8453")):
             addr = _env(var)
             if addr:
                 if not _EVM.match(addr):
                     raise SystemExit(f"{var} is not an EVM address")
                 s.split_factory[net] = addr
+        s.walletconnect_project_id = _env("INNERNET_WALLETCONNECT_PROJECT_ID")
+        if s.walletconnect_project_id and not re.fullmatch(r"[0-9a-f]{32}", s.walletconnect_project_id):
+            raise SystemExit("INNERNET_WALLETCONNECT_PROJECT_ID must be the 32-character project id from Reown")
         s.origin = _env("INNERNET_REGISTRY_ORIGIN", s.origin).rstrip("/")
         s.rp_id = _env("INNERNET_REGISTRY_RP_ID", s.rp_id)
         s.login_host = _env("INNERNET_REGISTRY_HOST", s.rp_id)

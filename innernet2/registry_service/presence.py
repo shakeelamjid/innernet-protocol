@@ -219,6 +219,18 @@ def auto_list_after() -> int:
         return 86400
 
 
+def _payout_problem(p: dict, payout_ok) -> tuple[bool, str]:
+    """(definitely bad, why). A payout that cannot be checked right now is not held against the machine,
+    but nothing is listed on it either (see the callers)."""
+    for network, address in p["entry"].get("payto", {}).items():
+        ok, why = payout_ok({"network": network, "payout": address})
+        if not ok:
+            return True, why
+        if why:
+            return False, why
+    return False, ""
+
+
 def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambda entry: (True, "")) -> None:
     """Every state change is automatic, unless an admin set the state (admin_lock):
     testing -> listed after the checking period at 95%+ reachability (and a valid payout contract);
@@ -236,6 +248,15 @@ def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambd
                         ("nothing heard for 7 days; reinstate when it is back", now, p["id"]))
                 store.audit(p["id"], "gone", "nothing heard for 7 days")
                 continue
+        # Every listed machine must be paid through a split contract from the factory. One that is not (or no
+        # longer) is suspended until its owner sets a valid payout contract.
+        if p["state"] == "listed":
+            bad, why = _payout_problem(p, payout_ok)
+            if bad:
+                store.x("UPDATE providers SET state='suspended', reason=?, updated_at=? WHERE id=?",
+                        (f"payout contract: {why}", now, p["id"]))
+                store.audit(p["id"], "suspended", f"payout contract: {why}")
+            continue
         # New machine: listed by itself after the checking period, if it was reachable and its payout is valid.
         if p["state"] == "testing" and not p.get("trial_since") and not p["listed_at"]:
             wait = auto_list_after()
@@ -258,7 +279,7 @@ def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambd
         # Suspended for reachability: back on trial once the last 24 hours are good again.
         if p["state"] == "suspended":
             ratio, n = uptime(store, p["id"], since=now - 86400)
-            if n >= 12 and ratio is not None and ratio >= 0.95:
+            if n >= 12 and ratio is not None and ratio >= 0.95 and not _payout_problem(p, payout_ok)[0]:
                 store.x("UPDATE providers SET state='testing', reason=?, trial_since=?, updated_at=? WHERE id=?",
                         ("reachable again: 24 h trial before listing", now, now, p["id"]))
                 store.audit(p["id"], "trial", f"reachable again ({ratio:.0%} in 24 h)")
@@ -267,7 +288,8 @@ def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambd
         trial = p.get("trial_since")
         if p["state"] == "testing" and trial and p["listed_at"] and now - trial >= TRIAL:
             ratio, n = uptime(store, p["id"], since=trial)
-            if n >= 12 and ratio is not None and ratio >= 0.95:
+            bad, why = _payout_problem(p, payout_ok)
+            if n >= 12 and ratio is not None and ratio >= 0.95 and not bad and not why:
                 store.x("UPDATE providers SET state='listed', reason='', trial_since=NULL, updated_at=? WHERE id=?",
                         (now, p["id"]))
                 store.audit(p["id"], "listed", f"trial passed ({ratio:.0%})")

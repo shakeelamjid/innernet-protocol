@@ -80,7 +80,7 @@ def new_login_link(store: Store, origin: str, prefix: str) -> str:
 
 
 def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json, new_flow, take_flow, limiter,
-             cookie_secure: bool, page) -> None:
+             cookie_secure: bool, page, payout_ok=lambda entry: (True, "")) -> None:
     migrate(store)
     cookie = "__Host-innernet_admin" if cookie_secure else "innernet_admin"
 
@@ -150,8 +150,8 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
         existing = [PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"]))
                     for r in store.q("SELECT cred_id FROM admin_passkeys")]
         options = generate_registration_options(
-            rp_id=settings.rp_id, rp_name="INNERnet registry admin", user_id=ADMIN_USER,
-            user_name="registry-admin", user_display_name="INNERnet registry admin", exclude_credentials=existing,
+            rp_id=settings.rp_id, rp_name="INNERNET registry admin", user_id=ADMIN_USER,
+            user_name="registry-admin", user_display_name="INNERNET registry admin", exclude_credentials=existing,
             authenticator_selection=AuthenticatorSelectionCriteria(
                 resident_key=ResidentKeyRequirement.REQUIRED, user_verification=UserVerificationRequirement.REQUIRED))
         return {"flow": new_flow("admin-enroll", options.challenge, None, token or None),
@@ -444,6 +444,14 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
                     (new, "" if new != "testing" else "checked again before listing", new, now, now, p["id"]))
             log("automatic", p["id"], f"{p['state']} -> {new}, automation resumed", request)
             return {"ok": True, "state": new}
+        if state == "listed":
+            # Listing is never possible without a valid payout contract, not even by hand.
+            for network, address in p["entry"].get("payto", {}).items():
+                ok, why = payout_ok({"network": network, "payout": address})
+                if not ok:
+                    raise HTTPException(422, f"Not listed: {why}")
+                if "postponed" in why:
+                    raise HTTPException(503, f"Not listed yet: {why}. Try again in a minute.")
         lock = 0 if state == "listed" else 1
         store.x("UPDATE providers SET state=?, reason=?, admin_lock=?, trial_since=NULL, listed_at=CASE WHEN ?='listed' "
                 "THEN COALESCE(listed_at, ?) ELSE listed_at END, updated_at=? WHERE id=?",

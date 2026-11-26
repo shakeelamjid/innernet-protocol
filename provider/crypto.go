@@ -93,7 +93,7 @@ func sealBackup(seed []byte, passphrase string) ([]byte, error) {
 func openBackup(raw []byte, passphrase string) ([]byte, error) {
 	var b backupFile
 	if err := json.Unmarshal(raw, &b); err != nil || b.Version != backupVersion || b.KDF != "pbkdf2-hmac-sha256" {
-		return nil, errors.New("not an INNERnet provider backup file")
+		return nil, errors.New("not an INNERNET provider backup file")
 	}
 	if b.Iterations < 100000 || b.Iterations > 10000000 {
 		return nil, errors.New("backup file has an unsafe iteration count")

@@ -43,6 +43,7 @@ func cmdStart(args []string) error {
 	svc := fs.Bool("service", false, "with --yes: also install the background service")
 	via := fs.String("via", "", "force how clients reach this machine: relay (ST81 relay) or tunnel (HTTPS); default: try direct first")
 	again := fs.Bool("again", false, "run the whole setup again on a machine that is already set up")
+	network := fs.String("network", "base", "terminal mode: base (real USDC) or base-sepolia (testnet)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -54,8 +55,15 @@ func cmdStart(args []string) error {
 	if !*again && !*yes && *mode == "" && alreadySetUp() {
 		return showSetUp(reg)
 	}
-	banner("provider setup", "base-sepolia")
-	fmt.Println(dim("  Test network: no real money moves yet. Your key never leaves this machine."))
+	if _, ok := networks[*network]; !ok {
+		return fmt.Errorf("--network: base or base-sepolia")
+	}
+	banner("provider setup", *network)
+	if *network == "base-sepolia" {
+		fmt.Println(dim("  Test network: no real money moves. Your key never leaves this machine."))
+	} else {
+		fmt.Println(dim("  Payments are real USDC on Base. Your key never leaves this machine."))
+	}
 	fmt.Println()
 	total := 9 // 4 checks here, then 5 steps applying the website's choice
 	if *yes || strings.EqualFold(*mode, "terminal") {
@@ -88,7 +96,7 @@ func cmdStart(args []string) error {
 	case "web":
 		return startWeb(reg, priv, f, *noOpen)
 	case "terminal":
-		return startTerminal(reg, priv, f, *yes, *wallet, *svc)
+		return startTerminal(reg, priv, f, *yes, *wallet, *svc, *network)
 	}
 	return errors.New("--mode must be web or terminal")
 }
@@ -344,7 +352,7 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		fmt.Printf("  %s Clients cannot reach port %d yet (%s). Choose on the website, or here:\n", amber(markWarn), f.Port,
 			orDefault(f.reachNote, "closed"))
 		fmt.Printf("    r + Enter  test again (after opening TCP port %d on your router to this machine)\n", f.Port)
-		fmt.Println("    o + Enter  connect out instead: an INNERnet relay, or the HTTPS tunnel when no relay is available")
+		fmt.Println("    o + Enter  connect out instead: an INNERNET relay, or the HTTPS tunnel when no relay is available")
 		fmt.Println()
 	}
 	reachMenu()
@@ -395,8 +403,8 @@ func openBrowser(url string) {
 
 // ---------- terminal setup ----------
 
-func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wallet string, wantService bool) error {
-	c := &Config{Version: "1", Registry: reg, Network: "base-sepolia", Port: f.Port, CPUs: 1, MemMiB: 512,
+func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wallet string, wantService bool, network string) error {
+	c := &Config{Version: "1", Registry: reg, Network: network, Port: f.Port, CPUs: 1, MemMiB: 512,
 		Prices: defaultPrices()}
 	if old, err := loadConfig(); err == nil {
 		c = old
@@ -406,7 +414,7 @@ func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wall
 		fmt.Println()
 		fmt.Printf("  Clients cannot reach port %d yet (%s).\n", f.Port, orDefault(f.reachNote, "closed"))
 		fmt.Printf("    r  test again (after opening TCP port %d on your router to this machine)\n", f.Port)
-		fmt.Println("    o  connect out instead: an INNERnet relay, or the HTTPS tunnel when no relay is available")
+		fmt.Println("    o  connect out instead: an INNERNET relay, or the HTTPS tunnel when no relay is available")
 		fmt.Println("    q  stop here")
 		switch strings.ToLower(ask("  Choose r, o or q", "r")) {
 		case "o":

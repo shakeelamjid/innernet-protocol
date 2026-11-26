@@ -106,12 +106,12 @@ def test_registry_reads_contract_over_rpc(env):
                  split_factory={"eip155:84532": factory.address})
     assert chain.payout_check(s, "eip155:84532", split_addr, rpc) == (True, "")
     ok, why = chain.payout_check(s, "eip155:84532", a["provider"], rpc)            # a plain wallet
-    assert not ok and "not a contract" in why
+    assert not ok and "not a payout contract" in why
     other = deploy(w3, "INNERnetSplitFactory", a["stranger"], FEE_BPS)                  # look-alike factory
     other.functions.create(a["provider"]).transact()
     fake = other.functions.splitOf(a["provider"]).call()
     ok, why = chain.payout_check(s, "eip155:84532", fake, rpc)
-    assert not ok and "not created by the INNERnet split factory" in why
+    assert not ok and "not created by the INNERNET payout factory" in why
     s.fee_bps = 100
     ok, why = chain.payout_check(s, "eip155:84532", split_addr, rpc)
     assert not ok and "fee share" in why

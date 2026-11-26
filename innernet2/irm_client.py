@@ -644,7 +644,7 @@ class Client:
         return out
 
     def limits(self, network: str) -> dict | None:
-        """Mainnet beta limits published by the registry (max_payment_usdc, max_credit_usdc), or None."""
+        """Limits the registry publishes for a network (max_payment_usdc, max_credit_usdc), or None."""
         if not self.registry_url:
             return None
         if not hasattr(self, "_config"):
@@ -658,10 +658,10 @@ class Client:
         return None
 
     def check_payment(self, network: str, amount: int) -> None:
-        """Refuse a single payment above the network's beta limit (amount in USDC base units)."""
+        """Refuse a single payment above the network's published limit, if it has one (USDC base units)."""
         lim = self.limits(network)
-        if lim and amount > int(Decimal(lim["max_payment_usdc"]) * 1_000_000):
-            raise BulkError(f"payment of {Decimal(amount) / 1_000_000} USDC is above the beta limit of "
+        if lim and lim.get("max_payment_usdc") and amount > int(Decimal(lim["max_payment_usdc"]) * 1_000_000):
+            raise BulkError(f"payment of {Decimal(amount) / 1_000_000} USDC is above the limit of "
                             f"{lim['max_payment_usdc']} USDC per payment on this network")
 
     # repair

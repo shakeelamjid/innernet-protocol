@@ -1,7 +1,7 @@
 package main
 
 // How clients reach this machine when nobody can connect to it directly, in order:
-//   1. RLY-0 relay over ST81 (INNERnet's own protocol, end-to-end ST81 inside)
+//   1. RLY-0 relay over ST81 (INNERNET's own protocol, end-to-end ST81 inside)
 //   2. HTTPS tunnel through the registry (fallback for networks that block everything
 //      but web traffic; requests and answers stay signed end to end)
 // Both are outgoing connections, so no router or ISP setting matters.

@@ -11,7 +11,7 @@ from .config import Settings
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="INNERnet provider registry (IRM-1 draft)")
+    parser = argparse.ArgumentParser(description="INNERNET provider registry (IRM-1 draft)")
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8080)
     args = parser.parse_args()

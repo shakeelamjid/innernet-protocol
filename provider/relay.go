@@ -228,7 +228,7 @@ func cmdRelay(args []string) error {
 	if err != nil {
 		return err
 	}
-	log.Printf("INNERnet relay (RLY-0 over ST81) on %s, relay key %s", ln.Addr(), hex.EncodeToString(key.Public().(ed25519.PublicKey)))
+	log.Printf("INNERNET relay (RLY-0 over ST81) on %s, relay key %s", ln.Addr(), hex.EncodeToString(key.Public().(ed25519.PublicKey)))
 	r := &relayServer{key: key, attached: map[string]*muxSession{}}
 	return r.serve(ln)
 }

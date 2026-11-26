@@ -218,7 +218,7 @@ def test_apply_rejections(env):
     assert r.status_code == 422 and "not accepted yet" in r.json()["detail"]
     fake.code = "0x"
     r = client.post(P + "/v1/apply", json=provider_record(key))
-    assert r.status_code == 422 and "not a contract" in r.json()["detail"]
+    assert r.status_code == 422 and "not a payout contract" in r.json()["detail"]
     fake.code = "0x6080"
     assert client.post(P + "/v1/apply", json=provider_record(key)).status_code == 200
     other = provider_record(Ed25519PrivateKey.generate())                        # same payout contract
@@ -420,7 +420,7 @@ def test_go_cli_against_live_registry(tmp_path):
             r = subprocess.run([str(binary), *args], env=cli_env, capture_output=True, text=True, stdin=subprocess.DEVNULL)
             assert r.returncode == 0, r.stderr
             return r.stdout
-        cli("init", "--yes", "--name", "go-box", "--region", "eu-central", "--host", "node.example.test",
+        cli("init", "--yes", "--network", "base-sepolia", "--name", "go-box", "--region", "eu-central", "--host", "node.example.test",
             "--storage-gib", "50", "--compute", "--accept-terms")
         cli("wallet", "set", "0x" + "9a" * 20)
         assert "Application received" in cli("apply")
@@ -933,13 +933,13 @@ def test_go_start_terminal_for_agents(tmp_path):
         fake.splits[wallet] = split
         env = {**os.environ, "INNERNET_HOME": str(tmp_path / "agent"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1", "INNERNET_NO_PORTMAP": "1",
                "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
-        r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())],
+        r = subprocess.run([str(binary), "start", "--network", "base-sepolia", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())],
                            env=env, capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
         assert r.returncode == 0, r.stdout + r.stderr
         assert "Payout contract: " + split in r.stdout and "Application received" in r.stdout
         pid = json.loads((tmp_path / "agent" / "descriptor.json").read_text())["payload"]["provider"]["id"]
         assert store.provider(pid)["entry"]["payto"] == {SEPOLIA: split}
-        again = subprocess.run([str(binary), "start", "--yes", "--port", str(free_tcp_port())], env=env,
+        again = subprocess.run([str(binary), "start", "--network", "base-sepolia", "--yes", "--port", str(free_tcp_port())], env=env,
                                capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
         assert again.returncode == 0                                   # set-up machine re-applies, wallet kept
         if sys.platform.startswith("linux"):                           # background service file, dry run
@@ -950,7 +950,7 @@ def test_go_start_terminal_for_agents(tmp_path):
             assert f"ExecStart={binary} serve" in dry.stdout and f"INNERNET_HOME={tmp_path / 'agent'}" in dry.stdout
             assert "Restart=always" in dry.stdout
         fresh = dict(env, INNERNET_HOME=str(tmp_path / "fresh"))
-        no = subprocess.run([str(binary), "start", "--yes", "--port", "9"], env=fresh, capture_output=True, text=True,
+        no = subprocess.run([str(binary), "start", "--network", "base-sepolia", "--yes", "--port", "9"], env=fresh, capture_output=True, text=True,
                             stdin=subprocess.DEVNULL, timeout=60)
         assert no.returncode != 0 and "--wallet" in no.stderr
     finally:
@@ -979,7 +979,7 @@ def test_go_serve_presence_intents_status_and_states(tmp_path):
                "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1", "TZ": "Asia/Karachi"}
         run = lambda *a: subprocess.run([str(binary), *a], env=env, capture_output=True, text=True,  # noqa: E731
                                         stdin=subprocess.DEVNULL, timeout=60)
-        r = run("start", "--yes", "--wallet", wallet, "--port", str(sport))
+        r = run("start", "--network", "base-sepolia", "--yes", "--wallet", wallet, "--port", str(sport))
         assert r.returncode == 0, r.stdout + r.stderr
         pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
         entry = store.provider(pid)["entry"]
@@ -1130,7 +1130,7 @@ def test_go_passkeys_list_and_remove_with_the_machine_key(tmp_path):
                "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
         run = lambda *a: subprocess.run([str(binary), *a], env=env, capture_output=True, text=True,  # noqa: E731
                                         stdin=subprocess.DEVNULL, timeout=60)
-        assert run("start", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())).returncode == 0
+        assert run("start", "--network", "base-sepolia", "--yes", "--wallet", wallet, "--port", str(free_tcp_port())).returncode == 0
         pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
         assert "No passkeys yet" in run("passkeys").stdout
         now = int(time.time())
@@ -1467,7 +1467,7 @@ def test_provider_tester_against_a_real_provider(tmp_path, capsys, monkeypatch):
         env = {**os.environ, "INNERNET_HOME": str(tmp_path / "p"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
                "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1", "INNERNET_PRESENCE_SEC": "1", "INNERNET_NO_UPDATE": "1",
                "INNERNET_NO_KEEPER": "1", "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
-        r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--port", str(sport)], env=env,
+        r = subprocess.run([str(binary), "start", "--network", "base-sepolia", "--yes", "--wallet", wallet, "--port", str(sport)], env=env,
                            capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
         assert r.returncode == 0, r.stdout + r.stderr
         pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
@@ -1618,3 +1618,45 @@ def test_stats_never_add_real_and_test_usdc(env):
                 (net, "0x" + os.urandom(32).hex(), 0, "p", "0x", "0x", amount, 1, now))
     st = client.get(P + "/v1/stats").json()["payments_30d"]
     assert st["usdc"] == "2.00" and st["test_usdc"] == "9.00"
+
+
+def test_every_listed_machine_needs_a_payout_contract(env):
+    from innernet2.registry_service import presence, probe as probe_mod
+    from innernet2.registry_service.admin_web import new_login_link
+    client, store, fake, s = env
+    k = Ed25519PrivateKey.generate()
+    pid = k.public_key().public_bytes_raw().hex()
+    assert client.post(P + "/v1/apply", json=provider_record(k)).status_code == 200
+    # The address turns out to be a plain wallet: an admin cannot list it by hand.
+    fake.code = "0x"
+    tok = new_login_link(store, ORIGIN, P).split("#token=")[1]
+    admin = SoftAuthenticator()
+    o = client.post(P + "/api/admin/enroll/options", json={"token": tok}, headers=H).json()
+    client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])}, headers=H)
+    r = client.post(P + f"/api/admin/machines/{pid}/state", json={"state": "listed"}, headers=H)
+    assert r.status_code == 422 and "not a payout contract" in r.text and "/payout" in r.text
+    assert store.provider(pid)["state"] == "testing"
+    # A machine that is listed with a payout that is not a valid split is suspended automatically.
+    store.x("UPDATE providers SET state='listed', listed_at=? WHERE id=?", (int(time.time()), pid))
+    presence.advance_states(store, probe_mod.uptime, payout_ok=lambda e: (False, "0xab is a wallet, not a payout contract."))
+    p = store.provider(pid)
+    assert p["state"] == "suspended" and p["reason"].startswith("payout contract:")
+    # It stays suspended while the payout is still wrong, however reachable it is.
+    now = int(time.time())
+    for i in range(20):
+        store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,1,10)", (pid, now - i * 300))
+    presence.advance_states(store, probe_mod.uptime, now, payout_ok=lambda e: (False, "still a wallet"))
+    assert store.provider(pid)["state"] == "suspended"
+    presence.advance_states(store, probe_mod.uptime, now)
+    assert store.provider(pid)["state"] == "testing"                   # fixed: back on trial
+
+
+def test_config_offers_phone_wallets_when_configured(tmp_path):
+    s = settings(tmp_path)
+    s.walletconnect_project_id = "cc193a5eced8f2d7540652d3f05d1c8b"
+    client = TestClient(create_app(s, rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
+    cfg = client.get(P + "/v1/config").json()
+    assert cfg["walletconnect"] == {"project_id": "cc193a5eced8f2d7540652d3f05d1c8b"}
+    page = client.get(P + "/payout")
+    assert "wss://relay.walletconnect.org" in page.headers["content-security-policy"]
+    assert client.get(P + "/static/walletconnect.js").status_code == 200

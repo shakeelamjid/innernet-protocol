@@ -26,7 +26,7 @@ import (
 const (
 	serviceName  = "innernet-provider"
 	launchdLabel = "com.innernetcorp.provider"
-	winTask      = "INNERnet Provider"
+	winTask      = "INNERNET Provider"
 )
 
 // run executes a command; replaced in tests.
@@ -57,7 +57,7 @@ func systemdUnit(s serviceSpec) string {
 		wanted = "multi-user.target"
 	}
 	return fmt.Sprintf(`[Unit]
-Description=INNERnet provider (IRM-1): serve storage to clients
+Description=INNERNET provider (IRM-1): serve storage to clients
 After=network-online.target
 Wants=network-online.target
 
@@ -343,7 +343,7 @@ func cmdUninstall(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	banner("uninstall", "base-sepolia")
+	banner("uninstall", "base")
 	if c, err := loadConfig(); err == nil {
 		_ = uninstallService()
 		// Take back what setup changed outside this folder: the router mapping and firewall rules.

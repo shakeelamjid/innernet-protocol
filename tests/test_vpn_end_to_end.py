@@ -49,7 +49,7 @@ def provider(built, tmp_path, *flags):  # noqa: F811
            "INNERNET_CLIENT_TERMS": CLIENT_TERMS, "INNERNET_NO_PRESENCE": "1"}
     run = lambda *a: subprocess.run([str(built / "innernet-provider"), *a], env=env, check=True,  # noqa: E731
                                     capture_output=True, text=True)
-    run("init", "--yes", "--name", "exit1", "--region", "asia-south", "--host", "127.0.0.1", "--port", str(port),
+    run("init", "--yes", "--network", "base-sepolia", "--name", "exit1", "--region", "asia-south", "--host", "127.0.0.1", "--port", str(port),
         "--relay-gib", "1", "--price-relay", "0.01", "--price-vpn", "1.024", *flags)
     run("wallet", "set", "0x" + "cd" * 20)
     run("apply", "--dry-run")
@@ -124,7 +124,7 @@ def test_web_only_exit_and_no_exit_without_consent(built, tmp_path):  # noqa: F8
     finally:
         proc.kill()
         chain.server.shutdown()
-    r = subprocess.run([str(built / "innernet-provider"), "init", "--yes", "--name", "x", "--region", "eu", "--host", "127.0.0.1",
+    r = subprocess.run([str(built / "innernet-provider"), "init", "--yes", "--network", "base-sepolia", "--name", "x", "--region", "eu", "--host", "127.0.0.1",
                         "--relay-gib", "1", "--vpn"], env={**os.environ, "INNERNET_HOME": str(tmp_path / "x")},
                        capture_output=True, text=True)
     assert r.returncode != 0 and "--vpn-consent" in r.stderr

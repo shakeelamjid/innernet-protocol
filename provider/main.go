@@ -1,5 +1,5 @@
 // innernet-provider: register this machine's spare storage, bandwidth or
-// compute with the INNERnet resource market (IRM-1 DRAFT, testnet first).
+// compute with the INNERNET resource market (IRM-1 DRAFT, testnet first).
 package main
 
 import (
@@ -93,7 +93,7 @@ func main() {
 }
 
 func usage() {
-	fmt.Print(`innernet-provider ` + version + ` - rent out storage, bandwidth or compute on INNERnet (IRM-1 draft, testnet)
+	fmt.Print(`innernet-provider ` + version + ` - rent out storage, bandwidth or compute on INNERNET (IRM-1 draft, testnet)
 
 Setup
   start                one-command setup: checks this machine, then set up on the website or here
@@ -198,7 +198,7 @@ func readPassphrase(prompt string) (string, error) {
 func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "non-interactive: take every value from flags")
-	c := &Config{Version: "1", Registry: defaultRegistry, Network: "base-sepolia", Port: 9443,
+	c := &Config{Version: "1", Registry: defaultRegistry, Network: "base", Port: 9443,
 		CPUs: 1, MemMiB: 512, Prices: defaultPrices()}
 	fs.StringVar(&c.Name, "name", "", "provider name")
 	fs.StringVar(&c.Region, "region", "", "region label, e.g. asia-south")
@@ -259,7 +259,7 @@ func cmdInit(args []string) error {
 		d.fill(c)
 	}
 	if !*yes {
-		fmt.Println("INNERnet provider setup. Press Enter to accept the value in [brackets].")
+		fmt.Println("INNERNET provider setup. Press Enter to accept the value in [brackets].")
 		fmt.Println("This runs on TESTNET (Base Sepolia). No real money moves yet.")
 		fmt.Println()
 		askOffer(c)
@@ -659,12 +659,12 @@ func cmdBackup(args []string) error {
 	}
 	fmt.Println("Encrypted backup written to", args[0])
 	if c, err := loadConfig(); err == nil && os.Getenv("INNERNET_BACKUP_PASSPHRASE") == "" &&
-		askYes("Also keep this encrypted backup with INNERnet, so \"Forgot your key?\" on the website can give it back", true) {
+		askYes("Also keep this encrypted backup with INNERNET, so \"Forgot your key?\" on the website can give it back", true) {
 		raw, _ := os.ReadFile(args[0])
 		if err := uploadBackup(registryURL(c), priv, raw); err != nil {
-			fmt.Println("Keeping a copy with INNERnet failed:", err)
+			fmt.Println("Keeping a copy with INNERNET failed:", err)
 		} else {
-			fmt.Println("Kept with INNERnet. It opens only with your passphrase.")
+			fmt.Println("Kept with INNERNET. It opens only with your passphrase.")
 		}
 	}
 	fmt.Println("Keep it offline (USB stick, password manager). Without it and the passphrase, a lost key cannot be recovered.")
@@ -773,7 +773,7 @@ func askOffer(c *Config) {
 	c.RelayCap = askInt("Bandwidth per month for relay and VPN exit together, in GiB (0 = none)", c.RelayCap)
 	if c.RelayCap > 0 {
 		fmt.Println("  Check that your internet plan allows reselling bandwidth.")
-		c.NoRelay = !askYes("  Relay sealed INNERnet traffic between INNERnet machines", !c.NoRelay)
+		c.NoRelay = !askYes("  Relay sealed INNERNET traffic between INNERNET machines", !c.NoRelay)
 		if !c.NoRelay {
 			c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
 		}

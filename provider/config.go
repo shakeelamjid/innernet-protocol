@@ -26,7 +26,7 @@ var (
 
 // Networks a provider can be paid on. CAIP-2 ids.
 var networks = map[string]string{
-	"base-sepolia": "eip155:84532", // testnet: default until mainnet launch
+	"base-sepolia": "eip155:84532", // testnet
 	"base":         "eip155:8453",
 }
 
@@ -297,7 +297,7 @@ func toAny(s []string) []any {
 
 func writeDetails(c *Config, id string) error {
 	var b strings.Builder
-	b.WriteString("INNERnet provider details\n")
+	b.WriteString("INNERNET provider details\n")
 	b.WriteString("=========================\n")
 	b.WriteString("This file is safe to share. It contains NO secret key.\n")
 	b.WriteString("Your secret key is in identity.key next to this file. Never share that one.\n\n")

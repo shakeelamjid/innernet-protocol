@@ -49,13 +49,13 @@
     const port = det.port || 9443;
     unreachable = det.reachable === false;
     let text, err = false;
-    if (det.path === 'tunnel') text = 'Port ' + port + ' could not be opened on this network' + (det.reach_note ? ' (' + det.reach_note + ')' : '') + ', so clients reach this machine through the INNERnet HTTPS tunnel for now. Requests stay signed end to end. The machine keeps trying to open the port (every 10 minutes and after every network change) and switches to the direct connection by itself. Test again checks now.';
-    else if (det.path === 'relay') text = 'Clients reach this machine through an INNERnet relay: it connects out, and data stays encrypted end to end.';
+    if (det.path === 'tunnel') text = 'Port ' + port + ' could not be opened on this network' + (det.reach_note ? ' (' + det.reach_note + ')' : '') + ', so clients reach this machine through the INNERNET HTTPS tunnel for now. Requests stay signed end to end. The machine keeps trying to open the port (every 10 minutes and after every network change) and switches to the direct connection by itself. Test again checks now.';
+    else if (det.path === 'relay') text = 'Clients reach this machine through an INNERNET relay: it connects out, and data stays encrypted end to end.';
     else if (!unreachable) text = 'Clients reach ' + det.host + ':' + port + ' directly' + (det.path === 'router' ? ' (port opened on your router).' : '.');
     else {
       err = true;
       text = 'Clients cannot reach ' + (det.host || 'this machine') + ':' + port + ' yet' + (det.reach_note ? ' (' + det.reach_note + ')' : '') +
-        '. Open TCP port ' + port + ' on your router to this machine and press Test again, or connect out through INNERnet instead (an INNERnet relay, or the HTTPS tunnel when no relay is available). You can also type r or o in the terminal.';
+        '. Open TCP port ' + port + ' on your router to this machine and press Test again, or connect out through INNERNET instead (an INNERNET relay, or the HTTPS tunnel when no relay is available). You can also type r or o in the terminal.';
     }
     say('reach', text, err);
     $('reach-acts').hidden = !(unreachable || det.path === 'tunnel' || det.path === 'relay');
@@ -64,7 +64,7 @@
     say('reach-msg', pending ? (pending === 'retest' ? 'Your machine is testing the port again…' : 'Your machine is connecting out…') : '');
     // VPN exit needs a real path to the machine: say exactly why it is off.
     const why = det.path === 'tunnel'
-      ? 'VPN exit is off: clients reach this machine through the HTTPS tunnel, which carries only signed INNERnet requests, not VPN traffic. To offer VPN exit, open TCP port ' + port + ' on your router to this machine and press Test again, or use an INNERnet relay when one is available.'
+      ? 'VPN exit is off: clients reach this machine through the HTTPS tunnel, which carries only signed INNERNET requests, not VPN traffic. To offer VPN exit, open TCP port ' + port + ' on your router to this machine and press Test again, or use an INNERNET relay when one is available.'
       : unreachable ? 'VPN exit is off until clients can reach this machine (see Your machine above).' : '';
     $('vpn-why').textContent = why; $('vpn-why').hidden = !why;
     if (why) $('vpn-on').checked = false;
@@ -195,8 +195,9 @@
     net = (cfg.networks || []).find(function (n) { return n.caip2 === caip2; }) || net;
     const note = $('net-note');
     if (net && net.mainnet) {
-      note.textContent = 'Base mainnet: clients pay you real USDC. Beta limits apply: at most ' + ((net.limits || {}).max_payment_usdc || '10') +
-        ' USDC per payment and ' + ((net.limits || {}).max_credit_usdc || '50') + ' USDC of credit per client. Your payout contract on Base is separate from the test one.';
+      const lim = net.limits || {};
+      note.textContent = 'Base: clients pay you real USDC into your payout contract.' +
+        (lim.max_payment_usdc ? ' Limits apply: at most ' + lim.max_payment_usdc + ' USDC per payment.' : '');
       note.hidden = false;
     } else note.hidden = true;
     if (clear) { $('payout').value = ''; say('pay-msg', 'Create or find your payout contract on ' + (net ? net.name : 'this network') + '.'); }
@@ -296,15 +297,33 @@
   ['sto-on', 'rly-on', 'vpn-on', 'cmp-on', 'gpu-on', 'reserve-gib', 'backup-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
   $('reserve-gib').addEventListener('input', sync);
 
+  async function makePayout(account) {
+    say('pay-msg', 'Connected: ' + account);
+    const split = await W.findOrCreate(net.factory, account, account, function (t) {
+      say('pay-msg', t === 'Confirm in your wallet…' ? 'Approve the transaction in your wallet (network fee about $0.01)…' : t);
+    });
+    $('payout').value = split;
+    say('pay-msg', 'Payout contract ready: ' + split + '. It pays ' + account + '.');
+  }
+
   $('connect').addEventListener('click', async function () {
     if (!net || !net.factory) { say('pay-msg', 'Payout contracts open as soon as the split factory is deployed. Check back shortly.', true); return; }
+    try { await makePayout(await W.connect(net.chain_id)); } catch (err) { say('pay-msg', W.friendly(err), true); }
+  });
+
+  $('connect-phone').addEventListener('click', async function () {
+    if (!net || !net.factory) { say('pay-msg', 'Payout contracts open as soon as the split factory is deployed. Check back shortly.', true); return; }
     try {
-      const account = await W.connect(net.chain_id);
-      say('pay-msg', 'Connected: ' + account);
-      const split = await W.findOrCreate(net.factory, account, account, function (t) { say('pay-msg', t); });
-      $('payout').value = split;
-      say('pay-msg', 'Payout contract ready. It pays ' + account + '.');
-    } catch (err) { say('pay-msg', W.friendly(err), true); }
+      say('pay-msg', 'Preparing a QR code…');
+      const account = await W.connectPhone(I.BASE, cfg, net, function (uri, svg) {
+        $('wc-qr').innerHTML = svg;
+        $('wc-link').href = uri;
+        $('wc-box').hidden = false;
+        say('pay-msg', 'Waiting for your wallet app…');
+      });
+      $('wc-box').hidden = true;
+      await makePayout(account);
+    } catch (err) { $('wc-box').hidden = true; say('pay-msg', W.friendly(err), true); }
   });
 
   $('form').addEventListener('submit', async function (e) {
@@ -422,10 +441,10 @@
     const sel = $('network'); sel.textContent = '';
     (cfg.networks || []).forEach(function (n) {
       const o = document.createElement('option'); o.value = n.caip2;
-      o.textContent = n.name + (n.mainnet ? ' (real USDC, beta)' : ' (test network)') + (n.factory ? '' : ' · payout contracts not open yet');
+      o.textContent = n.name + (n.mainnet ? ' (real USDC)' : ' (test network)') + (n.factory ? '' : ' · payout contracts not open yet');
       sel.append(o);
     });
-    net = (cfg.networks || []).find(function (n) { return n.caip2 === 'eip155:84532'; }) || (cfg.networks || [])[0];
+    net = (cfg.networks || []).find(function (n) { return n.mainnet; }) || (cfg.networks || [])[0];
     if (net) sel.value = net.caip2;
     sel.addEventListener('change', function () { pickNet(sel.value, true); });
     pickNet(sel.value, false);

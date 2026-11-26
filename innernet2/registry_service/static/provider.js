@@ -16,7 +16,7 @@
     fetch(base + '/v1/providers/' + encodeURIComponent(pid) + '/status').then(function (r) { return r.json(); })
   ]).then(function (res) {
     const p = res[0], s = res[1], e = p.entry;
-    document.title = e.name + ' · INNERnet provider';
+    document.title = e.name + ' · INNERNET provider';
     $('name').textContent = e.name;
     $('pid').textContent = e.id;
     $('state').textContent = p.state;
