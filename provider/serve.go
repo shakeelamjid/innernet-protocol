@@ -32,6 +32,7 @@ const (
 	stoResponseDomain = "INNERnet/STO-1/response\x00"
 	ticketDomain      = "INNERnet/PAY-1/service-ticket\x00"
 	maxChunk          = 2 << 20
+	holdbackBps       = 2000 // clients may hold back 20 % of each storage payment until the next proof
 	clockSkew         = 300
 )
 
@@ -59,6 +60,7 @@ type server struct {
 	pathUp  atomic.Bool
 
 	credits  *ledger
+	terms    clientTerms
 	sched    *scheduler
 	stoSlots chan struct{}
 	gpuMu    sync.Mutex
@@ -89,6 +91,7 @@ func cmdServe(args []string) error {
 		go keepPortOpen(c.Port)
 	}
 	s.startReachability(registryURL(c))
+	go s.terms.keepFresh(registryURL(c))
 	defer s.stopGPUSessions()
 	go func() {
 		for range time.Tick(5 * time.Second) {
@@ -426,11 +429,28 @@ func (s *server) pay(w http.ResponseWriter, client, lease string, body []byte) {
 		return
 	}
 	var req struct {
-		Units string `json:"units"`
-		Tx    string `json:"tx"`
+		Units    string `json:"units"`
+		Tx       string `json:"tx"`
+		Terms    string `json:"terms"`
+		Held     int64  `json:"held"`     // base units the client holds back this period (at most 20 %)
+		Released int64  `json:"released"` // base units held back last period, paid now that a new proof passed
 	}
-	if json.Unmarshal(body, &req) != nil || !reTx.MatchString(req.Tx) || !reDecimal.MatchString(req.Units) {
+	if json.Unmarshal(body, &req) != nil || !reTx.MatchString(req.Tx) || !reDecimal.MatchString(req.Units) ||
+		req.Held < 0 || req.Released < 0 {
 		s.fail(w, 400, "pay needs units (decimal GiB-days) and tx (0x + 64 hex)")
+		return
+	}
+	if err := s.checkClientTerms(req.Terms); err != nil {
+		s.fail(w, 412, err.Error())
+		return
+	}
+	heldPath := filepath.Join(s.leaseDir(lease), "held")
+	outstanding := int64(0)
+	if b, err := os.ReadFile(heldPath); err == nil {
+		outstanding, _ = strconv.ParseInt(strings.TrimSpace(string(b)), 10, 64)
+	}
+	if req.Released != outstanding {
+		s.fail(w, 402, fmt.Sprintf("release the %d base units held back last period with this payment", outstanding))
 		return
 	}
 	tx := strings.ToLower(req.Tx)
@@ -451,8 +471,15 @@ func (s *server) pay(w http.ResponseWriter, client, lease string, body []byte) {
 		s.fail(w, 402, err.Error())
 		return
 	}
-	if paid.Cmp(need) < 0 {
-		s.fail(w, 402, fmt.Sprintf("payment too small: %s base units, %s owed", paid, need))
+	// Holdback (spec 4.5): at most 20 % of this period, rounded up.
+	maxHeld := new(big.Int).Div(new(big.Int).Add(new(big.Int).Mul(need, big.NewInt(holdbackBps)), big.NewInt(9999)), big.NewInt(10000))
+	if big.NewInt(req.Held).Cmp(maxHeld) > 0 {
+		s.fail(w, 402, fmt.Sprintf("at most %s base units may be held back this period", maxHeld))
+		return
+	}
+	due := new(big.Int).Add(new(big.Int).Sub(need, big.NewInt(req.Held)), big.NewInt(req.Released))
+	if paid.Cmp(due) < 0 {
+		s.fail(w, 402, fmt.Sprintf("payment too small: %s base units, %s due", paid, due))
 		return
 	}
 	s.mu.Lock()
@@ -464,13 +491,15 @@ func (s *server) pay(w http.ResponseWriter, client, lease string, body []byte) {
 	s.used[tx] = true
 	f, err := os.OpenFile(s.usedLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600)
 	if err == nil {
-		fmt.Fprintf(f, "%s %s %s %s %d\n", tx, client, lease, req.Units, s.now().Unix())
+		fmt.Fprintf(f, "%s %s %s %s %d held=%d released=%d terms=%s\n", tx, client, lease, req.Units, s.now().Unix(),
+			req.Held, req.Released, req.Terms)
 		f.Close()
 	}
+	_ = os.WriteFile(heldPath, []byte(strconv.FormatInt(req.Held, 10)+"\n"), 0o600)
 	s.mu.Unlock()
 	payload := map[string]any{"version": "PAY-1-TICKET", "provider": providerID(s.priv), "client": client,
 		"service": "STO-1", "lease": lease, "units": req.Units, "unit": "GiB-day", "payment_tx": req.Tx,
-		"expires_at": s.now().Unix() + 30*86400}
+		"expires_at": s.now().Unix() + 30*86400, "held": req.Held, "released": req.Released, "terms": req.Terms}
 	sig, err := signCanonical(s.priv, ticketDomain, payload)
 	if err != nil {
 		s.fail(w, 500, "could not sign ticket")

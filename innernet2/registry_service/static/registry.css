@@ -147,3 +147,8 @@ strong { color: var(--text); font-weight: 500; }
 .offer .fields { padding-left: 28px; }
 .code-input { font-family: var(--mono) !important; font-size: 1.4rem !important; letter-spacing: .12em; text-align: center; height: 52px !important; }
 .offer .group .msg { padding-left: 32px; margin-top: 10px; }
+.terms h2 { font-size: 1.25rem; margin-bottom: 12px; }
+.terms h3 { font-size: 1rem; margin-top: 22px; }
+.terms p { color: var(--muted); line-height: 1.65; }
+.terms .fp { font-family: var(--mono); font-size: .75rem; color: var(--dim); word-break: break-all; margin: 0 0 8px; }
+.offer .terms-box { margin-top: 0; }

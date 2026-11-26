@@ -20,6 +20,9 @@ from test_registry_service import SEPOLIA, free_tcp_port, live_registry  # noqa:
 
 from innernet2.irm_client import Client, Provider  # noqa: E402
 from innernet2.irm_registry import sign_registry  # noqa: E402
+from innernet2.registry_service.terms import current as _current_terms  # noqa: E402
+
+CLIENT_TERMS = _current_terms("client")["sha256"]
 
 GO = shutil.which("go")
 pytestmark = pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
@@ -97,7 +100,8 @@ def test_providers_behind_routers_serve_through_the_st81_relay_and_the_https_tun
         entries = [dict(store.provider(pid)["entry"], listed_at=1) for pid in ids]
         doc = sign_registry({"version": "REG-1", "sequence": now, "issued_at": now, "expires_at": now + 3600, "fee_bps": 250,
                              "fee_payto": {SEPOLIA: "0x" + "fe" * 20}, "providers": entries}, rk, now=now)
-        client = Client(tmp_path / "client", registry_doc=doc, pinned=[rk.public_key().public_bytes_raw()], presence_url=reg)
+        client = Client(tmp_path / "client", registry_doc=doc, pinned=[rk.public_key().public_bytes_raw()], presence_url=reg,
+                        accept_terms=CLIENT_TERMS)
         data = os.urandom(150_000)
         rec = client.put(data, "behind-a-router.bin")
         assert client.get(rec["object"]) == data

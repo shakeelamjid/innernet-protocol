@@ -11,7 +11,7 @@ UNITS = {"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-
 DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500"}
 _EVM = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _KEYS = {"name", "region", "host", "port", "storage_gib", "relay_gib", "compute", "cpus", "memory_mib",
-         "gpu", "gpus", "reserve_gib", "per_client", "prices", "network", "payout"}
+         "gpu", "gpus", "reserve_gib", "per_client", "terms", "prices", "network", "payout"}
 
 
 def _int(v, lo, hi, label):
@@ -49,6 +49,10 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         "network": str(offer.get("network", "")),
         "payout": str(offer.get("payout", "")).strip(),
     }
+    from . import terms
+    if offer.get("terms") != terms.current("provider")["sha256"]:
+        raise BulkError("read and agree to the provider terms")
+    o["terms"] = offer["terms"]
     if o["network"] not in networks:
         raise BulkError("choose a payment network the registry accepts")
     if not _EVM.match(o["payout"]):
@@ -89,7 +93,7 @@ def to_entry(o: dict, provider_id: str) -> dict:
             hardware["gpu_vram_mib"] = g["vram_mib"]
     for s in services:
         prices[s] = {"asset": "USDC", "unit": UNITS[s], "amount": o["prices"].get(s, DEFAULT_PRICES[s])}
-    entry = {"id": provider_id, "name": o["name"], "region": o["region"],
+    entry = {"id": provider_id, "name": o["name"], "region": o["region"], **({"terms": o["terms"]} if o.get("terms") else {}),
              "endpoints": [{"host": o["host"], "port": o["port"]}], "services": services,
              "payto": {o["network"]: o["payout"]}, "prices": prices}
     if limits:

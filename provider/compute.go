@@ -119,10 +119,15 @@ func (s *server) receipt(client, service, units, unit string, cost, balance int6
 
 func (s *server) credit(w http.ResponseWriter, client string, body []byte) {
 	var req struct {
-		Tx string `json:"tx"`
+		Tx    string `json:"tx"`
+		Terms string `json:"terms"`
 	}
 	if json.Unmarshal(body, &req) != nil || !reTx.MatchString(req.Tx) {
 		s.fail(w, 400, "credit needs tx (0x + 64 hex): a USDC transfer to this provider's payout contract")
+		return
+	}
+	if err := s.checkClientTerms(req.Terms); err != nil {
+		s.fail(w, 412, err.Error())
 		return
 	}
 	tx := strings.ToLower(req.Tx)
@@ -150,7 +155,7 @@ func (s *server) credit(w http.ResponseWriter, client string, body []byte) {
 	}
 	s.used[tx] = true
 	if f, err := os.OpenFile(s.usedLog, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o600); err == nil {
-		fmt.Fprintf(f, "%s %s credit %s %d\n", tx, client, usdc(paid.Int64()), s.now().Unix())
+		fmt.Fprintf(f, "%s %s credit %s %d terms=%s\n", tx, client, usdc(paid.Int64()), s.now().Unix(), req.Terms)
 		f.Close()
 	}
 	s.mu.Unlock()

@@ -119,6 +119,8 @@
         'GPU-1': $('gpu-price').value.trim() },
       network: net ? net.caip2 : 'eip155:84532', payout: $('payout').value.trim()
     };
+    if (!$('terms-ok').checked) { say('send-msg', 'Read and agree to the provider terms first.', true); return; }
+    offer.terms = cfg.terms.provider.sha256;
     $('send').disabled = true;
     say('send-msg', 'Sending…');
     try {
@@ -132,6 +134,7 @@
     const d = res[0]; cfg = res[1];
     net = (cfg.networks || []).find(function (n) { return n.caip2 === 'eip155:84532'; }) || (cfg.networks || [])[0];
     fill(d);
+    if (cfg.terms) $('terms-version').textContent = 'Version ' + cfg.terms.provider.version + '. Your machine signs this version into its listing.';
     $('form').hidden = false;
   }).catch(function (err) {
     if (err.status === 401) { location.replace(I.BASE + '/claim'); return; }

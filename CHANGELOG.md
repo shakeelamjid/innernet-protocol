@@ -2,6 +2,14 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Terms for both sides; storage holdback
+
+- Provider terms and client terms (drafts, to be reviewed by a lawyer), published at `/registry/terms` and `/registry/v1/terms`, each identified by the SHA-256 of its text.
+- Providers agree on the setup page (or in the terminal); the machine signs the fingerprint into its listing (`terms` in the provider entry); the registry accepts only the current version. New `innernet-provider terms [accept]`, `init --accept-terms`.
+- Clients agree with every payment: `terms` in storage payments and compute credit, signed by the client key; providers refuse payment without the current fingerprint (HTTP 412). `Client(accept_terms=…)`, `Client.client_terms()`.
+- Storage holdback: clients hold back 20 % of each payment until the next proof passes and release it with the next payment; providers check the amounts and sign them into tickets; on repair the failed provider's held amount stays with the client (`held_kept`). Spec 4.5, 4.6.
+- `provider/LATEST` is `provider-v0.5.1`.
+
 ### Compute by the hour: CPU jobs and GPU sessions, prepaid credit
 
 - Providers sell raw power; clients bring the program or model. CPU is priced per CPU-hour (CMP-1 unit changed from instructions), GPU per GPU-hour; both charged per second.

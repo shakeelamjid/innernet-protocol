@@ -196,6 +196,14 @@ The registry verifies all five on-chain before listing, and re-checks on every p
 
 Traffic that does not use a registered provider carries no fee.
 
+### 4.5 Storage holdback (draft)
+
+A client may hold back up to 20 % (`holdback_bps` 2000) of each storage payment until the next proof for that lease passes. The `pay` request (section 5.9) carries `held` (base units held back this period, at most ⌈owed × 2000 / 10000⌉) and `released` (the amount held back last period, which MUST be paid with the next period's payment). The provider checks that the transfer covers `owed − held + released`, keeps the outstanding amount per lease, and writes `held`, `released` and `terms` into the signed ticket. If the provider fails proofs and the client moves the slot to another provider, the outstanding amount is never released: it stays with the client and pays for the repair. Nothing is held by INNERnet; the client simply pays later.
+
+### 4.6 Terms (draft)
+
+The registry publishes provider terms and client terms at `/registry/terms` and `/registry/v1/terms` (`{"provider"|"client": {"version", "sha256", "text"}}`); `/registry/v1/config` lists each version's SHA-256. A provider entry carries `terms`: the SHA-256 of the provider terms the provider agreed to, signed with the descriptor; the registry accepts an application only with the current version. Clients send the SHA-256 of the current client terms as `terms` with every payment (`/sto/v1/leases/{id}/pay`, `/cmp/v1/credit`); the request is signed by the client key, so it is the client's signed agreement. A provider refuses payment with HTTP 412 without the current fingerprint (it reads it from the registry hourly).
+
 ### 4.4 Pricing
 
 Providers set their own prices in the descriptor. Clients MUST compare the price in the 402 payment requirements with the price in the signed registry entry and MUST refuse to pay if the 402 asks for more.

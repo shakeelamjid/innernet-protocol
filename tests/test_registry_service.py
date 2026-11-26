@@ -24,6 +24,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey 
 from fastapi.testclient import TestClient  # noqa: E402
 
 from innernet2.irm_registry import LOGIN_DOMAIN, sign_descriptor, verify_registry  # noqa: E402
+from innernet2.registry_service.terms import current as current_terms  # noqa: E402
 from innernet2.mailbox_e2ee import canonical  # noqa: E402
 from innernet2.registry_service import admin, chain, probe  # noqa: E402
 from innernet2.registry_service.app import create_app  # noqa: E402
@@ -145,7 +146,8 @@ def provider_record(key: Ed25519PrivateKey, payto: str = "0x" + "ab" * 20, netwo
              "services": ["STO-1", "CMP-1"], "payto": {network: payto},
              "prices": {"STO-1": {"asset": "USDC", "unit": "GiB-day", "amount": "0.0010"},
                         "CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.0200"}},
-             "limits": {"STO-1": {"max_storage_gib": 200}, "CMP-1": {"max_cpus": 4, "max_memory_mib": 2048}}}
+             "limits": {"STO-1": {"max_storage_gib": 200}, "CMP-1": {"max_cpus": 4, "max_memory_mib": 2048}},
+             "terms": current_terms("provider")["sha256"]}
     return sign_descriptor(entry, key)
 
 
@@ -200,6 +202,16 @@ def test_apply_rejections(env):
     rec = provider_record(key)
     rec["payload"]["provider"]["prices"]["STO-1"]["amount"] = "0.0001"
     assert client.post(P + "/v1/apply", json=rec).status_code == 422           # signature no longer matches
+    # The provider must have agreed to the current provider terms (their SHA-256 is signed into the listing).
+    entry = dict(provider_record(key)["payload"]["provider"])
+    for terms_value in (None, "00" * 32):
+        e = {k: v for k, v in entry.items() if k != "terms"} if terms_value is None else dict(entry, terms=terms_value)
+        r = client.post(P + "/v1/apply", json=sign_descriptor(e, key))
+        assert r.status_code == 422 and "provider terms" in r.json()["detail"]
+    t = client.get(P + "/v1/terms").json()
+    assert set(t) == {"provider", "client"} and t["provider"]["sha256"] == current_terms("provider")["sha256"]
+    assert "Acceptable use" in t["client"]["text"] and client.get(P + "/terms").status_code == 200
+    assert client.get(P + "/v1/config").json()["terms"]["client"]["sha256"] == t["client"]["sha256"]
     mainnet = provider_record(key, network="eip155:8453")
     r = client.post(P + "/v1/apply", json=mainnet)
     assert r.status_code == 422 and "not accepted yet" in r.json()["detail"]
@@ -408,7 +420,7 @@ def test_go_cli_against_live_registry(tmp_path):
             assert r.returncode == 0, r.stderr
             return r.stdout
         cli("init", "--yes", "--name", "go-box", "--region", "eu-central", "--host", "node.example.test",
-            "--storage-gib", "50", "--compute")
+            "--storage-gib", "50", "--compute", "--accept-terms")
         cli("wallet", "set", "0x" + "9a" * 20)
         assert "Application received" in cli("apply")
         out = cli("status")
@@ -567,7 +579,8 @@ def test_claim_and_setup_api(env):
     assert setup["detected"]["host"] == "203.0.113.7" and setup["fee_bps"] == 250
     offer = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_gib": 100,
              "relay_gib": 0, "compute": True, "cpus": 4, "memory_mib": 2048,
-             "prices": {"STO-1": "0.0012", "CMP-1": "0.02"}, "network": SEPOLIA, "payout": "0x" + "ab" * 20}
+             "prices": {"STO-1": "0.0012", "CMP-1": "0.02"}, "network": SEPOLIA, "payout": "0x" + "ab" * 20,
+             "terms": current_terms("provider")["sha256"]}
     bad = dict(offer, name="Bad Name!")
     assert client.post(P + "/api/setup", json=bad, headers=H).status_code == 422
     assert client.post(P + "/api/setup", json=dict(offer, storage_gib=0, compute=False), headers=H).status_code == 422
@@ -639,7 +652,8 @@ def test_go_start_web_setup_end_to_end(tmp_path):
         payout = "0x" + "c3" * 20
         offer = {"name": det["name"], "region": det["region"], "host": "node.example.test", "port": offer_port,
                  "storage_gib": 10, "relay_gib": 0, "compute": False, "cpus": 1, "memory_mib": 512,
-                 "prices": {"STO-1": "0.0015"}, "network": SEPOLIA, "payout": payout}
+                 "prices": {"STO-1": "0.0015"}, "network": SEPOLIA, "payout": payout,
+                 "terms": current_terms("provider")["sha256"]}
         assert web.post(P + "/api/setup", json=offer).status_code == 200
         rest, _ = proc.communicate("y\nn\n", timeout=60)              # confirm on the machine, skip backup
         assert proc.returncode == 0, out + rest

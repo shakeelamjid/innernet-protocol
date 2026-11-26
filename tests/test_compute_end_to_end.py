@@ -23,7 +23,7 @@ from concurrent.futures import ThreadPoolExecutor
 from innernet2.irm_client import Provider, ProviderBusy, ProviderError
 from innernet2.irm_registry import verify_descriptor
 
-from tests.test_irm_end_to_end import GO, ROOT, SEPOLIA, FakeChain, free_port
+from tests.test_irm_end_to_end import CLIENT_TERMS, GO, ROOT, SEPOLIA, FakeChain, free_port
 
 pytestmark = pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
 
@@ -85,6 +85,7 @@ def compute(built, tmp_path):
     chain = FakeChain()
     home, port = tmp_path / "p", free_port()
     env = {**os.environ, "INNERNET_HOME": str(home), "INNERNET_RPC": chain.url, "INNERNET_TEST_HTTP": "1",
+           "INNERNET_CLIENT_TERMS": CLIENT_TERMS,
            "INNERNET_LLAMA_SERVER": str(built / "llama-server"), "INNERNET_NO_PRESENCE": "1",
            "INNERNET_TEST_GPUS": json.dumps([{"vendor": "NVIDIA", "model": "NVIDIA L4", "vram_mib": 23034, "api": "cuda"}])}
     run = lambda *a: subprocess.run([str(built / "innernet-provider"), *a], env=env, check=True,  # noqa: E731
@@ -103,7 +104,7 @@ def compute(built, tmp_path):
                 break
         except httpx.HTTPError:
             time.sleep(0.05)
-    yield Provider(entry, Ed25519PrivateKey.generate()), entry, chain, built
+    yield Provider(entry, Ed25519PrivateKey.generate(), terms=CLIENT_TERMS), entry, chain, built
     proc.kill()
     chain.server.shutdown()
 
@@ -166,7 +167,7 @@ def test_gpu_session_with_clients_own_model(compute):
     assert Decimal(p.balance()) == Decimal("2") - Decimal(r["cost"])
     with pytest.raises(ProviderError, match="not ready"):
         p.gpu_chat(sid, [{"role": "user", "content": "again"}])
-    other = Provider(entry, Ed25519PrivateKey.generate())
+    other = Provider(entry, Ed25519PrivateKey.generate(), terms=CLIENT_TERMS)
     with pytest.raises(ProviderError, match="no such session"):
         other.gpu_status(sid)
     files.server.shutdown()
@@ -188,7 +189,7 @@ def test_many_clients_at_once_fair_and_bounded(compute):
     wasm = (built / "job.wasm").read_bytes()
     files = Files({"job.wasm": wasm})
     url, sha = files.url + "/job.wasm", hashlib.sha256(wasm).hexdigest()
-    a, b, c = (Provider(entry, Ed25519PrivateKey.generate()) for _ in range(3))
+    a, b, c = (Provider(entry, Ed25519PrivateKey.generate(), terms=CLIENT_TERMS) for _ in range(3))
     for cl in (a, b, c):
         cl.credit(chain.pay(SEPOLIA, entry["payto"][SEPOLIA], 1_000_000))
     a.run_job(wasm_url=url, wasm_sha256=sha)                       # module cached before timing
@@ -215,7 +216,7 @@ def test_second_gpu_session_waits_for_the_gpu(compute):
     model = os.urandom(200_000)
     files = Files({"m.gguf": model})
     sha = hashlib.sha256(model).hexdigest()
-    a, b = Provider(entry, Ed25519PrivateKey.generate()), Provider(entry, Ed25519PrivateKey.generate())
+    a, b = Provider(entry, Ed25519PrivateKey.generate(), terms=CLIENT_TERMS), Provider(entry, Ed25519PrivateKey.generate(), terms=CLIENT_TERMS)
     for cl in (a, b):
         cl.credit(chain.pay(SEPOLIA, entry["payto"][SEPOLIA], 1_000_000))
     s1 = a.gpu_start(files.url + "/m.gguf", sha, max_seconds=120)

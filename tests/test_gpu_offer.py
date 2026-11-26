@@ -4,10 +4,11 @@ import pytest
 from innernet2.bulk_v080 import BulkError
 from innernet2 import irm_registry as reg
 from innernet2.registry_service import offer as offers
+from innernet2.registry_service.terms import current as current_terms
 
 NET = "eip155:84532"
 BASE = {"name": "gpu-box", "region": "asia-south", "host": "203.0.113.9", "port": 9443, "storage_gib": 0,
-        "network": NET, "payout": "0x" + "12" * 20}
+        "network": NET, "payout": "0x" + "12" * 20, "terms": current_terms("provider")["sha256"]}
 L4 = {"vendor": "NVIDIA", "model": "NVIDIA L4", "vram_mib": 23034, "api": "cuda", "driver": "550.54.14"}
 INTEL = {"vendor": "Intel", "model": "Intel UHD Graphics 770", "api": "none"}
 

@@ -56,6 +56,7 @@ type Config struct {
 	GPUModel   string            `json:"gpu_model,omitempty"`
 	GPUAPI     string            `json:"gpu_api,omitempty"`
 	GPUVRAM    int               `json:"gpu_vram_mib,omitempty"`
+	TermsSHA   string            `json:"terms_sha256,omitempty"`        // provider terms agreed to
 	ReserveMiB int               `json:"reserve_memory_mib,omitempty"`  // memory compute never uses (for the owner)
 	PerClient  int               `json:"max_jobs_per_client,omitempty"` // running CPU jobs + GPU sessions per client
 	Prices     map[string]string `json:"prices_usdc"`
@@ -252,6 +253,9 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	}
 	if hardware != nil {
 		entry["hardware"] = hardware
+	}
+	if c.TermsSHA != "" {
+		entry["terms"] = c.TermsSHA
 	}
 	if av, err := availabilityEntry(c.Hours, orDefault(c.TZ, "UTC")); err == nil && av != nil {
 		entry["availability"] = av

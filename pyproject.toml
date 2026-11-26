@@ -29,7 +29,7 @@ innernet-client = "innernet2.irm_client:main"
 packages = ["innernet2", "innernet2.registry_service"]
 
 [tool.setuptools.package-data]
-"innernet2.registry_service" = ["static/*"]
+"innernet2.registry_service" = ["static/*", "terms/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

@@ -59,6 +59,8 @@ func main() {
 		err = cmdRelay(args)
 	case "update":
 		err = cmdUpdate(args)
+	case "terms":
+		err = cmdTerms(args)
 	case "st81-echo", "st81-ping":
 		err = cmdST81Debug(cmd, args)
 	case "uninstall":
@@ -113,6 +115,7 @@ Registry
   status [--watch]     one screen: listing, service, online, address, hours, uptime, earnings
   login                get a one-time link to the web dashboard (add a passkey there)
   passkeys [remove N]  list the passkeys that open your dashboard; remove a lost one
+  terms [accept]       show the provider and client terms; agree to the current provider terms
 
 Other
   update [--check]     install the newest release (start and serve also update by themselves;
@@ -206,6 +209,7 @@ func cmdInit(args []string) error {
 		fs.String("price-relay", c.Prices["RLY-1"], "USDC per GiB"),
 		fs.String("price-compute", c.Prices["CMP-1"], "USDC per CPU-hour")
 	gpuN := fs.Int("gpus", 0, "GPUs to offer (0 = none); the model is detected")
+	acceptTerms := fs.Bool("accept-terms", false, "agree to the current provider terms (read them first: innernet-provider terms)")
 	reserveGiB := fs.Int("reserve-gib", -1, "memory compute never uses, kept for you (default 4, servers 1)")
 	fs.IntVar(&c.PerClient, "per-client", 2, "CPU jobs and GPU sessions one client may run at once")
 	pg := fs.String("price-gpu", c.Prices["GPU-1"], "USDC per GPU-hour")
@@ -217,6 +221,13 @@ func cmdInit(args []string) error {
 		return errors.New("already set up here; use --force to redo the setup (your key is kept)")
 	}
 	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc, "GPU-1": *pg}
+	if *acceptTerms {
+		if docs, err := fetchTerms(registryURL(c)); err == nil {
+			c.TermsSHA = docs["provider"].SHA256
+		} else {
+			return fmt.Errorf("could not read the provider terms: %v", err)
+		}
+	}
 	if *reserveGiB >= 0 {
 		c.ReserveMiB = max(1, *reserveGiB<<10)
 	}

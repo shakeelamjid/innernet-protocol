@@ -155,6 +155,7 @@ type webOffer struct {
 	GPU       bool              `json:"gpu"`
 	GPUs      int               `json:"gpus"`
 	Reserve   *int              `json:"reserve_gib"`
+	Terms     string            `json:"terms"`
 	PerClient int               `json:"per_client"`
 	Prices    map[string]string `json:"prices"`
 	Network   string            `json:"network"`
@@ -255,6 +256,7 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		}
 	}
 	c.PerClient = offer.PerClient
+	c.TermsSHA = offer.Terms // agreed on the website; the registry checked it is the current version
 	if err := c.validate(true); err != nil {
 		return fmt.Errorf("the offer from the website is not valid: %v", err)
 	}
@@ -355,6 +357,11 @@ func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wall
 	}
 	c.Created = time.Now().UTC().Format(time.RFC3339)
 	fmt.Println()
+	sha, err := askTerms(reg, yes)
+	if err != nil {
+		return err
+	}
+	c.TermsSHA = sha
 	printOffer(c)
 	if !yes && !askYes("Sign this offer and apply", true) {
 		return errors.New("cancelled; your answers are saved, nothing was applied")

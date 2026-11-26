@@ -25,7 +25,7 @@ from webauthn.helpers.structs import (AuthenticatorSelectionCriteria, PublicKeyC
 from ..bulk_v080 import BulkError
 from .. import irm_registry as reg
 from ..irm_registry import make_login_challenge, sign_registry, verify_connect, verify_descriptor, verify_login
-from . import presence, tunnel
+from . import presence, terms, tunnel
 from . import chain, offer as offers, probe
 from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC, Settings
 from .store import Store, token_hash
@@ -261,6 +261,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         record = await body_json(request)
         entry = verify_descriptor(record)
         pid = entry["id"]
+        if entry.get("terms") != terms.current("provider")["sha256"]:
+            raise HTTPException(422, "agree to the current provider terms first: run innernet-provider start "
+                                     "(or innernet-provider terms accept), then apply again")
         for network, address in entry["payto"].items():
             if network not in settings.fee_payto:
                 raise HTTPException(422, f"payments on {network} are not accepted yet; use Base Sepolia (eip155:84532)")
@@ -556,6 +559,14 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         store.x("UPDATE claims SET status='done' WHERE code_hash=?", (c["code_hash"],))
         return {"ok": True}
 
+    @app.get(P + "/v1/terms")
+    def terms_all():
+        return {k: terms.current(k) for k in terms.KINDS}
+
+    @app.get(P + "/terms")
+    def terms_page():
+        return page("terms.html")
+
     @app.get(P + "/v1/config")
     def public_config():
         """Public settings the payout page and clients need. Contains no secrets."""
@@ -566,7 +577,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                          "explorer_tx": EXPLORER_TX.get(net, ""),
                          "explorer_address": EXPLORER_TX.get(net, "").replace("/tx/", "/address/")})
         host = settings.origin.split("://", 1)[-1].split("/")[0]
-        return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays,
+        return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays, "terms": terms.summary(),
                 "tunnel": {"url": f"{settings.origin}{P}/v1/tunnel", "endpoint": {"host": host, "port": 443},
                            "public": f"{settings.origin}{P}/t/"}}
 

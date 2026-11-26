@@ -145,7 +145,7 @@ def validate_gpus(gpus) -> None:
 
 def _validate_provider(entry: dict, *, registry: bool) -> None:
     required = {"id", "name", "region", "endpoints", "services", "payto", "prices"}
-    optional = {"limits", "availability", "class", "hardware"} | ({"listed_at", "reputation"} if registry else set())
+    optional = {"limits", "availability", "class", "hardware", "terms"} | ({"listed_at", "reputation"} if registry else set())
     _exact_keys(entry, required, optional, "provider entry")
     if not isinstance(entry["id"], str) or not _HEX32.match(entry["id"]):
         raise BulkError("invalid provider id")
@@ -187,6 +187,8 @@ def _validate_provider(entry: dict, *, registry: bool) -> None:
                 if not isinstance(k, str) or not _UNIT.match(k.replace("_", "-")):
                     raise BulkError("invalid provider limit name")
                 _int(v, 0, 2**53, "provider limit value")
+    if "terms" in entry and (not isinstance(entry["terms"], str) or not re.match(r"^[0-9a-f]{64}$", entry["terms"])):
+        raise BulkError("terms: the SHA-256 of the provider terms the provider agreed to")
     if "hardware" in entry:
         validate_hardware(entry["hardware"])
     if ("GPU-1" in services) != ("hardware" in entry and "gpu_model" in entry["hardware"]):
@@ -375,7 +377,12 @@ def sign_ticket(fields: dict, provider_key: Ed25519PrivateKey) -> dict:
 
 def _validate_ticket(payload: dict) -> None:
     _exact_keys(payload, {"version", "provider", "client", "service", "lease", "units", "unit",
-                          "payment_tx", "expires_at"}, label="service ticket")
+                          "payment_tx", "expires_at"}, {"held", "released", "terms"}, label="service ticket")
+    for k in ("held", "released"):
+        if k in payload:
+            _int(payload[k], 0, 2**53, f"ticket {k}")
+    if "terms" in payload and (not isinstance(payload["terms"], str) or len(payload["terms"]) > 64):
+        raise BulkError("invalid ticket terms")
     if payload["version"] != TICKET_VERSION:
         raise BulkError("unsupported ticket version")
     for k in ("provider", "client"):

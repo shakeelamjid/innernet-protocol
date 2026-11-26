@@ -87,6 +87,9 @@ def load_identity(home: Path) -> Ed25519PrivateKey:
 
 # ---- talking to one provider ------------------------------------------------
 
+HOLDBACK_BPS = 2000   # clients hold back 20 % of each storage payment until the next proof passes
+
+
 class ProviderError(Exception):
     pass
 
@@ -128,6 +131,7 @@ class Provider:
     key: Ed25519PrivateKey
     timeout: float = 10.0
     last_transport: str = ""
+    terms: str = ""                  # SHA-256 of the client terms the client agreed to (sent with payments)
     route: dict | None = None        # live presence: {"path", "host", "port", "relay_key"?, "http_base"?}
 
     @property
@@ -247,8 +251,8 @@ class Provider:
         body = json.dumps({"object": obj, "index": index, "block": block}).encode()
         return self._json(self._request("POST", f"/sto/v1/leases/{lease}/challenge", body))
 
-    def pay(self, lease: str, units: str, tx: str) -> dict:
-        body = json.dumps({"units": units, "tx": tx}).encode()
+    def pay(self, lease: str, units: str, tx: str, held: int = 0, released: int = 0) -> dict:
+        body = json.dumps({"units": units, "tx": tx, "terms": self.terms, "held": held, "released": released}).encode()
         return self._json(self._request("POST", f"/sto/v1/leases/{lease}/pay", body))
 
     def delete(self, lease: str) -> None:
@@ -265,7 +269,7 @@ class Provider:
 
     def credit(self, tx: str) -> dict:
         """Turn a USDC payment to this provider's payout contract into credit on this provider."""
-        return self._json(self._request("POST", "/cmp/v1/credit", json.dumps({"tx": tx}).encode()))
+        return self._json(self._request("POST", "/cmp/v1/credit", json.dumps({"tx": tx, "terms": self.terms}).encode()))
 
     def balance(self) -> str:
         return self._json(self._request("GET", "/cmp/v1/balance"))["balance"]
@@ -345,7 +349,7 @@ Payer = Callable[[str, str, int], str]   # (network, payto, amount in USDC base 
 class Client:
     def __init__(self, home: Path | None = None, *, registry_doc: dict | None = None, pinned: list[bytes] | None = None,
                  registry_url: str | None = None, now: Callable[[], float] = time.time,
-                 presence_url: str | None = None):
+                 presence_url: str | None = None, accept_terms: str | None = None):
         self.home = Path(home or state_home())
         self.home.mkdir(parents=True, exist_ok=True, mode=0o700)
         self.key = load_identity(self.home)
@@ -355,6 +359,8 @@ class Client:
         self.presence_url = presence_url
         self._routes: dict[str, tuple[float, dict | None]] = {}
         self._doc = registry_doc
+        # The client terms this user agreed to (their SHA-256, from /registry/v1/terms). Payments carry it.
+        self.terms = accept_terms or ""
 
     # registry
     def providers(self) -> list[dict]:
@@ -382,7 +388,13 @@ class Client:
             _private(p, json.dumps(seen).encode())
 
     def provider(self, entry: dict) -> Provider:
-        return Provider(entry, self.key, route=self.route(entry["id"]))
+        return Provider(entry, self.key, route=self.route(entry["id"]), terms=self.terms)
+
+    def client_terms(self) -> dict:
+        """The current client terms from the registry: read them, then pass their sha256 as accept_terms."""
+        if not self.registry_url:
+            raise BulkError("no registry configured")
+        return httpx.get(self.registry_url.rstrip("/") + "/terms", timeout=20).json()["client"]
 
     def compute_providers(self, service: str = "CMP-1") -> list[dict]:
         """Providers offering CPU (CMP-1) or GPU (GPU-1) time, those with free capacity right now first,
@@ -592,14 +604,21 @@ class Client:
             if h["status"] != "ok" or h["last_check"] is None or h["last_check"] // EPOCH != epoch:
                 out[_key(h)] = "not paid: no passing check this epoch"
                 continue
+            if not self.terms:
+                raise BulkError("agree to the client terms first: Client(accept_terms=<sha256 from client_terms()>)")
             amount = int((units * Decimal(h["price"]) * 1_000_000).to_integral_value(rounding=ROUND_CEILING))
             amount = max(amount, 1)
-            tx = payer(h["network"], h["payto"], amount)
-            ticket = self.provider(h["entry"]).pay(h["lease"], format(units, "f"), tx)
+            # Holdback: keep 20 % of this period until the next proof passes; release last period's now.
+            held = amount * HOLDBACK_BPS // 10000
+            released = h.get("held", 0)
+            pay_now = amount - held + released
+            tx = payer(h["network"], h["payto"], pay_now)
+            ticket = self.provider(h["entry"]).pay(h["lease"], format(units, "f"), tx, held=held, released=released)
             verify_ticket(ticket, bytes.fromhex(h["provider"]), now=int(self.now()))
+            h["held"] = held
             h["paid_epochs"].append(epoch)
             h["tickets"].append(ticket)
-            out[_key(h)] = f"paid {amount} base units, ticket verified"
+            out[_key(h)] = f"paid {pay_now} base units ({held} held back until the next proof), ticket verified"
         self.save(rec)
         return out
 
@@ -629,7 +648,7 @@ class Client:
             new = self._place_slot(candidates, view, h["slot"], rebuilt[h["slot"]], avoid=failing)
             rec["history"] = view["history"]
             if new is None:
-                changes.append({"slot": h["slot"], "replaced": h["provider"], "with": None})
+                changes.append({"slot": h["slot"], "replaced": h["provider"], "with": None, "held_kept": h.get("held", 0)})
                 continue
             try:
                 self.provider(h["entry"]).delete(h["lease"])     # best effort; the old provider may be gone
@@ -638,7 +657,8 @@ class Client:
             rec["holders"][rec["holders"].index(h)] = new
             rec["history"].append({"time": now, "event": "repaired", "provider": h["provider"], "slot": h["slot"],
                                    "detail": new["provider"]})
-            changes.append({"slot": h["slot"], "replaced": h["provider"], "with": new["provider"]})
+            # The failed provider's held-back amount is never released: it stays with the client for the repair.
+            changes.append({"slot": h["slot"], "replaced": h["provider"], "with": new["provider"], "held_kept": h.get("held", 0)})
         self.save(rec)
         return changes
 

@@ -21,6 +21,9 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 
 from innernet2.irm_client import Client, Provider, ProviderError
 from innernet2.irm_registry import sign_registry, verify_descriptor, verify_ticket
+from innernet2.registry_service import terms as _terms
+
+CLIENT_TERMS = _terms.current("client")["sha256"]
 
 GO = shutil.which("go")
 pytestmark = pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
@@ -88,7 +91,7 @@ def network(binary, tmp_path):
     for i, region in enumerate(regions):
         home = tmp_path / f"p{i}"
         port = free_port()
-        env = {**os.environ, "INNERNET_HOME": str(home), "INNERNET_RPC": chain.url}
+        env = {**os.environ, "INNERNET_HOME": str(home), "INNERNET_RPC": chain.url, "INNERNET_CLIENT_TERMS": CLIENT_TERMS}
         run = lambda *a: subprocess.run([str(binary), *a], env=env, check=True, capture_output=True, text=True)  # noqa: E731
         run("init", "--yes", "--name", f"p{i}", "--region", region, "--host", "127.0.0.1", "--port", str(port),
             "--storage-gib", "1", "--price-storage", "0.0020")
@@ -109,7 +112,8 @@ def network(binary, tmp_path):
     now = int(time.time())
     doc = sign_registry({"version": "REG-1", "sequence": now, "issued_at": now, "expires_at": now + 3600, "fee_bps": 250,
                          "fee_payto": {SEPOLIA: FEE}, "providers": providers}, reg_key, now=now)
-    client = Client(tmp_path / "client", registry_doc=doc, pinned=[reg_key.public_key().public_bytes_raw()])
+    client = Client(tmp_path / "client", registry_doc=doc, pinned=[reg_key.public_key().public_bytes_raw()],
+                    accept_terms=CLIENT_TERMS)
     yield client, providers, procs, chain, tmp_path
     for p in procs:
         p.kill()
@@ -232,6 +236,46 @@ def test_provider_rejects_wrong_owner_replay_and_reused_payment(network):
     url = owner.base + f"/sto/v1/leases/{r['lease']}/objects/{rec['object']}/chunks/0"
     assert httpx.get(url, headers=headers).status_code == 200
     assert httpx.get(url, headers=headers).status_code == 401
+
+
+def test_payments_need_client_terms_and_follow_the_holdback(network):
+    client, providers, procs, chain, tmp = network
+    rec = client.put(os.urandom(5000), "terms")
+    r = rec["holders"][0]
+    owner = client.provider(r["entry"])
+    # price 0.0020 per GiB-day: 1000 GiB-days = 2 USDC due; at most 20 % may be held back
+    no_terms = Provider(r["entry"], client.key)
+    with pytest.raises(ProviderError, match="client terms"):
+        no_terms.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 2_000_000))
+    with pytest.raises(ProviderError, match="at most 400000"):
+        owner.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 1_500_000), held=500_000)
+    t1 = owner.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 1_600_000), held=400_000)
+    p1 = verify_ticket(t1, bytes.fromhex(r["provider"]))
+    assert p1["held"] == 400_000 and p1["released"] == 0 and p1["terms"] == CLIENT_TERMS
+    # The next period must release what was held back last time.
+    with pytest.raises(ProviderError, match="release the 400000"):
+        owner.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 2_000_000), held=400_000)
+    with pytest.raises(ProviderError, match="too small"):
+        owner.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 1_600_000), held=400_000, released=400_000)
+    t2 = owner.pay(r["lease"], "1000", chain.pay(SEPOLIA, r["payto"], 2_000_000), held=400_000, released=400_000)
+    assert verify_ticket(t2, bytes.fromhex(r["provider"]))["released"] == 400_000
+
+
+def test_client_holds_back_and_keeps_it_when_a_provider_fails(network):
+    client, providers, procs, chain, tmp = network
+    rec = client.put(os.urandom(300_000), "holdback")
+    client.check(rec["object"])
+    client.pay(rec["object"], chain.pay, epoch=int(client.now() // 86400))
+    rec = client.load(rec["object"])
+    assert all(h["held"] == h["tickets"][-1]["payload"]["held"] for h in rec["holders"])
+    victim = rec["holders"][0]
+    idx = next(i for i, p in enumerate(providers) if p["id"] == victim["provider"])
+    procs[idx].kill()
+    procs[idx].wait()
+    client.check(rec["object"])
+    changes = client.repair(rec["object"], force=True)
+    kept = [c for c in changes if c["replaced"] == victim["provider"]]
+    assert kept and all(c["held_kept"] == victim["held"] for c in kept)
 
 
 def test_st81_is_used_first_and_http_is_the_fallback(network, monkeypatch):
