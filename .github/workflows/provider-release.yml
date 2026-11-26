@@ -1,7 +1,12 @@
 name: provider-release
 
+# A release is made by itself when provider/LATEST names a version that has no release yet:
+# bump provider/LATEST (e.g. provider-v0.4.2) in the same upload as the provider changes.
+# Installed providers then update themselves (start, and serve every 6 hours).
 on:
   push:
+    branches: [main]
+    paths: ["provider/**"]
     tags: ["provider-v*"]
   workflow_dispatch:
 
@@ -13,19 +18,37 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - name: Which release
+        id: rel
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eu
+          case "$GITHUB_REF" in
+            refs/tags/provider-v*) TAG="$GITHUB_REF_NAME"; NEW=yes ;;
+            *) TAG=$(tr -d ' \r\n' < provider/LATEST)
+               echo "$TAG" | grep -Eq '^provider-v[0-9]+\.[0-9]+\.[0-9]+$' || { echo "bad provider/LATEST: $TAG"; exit 1; }
+               if gh release view "$TAG" -R "$GITHUB_REPOSITORY" >/dev/null 2>&1; then NEW=no; else NEW=yes; fi ;;
+          esac
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"; echo "new=$NEW" >> "$GITHUB_OUTPUT"
+          echo "release $TAG, build: $NEW"
       - uses: actions/setup-go@v5
+        if: steps.rel.outputs.new == 'yes'
         with:
           go-version: "1.23"
       - name: Test
+        if: steps.rel.outputs.new == 'yes'
         working-directory: provider
         run: go test ./...
       - name: Build all systems
+        if: steps.rel.outputs.new == 'yes'
         working-directory: provider
         env:
           CGO_ENABLED: "0"
         run: |
           set -eu
-          VERSION="${GITHUB_REF_NAME#provider-v}"
+          TAG="${{ steps.rel.outputs.tag }}"
+          VERSION="${TAG#provider-v}"
           mkdir -p "$RUNNER_TEMP/dist"
           for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do
             os="${target%/*}"; arch="${target#*/}"
@@ -36,11 +59,15 @@ jobs:
           cp install.sh install.ps1 "$RUNNER_TEMP/dist/"
           cd "$RUNNER_TEMP/dist" && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/provider-v')
+        if: steps.rel.outputs.new == 'yes'
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.rel.outputs.tag }}
         run: |
-          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 && exec gh release upload "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* --clobber; gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/dist/* \
-            --title "innernet-provider ${GITHUB_REF_NAME#provider-v}" \
-            --notes "IRM-1 draft provider CLI (testnet). Verify downloads against SHA256SUMS." \
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            exec gh release upload "$TAG" "$RUNNER_TEMP"/dist/* --clobber
+          fi
+          gh release create "$TAG" "$RUNNER_TEMP"/dist/* --target "$GITHUB_SHA" \
+            --title "innernet-provider ${TAG#provider-v}" \
+            --notes "IRM-1 draft provider CLI (testnet). Verify downloads against SHA256SUMS. Installed providers update themselves." \
             --prerelease
