@@ -27,6 +27,7 @@ The object key and the record of where every shard lives stay on this machine
 from __future__ import annotations
 
 import argparse
+import base64
 import hashlib
 import json
 import math
@@ -51,7 +52,7 @@ from . import codec
 from . import rly0
 from . import stream_v080 as st81
 from .crypto import decrypt_chunk, deinterleave, derive, encrypt_chunk, interleave, new_root
-from .irm_registry import verify_presence, verify_registry, verify_ticket
+from .irm_registry import verify_presence, verify_registry, verify_ticket, verify_usage
 
 CHUNK = 64 * 1024
 REQUEST_DOMAIN = b"INNERnet/STO-1/request\x00"
@@ -90,6 +91,14 @@ class ProviderError(Exception):
     pass
 
 
+class ProviderBusy(ProviderError):
+    """The provider is full right now (HTTP 503); try another provider or again after retry_after seconds."""
+
+    def __init__(self, msg: str, retry_after: int = 10):
+        super().__init__(msg)
+        self.retry_after = retry_after
+
+
 class _Reply:
     """What an ST81 answer looks like to the rest of the client (same shape as an HTTP reply)."""
 
@@ -102,7 +111,7 @@ class _Reply:
 
 
 # One ST81 session per provider address and client key, reused across requests.
-_SESSIONS: dict[tuple, "st81.Session"] = {}
+_SESSIONS: dict[tuple, list] = {}         # idle sessions per provider address and client key
 _ST81_DOWN: dict[tuple, float] = {}       # address -> time until which we use HTTP only
 _LOCK = threading.Lock()
 
@@ -138,7 +147,7 @@ class Provider:
             return {"host": self.route["host"], "port": self.route["port"]}
         return self.entry["endpoints"][0]
 
-    def _request(self, method: str, path: str, body: bytes = b"") -> httpx.Response:
+    def _request(self, method: str, path: str, body: bytes = b"", timeout: float | None = None) -> httpx.Response:
         ts, nonce = str(int(time.time())), secrets.token_hex(16)
         msg = REQUEST_DOMAIN + f"{method}\n{path}\n{hashlib.sha256(body).hexdigest()}\n{ts}\n{nonce}".encode()
         headers = {"X-Innernet-Client": self.key.public_key().public_bytes_raw().hex(), "X-Innernet-Time": ts,
@@ -148,20 +157,20 @@ class Provider:
             mode = "http"                      # HTTPS tunnel: the HTTP binding is the only way in
         if mode != "http":
             try:
-                r = self._st81(method, path, body, headers)
+                r = self._st81(method, path, body, headers, timeout)
                 self.last_transport = "st81"
                 return r
             except (st81.StreamError, OSError) as exc:
                 if mode == "st81":
                     raise ProviderError(f"{self.entry['name']}: ST81 failed ({exc})") from exc
         try:
-            r = httpx.request(method, self.base + path, content=body, headers=headers, timeout=self.timeout)
+            r = httpx.request(method, self.base + path, content=body, headers=headers, timeout=timeout or self.timeout)
         except httpx.HTTPError as exc:
             raise ProviderError(f"{self.entry['name']}: unreachable ({exc.__class__.__name__})") from exc
         self.last_transport = "http"
         return r
 
-    def _st81(self, method: str, path: str, body: bytes, headers: dict) -> _Reply:
+    def _st81(self, method: str, path: str, body: bytes, headers: dict, timeout: float | None = None) -> _Reply:
         """STO-1 over ST81 (spec 5.9a): the provider's listed key is the pinned server key."""
         ep = self.endpoint
         via = self.route if self.route and self.route["path"] == "relay" else None
@@ -171,34 +180,41 @@ class Provider:
         if _ST81_DOWN.get(addr, 0) > time.monotonic():
             raise st81.StreamError("ST81 recently failed for this provider")
         slot = addr + (self.key.public_key().public_bytes_raw(),)
+        # A pool of sessions per provider: requests in parallel each get their own session, so a long
+        # job never blocks other requests (to this provider or any other).
         with _LOCK:
-            sess = _SESSIONS.get(slot)
-            for attempt in (0, 1):
-                try:
-                    if sess is None and via:
-                        sess = rly0.connect(via["host"], via["port"], bytes.fromhex(via["relay_key"]), bytes.fromhex(self.id),
-                                            self.key, timeout=self.timeout)
-                        _SESSIONS[slot] = sess
-                    if sess is None:
-                        sess = st81.connect(ep["host"], ep["port"], self.key, bytes.fromhex(self.id), timeout=self.timeout)
-                        _SESSIONS[slot] = sess
-                    rid = secrets.randbelow(2**53)
-                    sess.write({"rid": rid, "method": method, "path": path, "headers": headers}, body)
-                    head, data = sess.read()
-                    if head.get("rid") != rid or type(head.get("status")) is not int:
-                        raise st81.StreamError("answer does not match the request")
-                    return _Reply(head["status"], head.get("headers") or {}, data)
-                except (st81.StreamError, OSError):
-                    _SESSIONS.pop(slot, None)
-                    if sess is not None:
-                        try:
-                            sess.sock.close()
-                        except OSError:
-                            pass
-                    sess = None
-                    if attempt == 1:
-                        _ST81_DOWN[addr] = time.monotonic() + 60
-                        raise
+            idle = _SESSIONS.setdefault(slot, [])
+            sess = idle.pop() if idle else None
+        for attempt in (0, 1):
+            try:
+                if sess is None and via:
+                    sess = rly0.connect(via["host"], via["port"], bytes.fromhex(via["relay_key"]), bytes.fromhex(self.id),
+                                        self.key, timeout=self.timeout)
+                if sess is None:
+                    sess = st81.connect(ep["host"], ep["port"], self.key, bytes.fromhex(self.id), timeout=self.timeout)
+                rid = secrets.randbelow(2**53)
+                sess.sock.settimeout(timeout or self.timeout)
+                sess.write({"rid": rid, "method": method, "path": path, "headers": headers}, body)
+                head, data = sess.read()
+                if head.get("rid") != rid or type(head.get("status")) is not int:
+                    raise st81.StreamError("answer does not match the request")
+                with _LOCK:
+                    pool = _SESSIONS.setdefault(slot, [])
+                    if len(pool) < 8:
+                        pool.append(sess)
+                    else:
+                        sess.sock.close()
+                return _Reply(head["status"], head.get("headers") or {}, data)
+            except (st81.StreamError, OSError):
+                if sess is not None:
+                    try:
+                        sess.sock.close()
+                    except OSError:
+                        pass
+                sess = None
+                if attempt == 1:
+                    _ST81_DOWN[addr] = time.monotonic() + 60
+                    raise
 
     def _json(self, r: httpx.Response) -> dict:
         """Verify the provider's signature on a JSON reply; it is our evidence."""
@@ -208,6 +224,12 @@ class Provider:
         except (ValueError, InvalidSignature) as exc:
             raise ProviderError(f"{self.entry['name']}: reply not signed by the listed provider key") from exc
         data = r.json()
+        if r.status_code == 503:
+            try:
+                after = int(r.headers.get("retry-after", "10"))
+            except ValueError:
+                after = 10
+            raise ProviderBusy(f"{self.entry['name']}: {data.get('error', 'busy')}", after)
         if r.status_code >= 400:
             raise ProviderError(f"{self.entry['name']}: {data.get('error', r.status_code)}")
         return data
@@ -231,6 +253,67 @@ class Provider:
 
     def delete(self, lease: str) -> None:
         self._json(self._request("DELETE", f"/sto/v1/leases/{lease}"))
+
+    # ---- compute: the client brings the program or model, the provider the CPU or GPU ----
+
+    @property
+    def _me(self) -> str:
+        return self.key.public_key().public_bytes_raw().hex()
+
+    def _receipt(self, rec: dict) -> dict:
+        return verify_usage(rec, bytes.fromhex(self.id), self._me)
+
+    def credit(self, tx: str) -> dict:
+        """Turn a USDC payment to this provider's payout contract into credit on this provider."""
+        return self._json(self._request("POST", "/cmp/v1/credit", json.dumps({"tx": tx}).encode()))
+
+    def balance(self) -> str:
+        return self._json(self._request("GET", "/cmp/v1/balance"))["balance"]
+
+    def run_job(self, wasm: bytes | None = None, stdin: bytes = b"", args: tuple = (), seed: int = 0,
+                max_seconds: int = 60, wasm_url: str | None = None, wasm_sha256: str | None = None,
+                queue_seconds: int = 30) -> dict:
+        """CMP-1: run a WebAssembly (WASI) program; same program, input and seed give the same output anywhere."""
+        job = {"input": base64.b64encode(stdin).decode(), "args": list(args), "seed": seed, "max_seconds": max_seconds,
+               "queue_seconds": queue_seconds}
+        if wasm is not None:
+            job["wasm"] = base64.b64encode(wasm).decode()
+        else:
+            job["wasm_url"], job["wasm_sha256"] = wasm_url, wasm_sha256
+        out = self._json(self._request("POST", "/cmp/v1/jobs", json.dumps(job).encode(),
+                                        timeout=max_seconds + queue_seconds + 60))
+        receipt = self._receipt(out["receipt"])
+        output = base64.b64decode(out["output"])
+        if receipt["output_sha256"] != hashlib.sha256(output).hexdigest():
+            raise ProviderError(f"{self.entry['name']}: output does not match its receipt")
+        return {"output": output, "exit_code": out["exit_code"], "stderr": out.get("stderr", ""),
+                "seconds": out["seconds"], "error": out.get("error"), "receipt": receipt}
+
+    def gpu_start(self, url: str, sha256: str, max_seconds: int = 3600, context: int = 8192, idle_seconds: int = 900) -> str:
+        """GPU-1: load your own model file (GGUF) on this provider's GPU; billed per GPU-hour while loaded.
+        The session ends by itself after idle_seconds without requests, which stops the charge."""
+        body = json.dumps({"url": url, "sha256": sha256, "max_seconds": max_seconds, "context": context,
+                           "idle_seconds": idle_seconds}).encode()
+        return self._json(self._request("POST", "/gpu/v1/sessions", body))["session"]
+
+    def gpu_status(self, session: str) -> dict:
+        return self._json(self._request("GET", f"/gpu/v1/sessions/{session}"))
+
+    def gpu_wait(self, session: str, timeout: float = 3600, every: float = 2.0) -> dict:
+        end = time.monotonic() + timeout
+        while True:
+            st = self.gpu_status(session)
+            if st["status"] == "ready" or st["status"].startswith(("error", "ended")) or time.monotonic() > end:
+                return st
+            time.sleep(every)
+
+    def gpu_chat(self, session: str, messages: list, **opts) -> dict:
+        body = json.dumps({"messages": messages, **opts}).encode()
+        return self._json(self._request("POST", f"/gpu/v1/sessions/{session}/chat/completions", body, timeout=600))
+
+    def gpu_end(self, session: str) -> dict:
+        out = self._json(self._request("DELETE", f"/gpu/v1/sessions/{session}"))
+        return {"status": out["status"], "receipt": self._receipt(out["receipt"])}
 
 
 # ---- choosing providers -----------------------------------------------------
@@ -301,6 +384,30 @@ class Client:
     def provider(self, entry: dict) -> Provider:
         return Provider(entry, self.key, route=self.route(entry["id"]))
 
+    def compute_providers(self, service: str = "CMP-1") -> list[dict]:
+        """Providers offering CPU (CMP-1) or GPU (GPU-1) time, those with free capacity right now first,
+        then the cheapest. Capacity comes from each provider's own signed presence."""
+        key = "gpu_free" if service == "GPU-1" else "cpu_free"
+        ranked = []
+        for e in self.providers():
+            if service not in e["services"]:
+                continue
+            stats = (self.route(e["id"]) or {}).get("stats") or {}
+            free = stats.get(key, 0) - stats.get("queued", 0)
+            ranked.append((-free, Decimal(e["prices"][service]["amount"]), e))
+        return [e for *_, e in sorted(ranked, key=lambda x: (x[0], x[1]))]
+
+    def run_job(self, wasm: bytes | None = None, **kw) -> dict:
+        """Run a CPU job on the first provider with room; a busy provider passes it to the next.
+        Credit must already be on the provider that runs it (Provider.credit)."""
+        last: Exception | None = None
+        for e in self.compute_providers("CMP-1"):
+            try:
+                return self.provider(e).run_job(wasm, **kw)
+            except ProviderBusy as exc:
+                last = exc
+        raise last or ProviderError("no provider offers CPU time")
+
     def route(self, pid: str) -> dict | None:
         """Where a provider can be reached right now, from its own signed presence record
         (the registry only passes it on). Cached for a minute; None means use the listing."""
@@ -323,6 +430,7 @@ class Client:
                         route["relay_key"] = p["relay_key"]
                     if p["path"] == "tunnel":
                         route["http_base"] = base.rstrip("/").removesuffix("/v1") + f"/t/{pid}"
+                    route["stats"] = p["stats"]
         except (httpx.HTTPError, ValueError, KeyError, BulkError):
             route = None
         self._routes[pid] = (time.monotonic() + 60, route)

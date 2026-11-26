@@ -144,7 +144,7 @@ def provider_record(key: Ed25519PrivateKey, payto: str = "0x" + "ab" * 20, netwo
     entry = {"id": pid, "name": "lahore-box-1", "region": "asia-south", "endpoints": [{"host": host, "port": port}],
              "services": ["STO-1", "CMP-1"], "payto": {network: payto},
              "prices": {"STO-1": {"asset": "USDC", "unit": "GiB-day", "amount": "0.0010"},
-                        "CMP-1": {"asset": "USDC", "unit": "Ginstr", "amount": "0.0100"}},
+                        "CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.0200"}},
              "limits": {"STO-1": {"max_storage_gib": 200}, "CMP-1": {"max_cpus": 4, "max_memory_mib": 2048}}}
     return sign_descriptor(entry, key)
 

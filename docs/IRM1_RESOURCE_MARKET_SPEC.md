@@ -15,7 +15,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 | `STO-1` | Paid storage of OB80-2 pieces, with proof-of-storage challenges | OB80-2, ST81 |
 | `RLY-1` | Paid relaying between peers that cannot connect directly | ST81 |
 | `CMP-1` | Paid compute: deterministic jobs, verified by replication or hardware attestation | OB80-2, UV10 |
-| `GPU-1` | GPU time, priced per GPU-hour (draft: listing only, jobs not yet) | REG-1 |
+| `GPU-1` | GPU time for the client's own model, priced per GPU-hour | REG-1, PAY-1 |
 
 ### 1.1 Principles
 
@@ -340,15 +340,32 @@ Each job states an instruction budget and wall-time limit, and price is per unit
 
 **In `replicate-k` and `spot-check` modes, providers see the job's inputs and outputs in plain form while running it.** Encryption protects data in storage and in transit, not while a normal server computes on it. Only `attested` mode keeps inputs hidden from the provider's operator, and then only as far as the enclave hardware is trustworthy. Clients MUST NOT send confidential data to non-attested compute.
 
-### 7.7 GPU-1: GPU time (draft)
+### 7.7 Compute as raw power: credit, CPU-hours and GPU-hours (draft)
 
-GPU work is its own service because its unit, price and buyers differ from CMP-1: a GPU is rented per **GPU-hour** (`unit: "GPU-hour"`), and prices only compare within a GPU model.
+Providers sell the machine's power; the client brings the program or the model. There is no per-token or per-model pricing: CPU is priced per **CPU-hour** (`CMP-1`, unit `CPU-hour`) and GPU per **GPU-hour** (`GPU-1`, unit `GPU-hour`), both charged per second used. This replaces the earlier per-instruction unit for CMP-1.
 
-- **Detection.** The provider reports every GPU it finds in `REG-1-CONNECT` `detected.gpus`: a list of at most 16 objects with `vendor`, `model`, and optionally `vram_mib`, `cores`, `api` and `driver`. Text fields use letters, digits, space and `()._+/,-`, at most 80 characters. `api` is what jobs can use: `cuda` (NVIDIA with a working driver), `metal` (Apple), `rocm` (AMD with ROCm installed), `oneapi` (Intel) or `none` (display only). On Apple silicon `vram_mib` is the shared memory. Virtual and server-console adapters are left out. Sources: `system_profiler` (macOS), `nvidia-smi`, then `lspci` (Linux), `nvidia-smi`, then `Win32_VideoController` (Windows). Nothing is installed to detect them.
-- **Offer.** Only a GPU whose `api` is not `none` can be offered; the machine offers its GPU with the most memory, up to the number of that model it has. The model comes from the machine's own detection, never from the website.
-- **Descriptor.** A provider listing `GPU-1` MUST carry `hardware` with `gpu_model` (and `gpu_vendor`, `gpu_api`, optionally `gpu_vram_mib`), and only such a provider may carry `gpu_model`; `limits.GPU-1.max_gpus` is the number offered. These are self-described and signed with the descriptor; registry probes and clients' own jobs are what confirm them.
-- **Market.** `/registry/v1/market` adds `by_model` for `GPU-1`.
-- **Status.** Listing only. GPU jobs (container or WebGPU/CUDA runtime, isolation, metering and checking results) are not specified yet; until they are, a GPU-1 listing shows supply and price, and nothing runs on the GPU.
+**Credit.** `POST /cmp/v1/credit {"tx"}`: the client pays USDC to the provider's payout contract (the split contract of section 4.3, so the network fee is taken on-chain as usual) and names the transaction; the provider checks it on-chain, credits the amount once, and refuses the same transaction again. `GET /cmp/v1/balance`. Each job or session first holds its maximum cost, then settles to the actual cost; the rest goes back to the balance. Every request is signed by the client (section 5.9) and may travel over ST81, a relay or the HTTPS tunnel.
+
+**Usage receipts.** Each job or session ends with `{"payload","signature"}`: payload `version: "PAY-1-USAGE"`, `provider`, `client`, `service`, `units`, `unit` (`CPU-second` or `GPU-second`), `cost`, `asset`, `balance`, `at`, plus service fields; signature by the provider key over `"INNERnet/PAY-1/usage-receipt\0" ‖ canonical(payload)`.
+
+**CPU jobs (CMP-1).** `POST /cmp/v1/jobs {"wasm" | "wasm_url"+"wasm_sha256", "input", "args", "seed", "max_seconds" ≤ 300, "max_memory_mib"}`. The program is a WebAssembly WASI command. It gets standard input and arguments, and nothing else: no files, no network, no environment, a fixed wall clock (2026-01-01T00:00:00Z), a monotonic clock that advances by a fixed step per read, and randomness seeded from `seed`. So the same program, input and seed give the same output on any provider; a client checks a provider by running the same job on a second one and comparing `output_sha256`. Memory is capped; a job that runs past `max_seconds` is stopped and charged for the time it ran. Output at most 256 KiB. Modules over 1.5 MiB are fetched by `wasm_url` and kept by hash. The receipt adds `wasm_sha256`, `input_sha256`, `output_sha256`, `seed`, `exit_code`.
+
+**GPU sessions (GPU-1).** `POST /gpu/v1/sessions {"url", "sha256", "max_seconds" ≤ 4 h, "context"}` loads the client's own model file (GGUF, one file, up to 64 GiB) on the provider's GPU with llama.cpp. The provider downloads it, refuses it unless its SHA-256 matches, keeps recently used files (up to 40 GiB) and loads it. `GET /gpu/v1/sessions/{id}` shows `downloading`, `loading`, `ready`, `error: …` or `ended after N s`. `POST /gpu/v1/sessions/{id}/chat/completions` takes an OpenAI-style chat request (no streaming, `max_tokens` ≤ 8192) and returns the model's answer with token counts for information. `DELETE` ends the session and returns the receipt. Billing covers only the time the model is loaded and ready; downloading and loading are free, a failed download or load is refunded. Sessions end by themselves at `max_seconds`. The provider runs one session per GPU it offers.
+
+**What the provider can see.** CPU job input and output, and a GPU session's model file, prompts and answers, are visible to the provider's machine: they cannot be end-to-end encrypted while being computed on. A private model can be copied by the provider. Use providers you trust for private work until confidential-computing hardware is supported.
+
+**GPU detection.** The provider reports its GPUs in `REG-1-CONNECT` `detected.gpus` (at most 16: `vendor`, `model`, optional `vram_mib`, `cores`, `api` of `cuda`/`metal`/`rocm`/`oneapi`/`none`, `driver`; text from letters, digits, space and `()._+/,-`, at most 80 characters). Only a GPU whose `api` is not `none` can be offered. A provider listing `GPU-1` carries `hardware.gpu_model` (with `gpu_vendor`, `gpu_api`, optional `gpu_vram_mib`) and `limits.GPU-1.max_gpus`; the model comes from the machine's own detection, never from the website. `/registry/v1/market` adds `by_model` for `GPU-1`.
+
+**Sharing one machine.** A provider serves many clients at once:
+- Storage requests have their own pool (64 at a time) and never wait for compute.
+- CPU jobs and GPU sessions are admitted against a budget: CPU slots (the CPUs offered), GPUs offered, and memory (the machine's memory minus what the owner keeps, default 4 GiB, 1 GiB on servers). A CPU job counts its `max_memory_mib`; a GPU session counts its model file plus 15 % and its context.
+- Waiting work is served fairly: the client with the fewest running jobs first, then the longest waiting; no backfilling, so a large job is not starved. Each client may run at most `max_jobs_per_client` (default 2) jobs and sessions at once. The line holds at most 32; a CPU job waits `queue_seconds` (0–120, default 30), a GPU session up to 15 minutes in status `waiting for a free GPU`. A full provider answers HTTP 503 with `Retry-After` at once and charges nothing, so the client goes elsewhere.
+- New compute waits while the machine itself has less free memory than half of what the owner keeps (the owner is using it).
+- A GPU session ends after `idle_seconds` (default 900) without requests, which frees the GPU and stops the charge. At most two open sessions per GPU (one running, one downloading or waiting).
+- Before restarting for an update the provider drains: no new compute, running jobs finish (up to 30 minutes), then GPU sessions end with their used time charged.
+- Presence carries live capacity (`cpu_slots`, `cpu_free`, `gpu_slots`, `gpu_free`, `compute_mem_free_mib`, `queued`); clients prefer providers with free capacity, then the lower price.
+
+**Not yet.** General GPU programs (PyTorch, CUDA kernels) need container isolation and are planned for Linux servers with NVIDIA cards; on home Macs and PCs GPU time runs model files only.
 
 ## 8. Security and abuse
 

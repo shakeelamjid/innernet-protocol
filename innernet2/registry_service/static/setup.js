@@ -5,8 +5,17 @@
   let cfg = null, net = null;
 
   function say(id, t, err) { $(id).textContent = t; $(id).classList.toggle('error', !!err); }
+  let machineGiB = 0;
   function sync() {
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = !$(el.getAttribute('data-for')).checked; });
+    const compute = $('cmp-on').checked || (!$('gpu-block').hidden && $('gpu-on').checked);
+    $('share-fields').hidden = $('share-msg').hidden = !compute;
+    if (compute) {
+      const left = machineGiB ? Math.max(0, machineGiB - num('reserve-gib')) : 0;
+      $('share-msg').textContent = 'Several clients can use this machine at once. Storage always goes first; CPU jobs and GPU sessions ' +
+        'share ' + (left ? left + ' GiB of memory' : 'the memory you do not keep') + ', and new work waits while you need the memory yourself. ' +
+        'When it is full, clients are told at once and go to another provider.';
+    }
   }
   function num(id) { const v = parseInt($(id).value, 10); return isNaN(v) ? 0 : v; }
 
@@ -62,16 +71,20 @@
     $('gpu-block').hidden = !g;
     if (g) {
       const same = det.gpus.filter(function (x) { return x.model === g.model; }).length;
-      $('gpu-name').textContent = g.model;
+      $('gpu-name').textContent = gpuLine(g);
       $('gpu-count').max = same;
       $('gpu-count').value = draft && draft.gpu ? draft.gpus : same;
       $('gpu-on').checked = !!(draft && draft.gpu);
       $('gpu-price').value = prices['GPU-1'];
       const m = d.market && d.market['GPU-1'];
       const mm = m && m.by_model && m.by_model[g.model];
-      $('gpu-market').textContent = mm ? 'Others with ' + g.model + ' ask ' + mm.median + ' USDC per GPU-hour (typical ' + mm.low + '–' + mm.high + ', ' + mm.providers + ' listed).'
-        : 'No one has listed a ' + g.model + ' yet, so there is no market price to compare with.';
+      $('gpu-market').textContent = (mm ? 'Others with ' + g.model + ' ask ' + mm.median + ' USDC per GPU-hour (typical ' + mm.low + '–' + mm.high + ', ' + mm.providers + ' listed).'
+        : 'No other ' + g.model + ' is listed yet, so there is no market price to compare with.') +
+        ' A client\'s model is downloaded to this machine the first time it is used (up to 64 GiB; the oldest are removed past 40 GiB).';
     }
+    machineGiB = det.memory_mib ? Math.round(det.memory_mib / 1024) : 0;
+    $('reserve-gib').value = draft && draft.reserve_gib != null ? draft.reserve_gib : (det.class === 'server' ? 1 : 4);
+    $('per-client').value = draft && draft.per_client ? draft.per_client : 2;
     $('sto-price').value = prices['STO-1']; $('rly-price').value = prices['RLY-1']; $('cmp-price').value = prices['CMP-1'];
     $('payout').value = (draft && draft.payout) || (cur && cur.payto && Object.values(cur.payto)[0]) || '';
     $('share-you').textContent = (100 - d.fee_bps / 100) + '%';
@@ -79,7 +92,8 @@
     sync();
   }
 
-  ['sto-on', 'rly-on', 'cmp-on', 'gpu-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
+  ['sto-on', 'rly-on', 'cmp-on', 'gpu-on', 'reserve-gib'].forEach(function (id) { $(id).addEventListener('change', sync); });
+  $('reserve-gib').addEventListener('input', sync);
 
   $('connect').addEventListener('click', async function () {
     if (!net || !net.factory) { say('pay-msg', 'Payout contracts open as soon as the split factory is deployed. Check back shortly.', true); return; }
@@ -100,6 +114,7 @@
       storage_gib: $('sto-on').checked ? num('sto-gib') : 0, relay_gib: $('rly-on').checked ? num('rly-gib') : 0,
       compute: $('cmp-on').checked, cpus: Math.max(1, num('cmp-cpus')), memory_mib: Math.max(64, num('cmp-mem')),
       gpu: !$('gpu-block').hidden && $('gpu-on').checked, gpus: Math.max(1, num('gpu-count')),
+      reserve_gib: Math.max(0, num('reserve-gib')), per_client: Math.min(64, Math.max(1, num('per-client'))),
       prices: { 'STO-1': $('sto-price').value.trim(), 'RLY-1': $('rly-price').value.trim(), 'CMP-1': $('cmp-price').value.trim(),
         'GPU-1': $('gpu-price').value.trim() },
       network: net ? net.caip2 : 'eip155:84532', payout: $('payout').value.trim()

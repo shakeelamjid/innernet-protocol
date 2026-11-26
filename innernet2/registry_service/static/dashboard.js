@@ -2,7 +2,7 @@
 (function () {
   const I = window.Innernet;
   const $ = function (id) { return document.getElementById(id); };
-  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'Compute', 'GPU-1': 'GPU' };
+  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'CPU', 'GPU-1': 'GPU' };
   const STATES = {
     testing: 'Testing: being checked before listing',
     listed: 'Listed: visible to everyone',

@@ -2,6 +2,20 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Compute by the hour: CPU jobs and GPU sessions, prepaid credit
+
+- Providers sell raw power; clients bring the program or model. CPU is priced per CPU-hour (CMP-1 unit changed from instructions), GPU per GPU-hour; both charged per second.
+- Credit: a USDC payment to the payout contract becomes a balance on the provider (`/cmp/v1/credit`, `/cmp/v1/balance`), used once; each job holds its maximum and settles to the real cost; signed PAY-1 usage receipts.
+- CPU jobs (`/cmp/v1/jobs`): WebAssembly (WASI) in wazero with no files, network or environment, fixed clocks and seeded randomness, so results repeat exactly on any provider; memory and time limits; large modules by URL and SHA-256.
+- GPU sessions (`/gpu/v1/sessions`): the client's own GGUF model, downloaded and checked by SHA-256, loaded with llama.cpp on 127.0.0.1; chat requests proxied; billed only while loaded; refunds on failure; cache of recent model files.
+- Python client: `credit`, `balance`, `run_job`, `gpu_start`, `gpu_wait`, `gpu_chat`, `gpu_end`, with receipt checks.
+- HTTPS tunnel forwards `/cmp/` and `/gpu/` with a longer wait; the provider answers tunnel requests in parallel.
+- Setup page: a Compute group (CPU, GPU) and clear checkboxes. Spec 7.7.
+- The provider now uses one external Go module, wazero (pure Go, no dependencies of its own).
+- Sharing one machine: storage has its own pool; CPU jobs and GPU sessions are admitted against CPU, GPU and memory budgets with memory kept for the owner (`--reserve-gib`); fair queue (fewest running first, no backfilling), per-client cap (`--per-client`), bounded line, immediate 503 + Retry-After when full; new work waits while the owner needs the memory; idle GPU sessions end by themselves; updates drain running work first; live capacity in presence; the client prefers providers with free capacity and moves on when one is busy.
+- Client: parallel ST81 sessions per provider instead of one request at a time across all providers.
+- `provider/LATEST` is `provider-v0.5.0`.
+
 ### Provider updates itself; releases publish themselves
 
 - `start` checks for a newer release first and restarts into it; `serve` checks every 6 hours and restarts into a new release (in place on Linux and macOS, so systemd and launchd keep tracking it; on Windows a new process takes over the port). Downloads must match the release's `SHA256SUMS`. New `update [--check]`; `INNERNET_NO_UPDATE=1` turns it off; development builds never update.

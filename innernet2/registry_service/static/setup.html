@@ -54,20 +54,28 @@
               <label>GiB per month<input id="rly-gib" class="field" type="number" min="1"></label>
               <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
             </div>
-            <label class="toggle"><input type="checkbox" id="cmp-on"> <span><strong>Compute</strong> Run small sandboxed jobs.</span></label>
-            <div class="fields" data-for="cmp-on">
-              <label>Max CPUs per job<input id="cmp-cpus" class="field" type="number" min="1"></label>
-              <label>Max memory per job, MiB<input id="cmp-mem" class="field" type="number" min="64"></label>
-              <label>USDC per billion instructions<input id="cmp-price" class="field" inputmode="decimal"></label>
-            </div>
-            <div id="gpu-block" hidden>
-              <label class="toggle"><input type="checkbox" id="gpu-on"> <span><strong>GPU</strong> Rent <span id="gpu-name">your GPU</span> by the hour.</span></label>
-              <div class="fields" data-for="gpu-on">
-                <label>GPUs to offer<input id="gpu-count" class="field" type="number" min="1"></label>
-                <label>USDC per GPU per hour<input id="gpu-price" class="field" inputmode="decimal"></label>
+            <div class="group">
+              <h3>Compute</h3>
+              <p class="note">Clients bring their own programs and models; you rent out the machine's power, by the hour.</p>
+              <label class="toggle"><input type="checkbox" id="cmp-on"> <span><strong>CPU</strong> Clients' jobs run sealed off from your files and network (WebAssembly).</span></label>
+              <div class="fields" data-for="cmp-on">
+                <label>CPUs at once<input id="cmp-cpus" class="field" type="number" min="1"></label>
+                <label>Memory per job, MiB<input id="cmp-mem" class="field" type="number" min="64"></label>
+                <label>USDC per CPU-hour<input id="cmp-price" class="field" inputmode="decimal"></label>
               </div>
-              <p class="msg" data-for="gpu-on">Your GPU is listed with its model, so clients and the market price can see it. Renting GPU time opens when GPU jobs launch; until then nothing runs on it.</p>
-              <p class="msg" id="gpu-market" data-for="gpu-on"></p>
+              <div id="gpu-block" hidden>
+                <label class="toggle"><input type="checkbox" id="gpu-on"> <span><strong>GPU</strong> <span id="gpu-name">Your GPU</span>. Clients run their own model files on it.</span></label>
+                <div class="fields" data-for="gpu-on">
+                  <label>GPUs to offer<input id="gpu-count" class="field" type="number" min="1"></label>
+                  <label>USDC per GPU-hour<input id="gpu-price" class="field" inputmode="decimal"></label>
+                </div>
+                <p class="msg" id="gpu-market" data-for="gpu-on"></p>
+              </div>
+              <div class="fields" id="share-fields" hidden>
+                <label>Memory kept for you, GiB<input id="reserve-gib" class="field" type="number" min="0"></label>
+                <label>Jobs at once per client<input id="per-client" class="field" type="number" min="1" max="64"></label>
+              </div>
+              <p class="msg" id="share-msg" hidden></p>
             </div>
           </div>
         </section>

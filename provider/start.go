@@ -154,6 +154,8 @@ type webOffer struct {
 	MemMiB    int               `json:"memory_mib"`
 	GPU       bool              `json:"gpu"`
 	GPUs      int               `json:"gpus"`
+	Reserve   *int              `json:"reserve_gib"`
+	PerClient int               `json:"per_client"`
 	Prices    map[string]string `json:"prices"`
 	Network   string            `json:"network"`
 	Payout    string            `json:"payout"`
@@ -246,6 +248,13 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		c.PortMap = f.PortMap
 	}
 	c.Relay, c.Tunnel, c.TunnelHost, c.Class, c.TZ = f.Relay, f.Tunnel, f.TunnelHost, f.Class, f.TZ
+	if offer.Reserve != nil && *offer.Reserve >= 0 {
+		c.ReserveMiB = *offer.Reserve << 10
+		if c.ReserveMiB == 0 {
+			c.ReserveMiB = 1 // "keep nothing" (0 would mean the default)
+		}
+	}
+	c.PerClient = offer.PerClient
 	if err := c.validate(true); err != nil {
 		return fmt.Errorf("the offer from the website is not valid: %v", err)
 	}
@@ -436,10 +445,10 @@ func printOffer(c *Config) {
 		rows = append(rows, [2]string{"Bandwidth", fmt.Sprintf("%d GiB/month at %s USDC per GiB", c.RelayCap, c.Prices["RLY-1"])})
 	}
 	if c.Compute {
-		rows = append(rows, [2]string{"Compute", fmt.Sprintf("%d CPUs, %d MiB at %s USDC per billion instr.", c.CPUs, c.MemMiB, c.Prices["CMP-1"])})
+		rows = append(rows, [2]string{"CPU", fmt.Sprintf("%d CPUs, %d MiB at %s USDC per CPU-hour", c.CPUs, c.MemMiB, c.Prices["CMP-1"])})
 	}
 	if c.GPU {
-		rows = append(rows, [2]string{"GPU", fmt.Sprintf("%d × %s at %s USDC per GPU-hour (rentable when GPU jobs launch)", c.GPUs, c.GPUModel, c.Prices["GPU-1"])})
+		rows = append(rows, [2]string{"GPU", fmt.Sprintf("%d × %s at %s USDC per GPU-hour", c.GPUs, c.GPUModel, c.Prices["GPU-1"])})
 	}
 	rows = append(rows, [2]string{"Payout", c.Payout + " (" + c.Network + ")"})
 	box("Offer to sign", rows)

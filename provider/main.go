@@ -199,13 +199,15 @@ func cmdInit(args []string) error {
 	fs.StringVar(&c.Registry, "registry", c.Registry, "registry URL")
 	fs.IntVar(&c.Storage, "storage-gib", 0, "storage to offer in GiB (0 = none)")
 	fs.IntVar(&c.RelayCap, "relay-gib", 0, "relay bandwidth per month in GiB (0 = none)")
-	fs.BoolVar(&c.Compute, "compute", false, "offer sandboxed compute")
+	fs.BoolVar(&c.Compute, "compute", false, "offer CPU jobs (sandboxed WebAssembly)")
 	fs.IntVar(&c.CPUs, "cpus", c.CPUs, "max CPUs for compute jobs")
 	fs.IntVar(&c.MemMiB, "memory-mib", c.MemMiB, "max memory for compute jobs")
 	ps, pr, pc := fs.String("price-storage", c.Prices["STO-1"], "USDC per GiB-day"),
 		fs.String("price-relay", c.Prices["RLY-1"], "USDC per GiB"),
-		fs.String("price-compute", c.Prices["CMP-1"], "USDC per billion instructions")
+		fs.String("price-compute", c.Prices["CMP-1"], "USDC per CPU-hour")
 	gpuN := fs.Int("gpus", 0, "GPUs to offer (0 = none); the model is detected")
+	reserveGiB := fs.Int("reserve-gib", -1, "memory compute never uses, kept for you (default 4, servers 1)")
+	fs.IntVar(&c.PerClient, "per-client", 2, "CPU jobs and GPU sessions one client may run at once")
 	pg := fs.String("price-gpu", c.Prices["GPU-1"], "USDC per GPU-hour")
 	force := fs.Bool("force", false, "overwrite an existing config (the identity key is kept)")
 	if err := fs.Parse(args); err != nil {
@@ -215,6 +217,9 @@ func cmdInit(args []string) error {
 		return errors.New("already set up here; use --force to redo the setup (your key is kept)")
 	}
 	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc, "GPU-1": *pg}
+	if *reserveGiB >= 0 {
+		c.ReserveMiB = max(1, *reserveGiB<<10)
+	}
 	if *gpuN > 0 {
 		if err := c.setGPU(detectGPUs(), *gpuN); err != nil {
 			return err
@@ -715,16 +720,16 @@ func askOffer(c *Config) {
 		fmt.Println("  Check that your internet plan allows reselling bandwidth.")
 		c.Prices["RLY-1"] = ask("  Price, USDC per GiB relayed", c.Prices["RLY-1"])
 	}
-	c.Compute = askYes("Offer sandboxed compute? Jobs run with no network or file access", c.Compute)
+	c.Compute = askYes("Rent CPU time? Clients' jobs run sandboxed (WebAssembly), with no network or file access", c.Compute)
 	if c.Compute {
-		c.CPUs = askInt("  Max CPUs per job", c.CPUs)
+		c.CPUs = askInt("  Max CPUs at once", c.CPUs)
 		c.MemMiB = askInt("  Max memory per job, MiB", c.MemMiB)
-		c.Prices["CMP-1"] = ask("  Price, USDC per billion instructions", c.Prices["CMP-1"])
+		c.Prices["CMP-1"] = ask("  Price, USDC per CPU-hour", c.Prices["CMP-1"])
 	}
 	if gpus := detectGPUs(); len(gpus) > 0 {
 		if _, have, ok := bestGPU(gpus); ok {
 			fmt.Printf("GPU found: %s\n", gpuSummary(gpus))
-			if askYes("  List it for GPU rental? (renting opens when GPU jobs launch)", c.GPU) {
+			if askYes("  Rent GPU time? Clients run their own model files on it", c.GPU) {
 				n := askInt("  How many to offer", max(1, min(have, c.GPUs)))
 				if c.Prices["GPU-1"] == "" {
 					c.Prices["GPU-1"] = defaultPrices()["GPU-1"]

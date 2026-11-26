@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"os/exec"
 	"regexp"
 	"runtime"
@@ -45,6 +46,11 @@ func runTool(name string, args ...string) string {
 
 // detectGPUs asks the tools each system already ships with. Nothing is installed.
 func detectGPUs() []gpuInfo {
+	if v := os.Getenv("INNERNET_TEST_GPUS"); v != "" { // tests: pretend this machine has these GPUs
+		var g []gpuInfo
+		_ = json.Unmarshal([]byte(v), &g)
+		return g
+	}
 	var g []gpuInfo
 	switch runtime.GOOS {
 	case "darwin":

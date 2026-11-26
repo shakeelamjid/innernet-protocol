@@ -57,6 +57,12 @@ type server struct {
 	stats   counters
 	started time.Time
 	pathUp  atomic.Bool
+
+	credits  *ledger
+	sched    *scheduler
+	stoSlots chan struct{}
+	gpuMu    sync.Mutex
+	gpu      map[string]*gpuSession
 }
 
 func cmdServe(args []string) error {
@@ -83,6 +89,12 @@ func cmdServe(args []string) error {
 		go keepPortOpen(c.Port)
 	}
 	s.startReachability(registryURL(c))
+	defer s.stopGPUSessions()
+	go func() {
+		for range time.Tick(5 * time.Second) {
+			s.sched.kick() // the owner's own memory use changes; waiting work may fit now
+		}
+	}()
 	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
 		go s.presenceLoop(registryURL(c))
 	}
@@ -94,7 +106,11 @@ func cmdServe(args []string) error {
 	if err != nil {
 		return err
 	}
-	go updateLoop(func() { _ = ln.Close() })
+	go updateLoop(func() {
+		s.sched.drain(30 * time.Minute) // let running jobs finish; GPU sessions end after that
+		s.stopGPUSessions()
+		_ = ln.Close()
+	})
 	return s.serveBoth(ln, srv)
 }
 
@@ -103,7 +119,10 @@ func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, e
 		return nil, err
 	}
 	s := &server{cfg: c, priv: priv, data: data, rpc: rpc, seen: map[string]int64{}, used: map[string]bool{},
-		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now()}
+		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now(),
+		credits: openLedger(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64),
+		gpu: map[string]*gpuSession{},
+	}
 	if raw, err := os.ReadFile(s.usedLog); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {
 			if f := strings.Fields(l); len(f) > 0 {
@@ -237,7 +256,16 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			s.fail(w, 401, err.Error())
 			return
 		}
+		// Storage has its own pool, so compute load never delays it.
+		select {
+		case s.stoSlots <- struct{}{}:
+		case <-time.After(10 * time.Second):
+			w.Header().Set("Retry-After", "5")
+			s.fail(w, 503, "busy; try again")
+			return
+		}
 		s.chunk(w, r, client, m[1], m[2], m[3], body)
+		<-s.stoSlots
 		return
 	}
 	if m := reLeasePath.FindStringSubmatch(r.URL.Path); m != nil {
@@ -263,7 +291,42 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		return
 	}
+	if s.computeRoute(w, r, body) {
+		return
+	}
 	s.fail(w, 404, "not found")
+}
+
+// computeRoute serves CMP-1 (CPU) and GPU-1 (GPU); every request is signed by the client.
+func (s *server) computeRoute(w http.ResponseWriter, r *http.Request, body []byte) bool {
+	p := r.URL.Path
+	g := reGPUPath.FindStringSubmatch(p)
+	known := p == "/cmp/v1/credit" || p == "/cmp/v1/balance" || p == "/cmp/v1/jobs" ||
+		p == "/gpu/v1/sessions" || g != nil
+	if !known {
+		return false
+	}
+	client, err := s.authenticate(r, body)
+	if err != nil {
+		s.fail(w, 401, err.Error())
+		return true
+	}
+	s.stats.add("requests", 1)
+	switch {
+	case p == "/cmp/v1/credit" && r.Method == "POST":
+		s.credit(w, client, body)
+	case p == "/cmp/v1/balance" && r.Method == "GET":
+		s.reply(w, 200, map[string]any{"balance": usdc(s.credits.balance(client)), "asset": "USDC"})
+	case p == "/cmp/v1/jobs" && r.Method == "POST":
+		s.cpuJob(w, client, body)
+	case p == "/gpu/v1/sessions" && r.Method == "POST":
+		s.gpuStart(w, client, body)
+	case g != nil:
+		s.gpuSessionRoute(w, r, client, g[1], g[2], body)
+	default:
+		s.fail(w, 405, "method not allowed")
+	}
+	return true
 }
 
 func (s *server) info() map[string]any {

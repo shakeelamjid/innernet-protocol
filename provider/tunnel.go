@@ -151,26 +151,29 @@ func (s *server) tunnelLoop(registry string, onState func(bool)) {
 			if err != nil {
 				continue
 			}
-			body, _ := base64.StdEncoding.DecodeString(item.Body)
-			r := httptest.NewRequest(item.Method, item.Path, bytes.NewReader(body))
-			for k, v := range item.Headers {
-				r.Header.Set(k, v)
-			}
-			rec := httptest.NewRecorder()
-			s.ServeHTTP(rec, r)
-			hdr := map[string]string{}
-			for _, k := range []string{"Content-Type", "X-Innernet-Provider", "X-Innernet-Signature"} {
-				if v := rec.Header().Get(k); v != "" {
-					hdr[k] = v
+			// Answer in the background, so a long CPU or GPU request does not hold up this poll.
+			go func() {
+				body, _ := base64.StdEncoding.DecodeString(item.Body)
+				r := httptest.NewRequest(item.Method, item.Path, bytes.NewReader(body))
+				for k, v := range item.Headers {
+					r.Header.Set(k, v)
 				}
-			}
-			ans, _ := json.Marshal(map[string]any{"status": rec.Code, "headers": hdr,
-				"body": base64.StdEncoding.EncodeToString(rec.Body.Bytes())})
-			if rr, err := tunnelRequest(registry, s.priv, "reply", "/reply/"+url.PathEscape(item.ID), ans); err == nil {
-				if resp, err := client.Do(rr); err == nil {
-					resp.Body.Close()
+				rec := httptest.NewRecorder()
+				s.ServeHTTP(rec, r)
+				hdr := map[string]string{}
+				for _, k := range []string{"Content-Type", "X-Innernet-Provider", "X-Innernet-Signature"} {
+					if v := rec.Header().Get(k); v != "" {
+						hdr[k] = v
+					}
 				}
-			}
+				ans, _ := json.Marshal(map[string]any{"status": rec.Code, "headers": hdr,
+					"body": base64.StdEncoding.EncodeToString(rec.Body.Bytes())})
+				if rr, err := tunnelRequest(registry, s.priv, "reply", "/reply/"+url.PathEscape(item.ID), ans); err == nil {
+					if resp, err := client.Do(rr); err == nil {
+						resp.Body.Close()
+					}
+				}
+			}()
 		}
 	}
 	live.Store(4)

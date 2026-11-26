@@ -32,7 +32,8 @@ ATTACHED_WITHIN = 40         # seconds since the last poll to count as attached
 MAX_BODY = 2 * 1024 * 1024 + 1024
 MAX_IN_FLIGHT = 16
 DAILY_BYTES = 4 * 1024 ** 3  # per provider, both directions (testnet budget)
-FORWARD_PATHS = re.compile(r"^/(healthz|reach/[0-9a-f]{32}|sto/v1/[A-Za-z0-9/_.-]{1,200})$")
+FORWARD_PATHS = re.compile(r"^/(healthz|reach/[0-9a-f]{32}|(?:sto|cmp|gpu)/v1/[A-Za-z0-9/_.-]{1,200})$")
+COMPUTE_SECONDS = 330        # CPU jobs run up to 300 s; a GPU model may take long to answer
 PASS_HEADERS = ("content-type", "x-innernet-client", "x-innernet-time", "x-innernet-nonce", "x-innernet-signature",
                 "x-innernet-provider")
 
@@ -131,7 +132,8 @@ class Tunnels:
                            "headers": {k: v for k, v in headers.items() if k.lower() in PASS_HEADERS},
                            "body": base64.b64encode(body).decode()})
         try:
-            return await asyncio.wait_for(fut, timeout=ANSWER_SECONDS)
+            wait = COMPUTE_SECONDS if path.startswith(("/cmp/", "/gpu/")) else ANSWER_SECONDS
+            return await asyncio.wait_for(fut, timeout=wait)
         except asyncio.TimeoutError:
             s.waiting.pop(rid, None)
             raise TunnelError(504, "provider did not answer in time") from None

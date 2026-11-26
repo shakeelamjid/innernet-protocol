@@ -409,6 +409,31 @@ def verify_ticket(record: dict, provider_id: bytes, *, now: int | None = None) -
     return payload
 
 
+# ---- usage receipts (CMP-1 CPU, GPU-1 GPU) ----------------------------------
+# Compute is paid from a prepaid credit balance on the provider. Each job or session ends with a
+# receipt signed by the provider: what ran, for how long, what it cost and the balance left.
+
+USAGE_DOMAIN = b"INNERnet/PAY-1/usage-receipt\x00"
+USAGE_SERVICES = {"CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
+
+
+def verify_usage(record: dict, provider_id: bytes, client_hex: str) -> dict:
+    _exact_keys(record, {"payload", "signature"}, label="usage receipt")
+    p = record["payload"]
+    if not isinstance(p, dict) or p.get("version") != "PAY-1-USAGE" or p.get("service") not in USAGE_SERVICES:
+        raise BulkError("malformed usage receipt")
+    for k in ("units", "cost", "balance"):
+        _decimal(p.get(k), f"usage {k}")
+    if p.get("provider") != bytes(provider_id).hex() or p.get("client") != client_hex or p.get("asset") != "USDC":
+        raise BulkError("usage receipt for a different provider or client")
+    try:
+        Ed25519PublicKey.from_public_bytes(provider_id).verify(
+            _bytes(record["signature"], 64, "usage signature"), USAGE_DOMAIN + canonical(p))
+    except (ValueError, InvalidSignature) as exc:
+        raise BulkError("usage receipt signature invalid") from exc
+    return p
+
+
 # ---- provider login (web dashboard bootstrap) ------------------------------
 # The CLI proves it holds the provider key by signing a one-time challenge.
 # The registry then hands out a short-lived link where the provider can
@@ -505,7 +530,9 @@ PRESENCE_DOMAIN = b"INNERnet/REG-1/provider-presence\x00"
 PRESENCE_VERSION = "REG-1-PRESENCE"
 PATHS = {"direct", "router", "relay", "tunnel"}   # relay: RLY-0 over ST81; tunnel: HTTPS fallback
 _STAT_KEYS = {"stored_bytes", "leases", "requests_24h", "served_bytes_24h", "challenges_24h", "payments_24h",
-              "uptime_s", "storage_limit_bytes"}
+              "uptime_s", "storage_limit_bytes",
+              # live compute capacity: clients prefer providers with free CPU or GPU
+              "cpu_slots", "cpu_free", "gpu_slots", "gpu_free", "compute_mem_free_mib", "queued"}
 
 
 def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300) -> dict:

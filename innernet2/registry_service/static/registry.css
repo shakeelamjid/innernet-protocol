@@ -126,7 +126,24 @@ strong { color: var(--text); font-weight: 500; }
 .step > label { margin-top: 16px; }
 .offer .toggle { display: flex; gap: 12px; align-items: flex-start; margin-top: 20px; color: var(--muted); font-size: .95rem; cursor: pointer; }
 .offer .toggle:first-child { margin-top: 0; }
-.offer .toggle input { margin-top: 4px; accent-color: #fff; width: 16px; height: 16px; }
+.offer .toggle input {
+  appearance: none; -webkit-appearance: none; flex: none; margin: 2px 0 0; width: 20px; height: 20px;
+  border: 1.5px solid var(--frame); border-radius: 4px; background: transparent; cursor: pointer;
+  display: grid; place-content: center;
+}
+.offer .toggle input:hover { border-color: #fff; }
+.offer .toggle input:checked { background: #fff; border-color: #fff; }
+.offer .toggle input:checked::after {
+  content: ""; width: 6px; height: 11px; margin-top: -2px;
+  border: solid #000; border-width: 0 2.5px 2.5px 0; transform: rotate(45deg);
+}
+.offer .toggle input:focus-visible { outline: 2px solid #fff; outline-offset: 3px; }
+.offer .group { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
+.offer .group h3 { font-size: 1rem; color: var(--text); }
+.offer .group .note { margin: 4px 0 0; color: var(--dim); font-size: .9rem; }
+.offer .group .toggle { margin-top: 16px; }
+#gpu-block { margin-top: 4px; }
 .offer .toggle strong { display: block; color: var(--text); }
 .offer .fields { padding-left: 28px; }
 .code-input { font-family: var(--mono) !important; font-size: 1.4rem !important; letter-spacing: .12em; text-align: center; height: 52px !important; }
+.offer .group .msg { padding-left: 32px; margin-top: 10px; }

@@ -30,10 +30,10 @@ var networks = map[string]string{
 	"base":         "eip155:8453",
 }
 
-var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "Ginstr", "GPU-1": "GPU-hour"}
+var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
 
 func defaultPrices() map[string]string {
-	return map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100", "GPU-1": "0.2500"}
+	return map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500"}
 }
 
 type Config struct {
@@ -56,6 +56,8 @@ type Config struct {
 	GPUModel   string            `json:"gpu_model,omitempty"`
 	GPUAPI     string            `json:"gpu_api,omitempty"`
 	GPUVRAM    int               `json:"gpu_vram_mib,omitempty"`
+	ReserveMiB int               `json:"reserve_memory_mib,omitempty"`  // memory compute never uses (for the owner)
+	PerClient  int               `json:"max_jobs_per_client,omitempty"` // running CPU jobs + GPU sessions per client
 	Prices     map[string]string `json:"prices_usdc"`
 	Created    string            `json:"created_at"`
 	PortMap    string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
@@ -188,7 +190,7 @@ func (c *Config) validate(forApply bool) error {
 		problems = append(problems, "network: base-sepolia (testnet) or base")
 	}
 	if len(c.services()) == 0 {
-		problems = append(problems, "offer at least one of storage, relay, compute or GPU")
+		problems = append(problems, "offer at least one of storage, bandwidth, CPU or GPU")
 	}
 	if c.GPU && (c.GPUs < 1 || c.GPUs > 16 || c.GPUModel == "" || hwText(c.GPUModel) != c.GPUModel) {
 		problems = append(problems, "gpu: 1-16 GPUs of a model this machine detected")
@@ -292,7 +294,7 @@ func writeDetails(c *Config, id string) error {
 		fmt.Fprintf(&b, "  Bandwidth      %d GiB/month at %s USDC per GiB\n", c.RelayCap, c.Prices["RLY-1"])
 	}
 	if c.Compute {
-		fmt.Fprintf(&b, "  Compute        %d CPUs, %d MiB at %s USDC per billion instructions\n", c.CPUs, c.MemMiB, c.Prices["CMP-1"])
+		fmt.Fprintf(&b, "  CPU            %d CPUs, %d MiB at %s USDC per CPU-hour\n", c.CPUs, c.MemMiB, c.Prices["CMP-1"])
 	}
 	if c.GPU {
 		fmt.Fprintf(&b, "  GPU            %d × %s at %s USDC per GPU-hour\n", c.GPUs, c.GPUModel, c.Prices["GPU-1"])

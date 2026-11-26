@@ -149,6 +149,12 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 	if relayKey != "" {
 		payload["relay_key"] = relayKey
 	}
+	if s.sched != nil && (s.cfg.Compute || s.cfg.GPU) {
+		stats := payload["stats"].(map[string]any)
+		for k, v := range s.sched.snapshot() {
+			stats[k] = v // live capacity, so clients go to providers with free CPU or GPU
+		}
+	}
 	sig, err := signCanonical(s.priv, presenceDomain, payload)
 	if err != nil {
 		st.Error = err.Error()

@@ -7,11 +7,11 @@ import re
 from ..bulk_v080 import BulkError
 from ..irm_registry import _validate_provider
 
-UNITS = {"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "Ginstr", "GPU-1": "GPU-hour"}
-DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100", "GPU-1": "0.2500"}
+UNITS = {"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "CPU-hour", "GPU-1": "GPU-hour"}
+DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-1": "0.2500"}
 _EVM = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _KEYS = {"name", "region", "host", "port", "storage_gib", "relay_gib", "compute", "cpus", "memory_mib",
-         "gpu", "gpus", "prices", "network", "payout"}
+         "gpu", "gpus", "reserve_gib", "per_client", "prices", "network", "payout"}
 
 
 def _int(v, lo, hi, label):
@@ -43,6 +43,8 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         "memory_mib": _int(offer.get("memory_mib", 512), 64, 4_194_304, "memory"),
         "gpu": bool(offer.get("gpu", False)),
         "gpus": _int(offer.get("gpus", 1), 1, 16, "GPUs"),
+        "reserve_gib": _int(offer.get("reserve_gib", 4), 0, 1024, "memory kept for you"),
+        "per_client": _int(offer.get("per_client", 2), 1, 64, "jobs per client"),
         "prices": {k: str(v).strip() for k, v in dict(offer.get("prices") or {}).items() if k in UNITS},
         "network": str(offer.get("network", "")),
         "payout": str(offer.get("payout", "")).strip(),
@@ -61,7 +63,7 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         o["gpu_info"] = {k: g[k] for k in ("vendor", "model", "api", "vram_mib") if k in g}
     entry = to_entry(o, "00" * 32)
     if not entry["services"]:
-        raise BulkError("offer at least one of storage, bandwidth, compute or GPU")
+        raise BulkError("offer at least one of storage, bandwidth, CPU or GPU")
     _validate_provider(entry, registry=False)
     return o
 
