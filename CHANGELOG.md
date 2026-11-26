@@ -6,6 +6,7 @@
 
 - The admin can ask one machine ("Ask machine to check now" in its details) or every machine ("Ask all machines to update now") to check right away for a new release and for its payout contract. The registry passes the request in its reply to the machine's next presence (about once a minute); the machine updates and restarts, or switches to its payout contract, without waiting for its 6-hour or 10-minute rounds. After the admin pays for a machine's payout contract, that machine is asked automatically.
 - Machines understand this from provider 0.6.9; older ones still check every 6 hours.
+- Admin machine details: the event list no longer squeezes the date and event into one-letter columns; dates everywhere show in local time, short ("26 Nov 23:29").
 - `provider/LATEST` is `provider-v0.6.9`.
 
 ### Payout checks that actually run, admin pays the fee for chosen machines

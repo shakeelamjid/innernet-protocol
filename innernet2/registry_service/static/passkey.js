@@ -97,7 +97,11 @@
 
   function when(ts) {
     if (!ts) return '–';
-    return new Date(ts * 1000).toISOString().replace('T', ' ').slice(0, 16);
+    // Local time, short: "26 Nov 23:29" (with the year when it is not this year).
+    const d = new Date(ts * 1000);
+    const opt = { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit', hour12: false };
+    if (d.getFullYear() !== new Date().getFullYear()) opt.year = 'numeric';
+    return d.toLocaleString(undefined, opt);
   }
 
   window.Innernet = { api: api, create: create, get: get, supported: supported, friendly: friendly, when: when, BASE: BASE };

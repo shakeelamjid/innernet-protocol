@@ -231,3 +231,7 @@ table.adm .link { text-decoration: underline; text-underline-offset: 3px; }
 .linkish { background: none; border: 0; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; font: inherit; text-align: left; }
 .pay-box { margin: 12px 0; }
 .pay-box .qr { margin: 8px 0; }
+/* Drawer event list: date and event never wrap; only the detail does. */
+.drawer table.adm td:nth-child(1), .drawer table.adm td:nth-child(2) { white-space: nowrap; overflow-wrap: normal; }
+.drawer table.adm td:nth-child(3) { overflow-wrap: break-word; width: 100%; }
+@media (min-width: 1100px) { .drawer { width: min(760px, 100vw); } }
