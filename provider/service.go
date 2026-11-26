@@ -344,9 +344,16 @@ func cmdUninstall(args []string) error {
 		return err
 	}
 	banner("uninstall", "base-sepolia")
-	if _, err := loadConfig(); err == nil {
+	if c, err := loadConfig(); err == nil {
 		_ = uninstallService()
+		// Take back what setup changed outside this folder: the router mapping and firewall rules.
+		if c.PortMap != "" && os.Getenv("INNERNET_NO_PORTMAP") != "1" {
+			if how := closePort(c.Port); how != "" {
+				fmt.Printf("  %s Closed port %d on the router (%s)\n", green(markOK), c.Port, how)
+			}
+		}
 	}
+	rollbackFirewall()
 	if *all {
 		fmt.Println(amber("  This deletes the provider key and every stored piece. Clients will repair their files elsewhere,"))
 		fmt.Println(amber("  but this machine's listing and earnings history cannot be taken over by a new key."))

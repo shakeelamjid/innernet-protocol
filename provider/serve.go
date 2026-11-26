@@ -65,6 +65,8 @@ type server struct {
 	terms    clientTerms
 	sched    *scheduler
 	stoSlots chan struct{}
+
+	keeperNudge chan struct{} // wakes the port keeper (network change, registry could not reach us)
 }
 
 func cmdServe(args []string) error {
@@ -114,6 +116,15 @@ func cmdServe(args []string) error {
 		_ = ln.Close()
 	})
 	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
+		// Keep the port open; fall back to the HTTPS tunnel and come back by itself.
+		go s.portKeeper(registryURL(c), s.keeperNudge, func() {
+			s.sched.drain(2 * time.Minute)
+			if runtime.GOOS == "windows" {
+				_ = ln.Close()
+			}
+			log.Printf("restarting with the new connection path")
+			restartSelf()
+		})
 		// Changes made on the website: join, apply after the passkey check, restart with them.
 		go s.setupWatch(registryURL(c), func() {
 			s.sched.drain(30 * time.Minute)
@@ -133,7 +144,7 @@ func newServer(c *Config, priv ed25519.PrivateKey, data, rpc string) (*server, e
 	}
 	s := &server{cfg: c, priv: priv, data: data, rpc: rpc, seen: map[string]int64{}, used: map[string]bool{},
 		usedLog: filepath.Join(data, "payments.log"), now: time.Now, started: time.Now(),
-		credits: openLedger(data), meter: openMeter(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64),
+		credits: openLedger(data), meter: openMeter(data), sched: newScheduler(c, totalMemoryMiB()), stoSlots: make(chan struct{}, 64), keeperNudge: make(chan struct{}, 1),
 	}
 	if raw, err := os.ReadFile(s.usedLog); err == nil {
 		for _, l := range strings.Split(string(raw), "\n") {

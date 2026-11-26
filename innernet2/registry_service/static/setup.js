@@ -47,7 +47,7 @@
     const port = det.port || 9443;
     unreachable = det.reachable === false;
     let text, err = false;
-    if (det.path === 'tunnel') text = 'Clients reach this machine through the INNERnet HTTPS tunnel: it connects out, so no router settings are needed, and requests stay signed end to end. A direct connection is faster: open TCP port ' + port + ' on your router to this machine, then press Test again.';
+    if (det.path === 'tunnel') text = 'Port ' + port + ' could not be opened on this network' + (det.reach_note ? ' (' + det.reach_note + ')' : '') + ', so clients reach this machine through the INNERnet HTTPS tunnel for now. Requests stay signed end to end. The machine keeps trying to open the port (every 10 minutes and after every network change) and switches to the direct connection by itself. Test again checks now.';
     else if (det.path === 'relay') text = 'Clients reach this machine through an INNERnet relay: it connects out, and data stays encrypted end to end.';
     else if (!unreachable) text = 'Clients reach ' + det.host + ':' + port + ' directly' + (det.path === 'router' ? ' (port opened on your router).' : '.');
     else {

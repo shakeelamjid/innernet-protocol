@@ -12,10 +12,11 @@
 - VPN exit is refused while the machine is reachable only through the HTTPS tunnel (it cannot carry VPN traffic).
 - `uninstall --all` tells the registry the machine is leaving before it deletes the key; a payout contract held by a machine that left (or is gone) can be used by the reinstalled machine.
 - The setup page tells the owner to confirm in the terminal when the machine still runs an older provider.
-- No silent fallback when the port is closed: the setup page and the terminal show why and offer Test again or Connect out instead (relay, else HTTPS tunnel); Apply waits until the machine is reachable. `/api/setup/reach`, `/v1/connect/facts`. `--yes` keeps the automatic fallback.
+- Port keeper: while serving, the machine checks its port every 10 minutes, after network changes and when the registry could not reach it; it reopens the port on the router, falls back to the HTTPS tunnel by itself when it stays closed, and goes back to direct as soon as the port works. Relays are used only with `--via relay`. The setup page says why it is on the tunnel and has Test again (`/api/setup/reach`, `/v1/connect/facts`).
+- `uninstall` removes the router mapping and the firewall rules that setup added (`firewall-rules.json`).
 - The setup page says why VPN exit is off (HTTPS tunnel, or not reachable) and how to turn it on.
 - Super-admin page `/registry/admin` (sign in with `INNERNET_ADMIN_USER` / `INNERNET_ADMIN_PASSWORD`, 16+ characters, rate limited; or an admin passkey): approve, suspend, remove or delete machines (frees their payout contract), delete passkeys, log out sessions, audit log.
-- `provider/LATEST` is `provider-v0.6.2`.
+- `provider/LATEST` is `provider-v0.6.3`.
 
 ### VPN exit (VPN-1) under Bandwidth; installs and updates from innernetcorp.com
 

@@ -794,8 +794,9 @@ def test_go_start_web_setup_end_to_end(tmp_path):
 
 
 @pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
-def test_go_closed_port_waits_for_the_owner_to_choose(tmp_path):
-    """No silent fallback: a closed port is shown on the website; the owner tests again (or connects out)."""
+def test_go_closed_port_falls_back_to_the_tunnel_and_can_go_direct(tmp_path):
+    """A closed port falls back to the HTTPS tunnel by itself (relays only on request); the website says why,
+    and Test again goes direct once the port works."""
     import httpx
     server, th, port, fake, store = live_registry(tmp_path)
     blocker = socket.socket()
@@ -818,7 +819,7 @@ def test_go_closed_port_waits_for_the_owner_to_choose(tmp_path):
             out += line
             if line.strip().startswith("Machine code:"):
                 code = line.split(":", 1)[1].strip()
-        assert "Trying an INNERnet relay" not in out and "HTTPS tunnel" not in out    # nothing chosen for the owner
+        assert "Trying an INNERnet relay" not in out and "HTTPS tunnel" in out       # no relay traffic; tunnel by itself
         web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
         auth = SoftAuthenticator()
         opt = web.post(P + "/api/claim/options", json={"code": code}).json()
@@ -826,11 +827,11 @@ def test_go_closed_port_waits_for_the_owner_to_choose(tmp_path):
                                                        "pair": opt.get("pair", False)}).status_code == 200
         page = web.get(P + "/api/setup").json()
         det = page["detected"]
-        assert det["reachable"] is False and "path" not in det and "in use" in det["reach_note"]
+        assert det["reachable"] is True and det["path"] == "tunnel" and "in use" in det["reach_note"]
         offer = {"name": det["name"], "region": det["region"], "host": "127.0.0.1", "port": offer_port, "storage_gib": 5,
                  "network": SEPOLIA, "payout": "0x" + "c3" * 20, "terms": current_terms("provider")["sha256"]}
-        r = web.post(P + "/api/setup", json=offer)
-        assert r.status_code == 422 and "cannot reach" in r.text                    # Apply waits for a choice
+        r = web.post(P + "/api/setup", json=dict(offer, relay_gib=10, vpn=True, vpn_consent=True))
+        assert r.status_code == 422 and "tunnel" in r.text                          # VPN exit is off on the tunnel
         assert web.post(P + "/api/setup/reach", json={"action": "bogus"}).status_code == 422
         blocker.close()                                                              # the owner opened the port
         assert web.post(P + "/api/setup/reach", json={"action": "retest"}).json() == {"ok": True}

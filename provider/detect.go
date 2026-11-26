@@ -119,8 +119,8 @@ func detectSteps(registry string, port int, st *stepper, interactive bool) *fact
 	return f
 }
 
-// autoOutgoing: when the port stays closed, fall back to a relay or the HTTPS tunnel by itself.
-// `start` turns it off for people: they choose (test again, or connect out) on the website or here.
+// autoOutgoing: when the port stays closed, fall back to the HTTPS tunnel by itself (a relay only
+// with --via relay). The background service keeps trying the port and goes back to direct.
 var autoOutgoing = true
 
 // retestDirect tests the port again (after the person opened it on the router), asking the
@@ -165,8 +165,8 @@ func (f *facts) forceOutgoing(registry, via string) {
 	}
 }
 
-// tryOutgoing uses an outgoing connection instead: an INNERnet relay over ST81, or the
-// HTTPS tunnel when only web traffic gets out. Works behind any router or ISP.
+// tryOutgoing uses the HTTPS tunnel instead: this machine connects out, so it works behind any
+// router or ISP. (Relays are used only when chosen with --via relay.)
 func (f *facts) tryOutgoing(registry string) {
 	if os.Getenv("INNERNET_NO_RELAY") == "1" {
 		return
@@ -175,17 +175,11 @@ func (f *facts) tryOutgoing(registry string) {
 	if err != nil {
 		return
 	}
-	note("Trying an INNERnet relay (this machine connects out; clients reach it through the relay)…")
-	if r, err := tryRelays(registry, priv); err == nil {
-		f.Relay, f.Reachable, f.Path = r, true, "relay"
-		note("Reachable through relay %s over ST81. Data stays encrypted end to end.", r.Addr)
-		return
-	} else {
-		note("Relay: %v.", err)
-	}
+	_ = priv
 	if nc, err := fetchNetConfig(registry); err == nil && nc.Tunnel.Endpoint.Host != "" {
 		f.Tunnel, f.TunnelHost, f.Reachable, f.Path = true, nc.Tunnel.Endpoint.Host, true, "tunnel"
-		note("Using the HTTPS tunnel through %s (works where only web traffic gets out).", nc.Tunnel.Endpoint.Host)
+		note("Using the HTTPS tunnel through %s for now. The service keeps trying to open port %d and switches", nc.Tunnel.Endpoint.Host, f.Port)
+		note("to the direct connection by itself as soon as it works.")
 	}
 }
 

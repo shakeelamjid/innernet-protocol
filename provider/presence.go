@@ -132,7 +132,7 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 				log.Printf("router port mapping after network change: %v", err)
 			}
 		}
-		s.adaptPath(registry)
+		s.nudgeKeeper() // test the port on the new network; reopen it or fall back to the tunnel
 	}
 	path, epHost, epPort, relayKey := s.pathEndpoint(host)
 	st.Path, st.Host, st.Port = path, epHost, epPort
@@ -180,6 +180,11 @@ func (s *server) sendPresence(registry string, lastHost *string) presenceState {
 		return st
 	}
 	st.State, st.Reachable = out.State, out.Reachable
+	if path == "direct" || path == "router" {
+		if !out.Reachable {
+			s.nudgeKeeper() // the registry could not reach the port: reopen it now
+		}
+	}
 	return st
 }
 
@@ -296,6 +301,17 @@ func stateLabel(s string) string {
 		return l
 	}
 	return s
+}
+
+// nudgeKeeper wakes the port keeper early.
+func (s *server) nudgeKeeper() {
+	if s.keeperNudge == nil {
+		return
+	}
+	select {
+	case s.keeperNudge <- struct{}{}:
+	default:
+	}
 }
 
 // adaptPath runs after a network change: a machine that was reached directly but no longer

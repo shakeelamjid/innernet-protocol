@@ -386,3 +386,61 @@ func gatewayFromProcRoute(raw string) string {
 	}
 	return ""
 }
+
+// closePort removes the router mapping this program asked for (uninstall). Best effort.
+func closePort(port int) string {
+	gw := os.Getenv("INNERNET_GATEWAY")
+	if gw == "" {
+		gw = defaultGateway()
+	}
+	if gw != "" {
+		req := make([]byte, 12)
+		req[1] = 2 // TCP; lifetime 0 removes the mapping
+		binary.BigEndian.PutUint16(req[4:6], uint16(port))
+		if _, err := natpmpCall(gw, req, 130); err == nil {
+			return "NAT-PMP"
+		}
+	}
+	loc := os.Getenv("INNERNET_UPNP_LOCATION")
+	if loc == "" {
+		loc, _ = ssdpDiscover()
+	}
+	if loc == "" {
+		return ""
+	}
+	client := &http.Client{Timeout: mapTimeout}
+	resp, err := client.Get(loc)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	var desc struct {
+		URLBase string     `xml:"URLBase"`
+		Device  upnpDevice `xml:"device"`
+	}
+	if xml.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&desc) != nil {
+		return ""
+	}
+	svc, ok := desc.Device.find()
+	if !ok {
+		return ""
+	}
+	base, err := url.Parse(loc)
+	if err != nil {
+		return ""
+	}
+	if desc.URLBase != "" {
+		if b, err := url.Parse(desc.URLBase); err == nil {
+			base = b
+		}
+	}
+	ctrl, err := base.Parse(svc.Ctrl)
+	if err != nil {
+		return ""
+	}
+	args := fmt.Sprintf("<NewRemoteHost></NewRemoteHost><NewExternalPort>%d</NewExternalPort><NewProtocol>TCP</NewProtocol>", port)
+	if _, err := soap(ctrl.String(), svc.Type, "DeletePortMapping", args); err == nil {
+		return "UPnP"
+	}
+	return ""
+}

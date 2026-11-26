@@ -74,7 +74,6 @@ func cmdStart(args []string) error {
 		st.ok("using existing · provider %s…", providerID(priv)[:16])
 	}
 	forceVia = *via
-	autoOutgoing = *yes // agents cannot choose; people do (website or terminal)
 	f := detectSteps(reg, *port, st, !*yes)
 	setupStep = st
 	m := strings.ToLower(*mode)
@@ -141,7 +140,7 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64, sealKey string)
 	if f.Path != "" {
 		detected["path"] = f.Path
 	}
-	if !f.Reachable && f.reachNote != "" {
+	if (!f.Reachable || f.Path == "tunnel") && f.reachNote != "" {
 		detected["reach_note"] = f.reachNote
 	}
 	gpus := []any{}
