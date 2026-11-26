@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
   <title>Set up your machine · INNERnet providers</title>
+  <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/passkey.js" defer></script>
   <script src="static/wallet.js" defer></script>
@@ -13,7 +14,7 @@
 <body>
   <header class="top">
     <div class="wrap">
-      <a class="logo" href="/"><img src="static/logo-white.svg" alt="INNERnet" width="104" height="16"><span>Providers</span></a>
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERnet" width="90" height="20"><span>Providers</span></a>
       <span class="spacer"></span>
       <a class="btn btn-sm" href="dashboard">Dashboard</a>
     </div>
@@ -152,6 +153,7 @@
                 <label>Backup passphrase (12+ characters)<input id="pass1" class="field" type="password" minlength="12" autocomplete="new-password"></label>
                 <label>Type it again<input id="pass2" class="field" type="password" minlength="12" autocomplete="new-password"></label>
               </div>
+              <label class="toggle" data-for="backup-on"><input type="checkbox" id="escrow-on" checked> <span><strong>Also keep the encrypted backup with INNERnet</strong> Then "Forgot your key?" can give it back from any browser, with this passphrase. INNERnet cannot open it; choose a long passphrase.</span></label>
               <p class="msg" data-for="backup-on">Your browser locks the passphrase with a key only your machine has, so this website only passes on scrambled text. The machine writes the encrypted backup to <span class="mono">~/.innernet/provider-backup.json</span>; copy that file somewhere safe and keep the passphrase.</p>
             </div>
             <p class="msg" id="backup-old" hidden>To back up the key from here, update the provider on your machine. For now run <span class="mono">innernet-provider backup FILE</span> on it.</p>

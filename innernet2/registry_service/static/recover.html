@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex">
+  <title>Forgot your key · INNERnet providers</title>
+  <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/recover.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERnet" width="90" height="20"><span>Providers</span></a>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="dashboard">Dashboard</a>
+    </div>
+  </header>
+  <main>
+    <div class="wrap narrow">
+      <div class="head"><div>
+        <h1>Forgot your key?</h1>
+        <p>Your machine's key is its identity. Nobody else has it, not even INNERnet. If you kept an encrypted backup with INNERnet, your passphrase opens it here, in your browser; the passphrase never leaves this page.</p>
+      </div></div>
+
+      <section class="card frame step" id="signin" hidden>
+        <h2>1. Sign in</h2>
+        <p>Sign in with the passkey of your account.</p>
+        <button class="btn btn-light" type="button" id="signin-btn">Sign in with passkey</button>
+        <p class="msg" id="signin-msg" role="status"></p>
+        <p class="note">Lost your passkey too? On a machine of yours that still runs, <span class="mono">innernet-provider login</span> gives a link to add a new one. If no machine of yours runs any more, the key cannot be recovered: install again and use the same payout contract.</p>
+      </section>
+
+      <section class="card frame step" id="pick" hidden>
+        <h2>2. Choose the machine</h2>
+        <div class="tbl-wrap"><table class="adm"><thead><tr><th>Machine</th><th>State</th><th>Backup kept</th><th></th></tr></thead><tbody id="machines"></tbody></table></div>
+      </section>
+
+      <section class="card frame step" id="unlock" hidden>
+        <h2>3. Your backup passphrase</h2>
+        <p id="unlock-for"></p>
+        <form id="unlock-form" novalidate>
+          <label>Passphrase<input id="pass" class="field" type="password" autocomplete="current-password"></label>
+          <button class="btn btn-light" type="submit" id="unlock-btn">Open the backup</button>
+        </form>
+        <p class="msg" id="unlock-msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="done" hidden>
+        <h2>Your key</h2>
+        <p>The passphrase was right: this backup belongs to machine <span class="mono" id="done-id"></span>.</p>
+        <p><strong>To get the machine back</strong> (on the same or a new computer):</p>
+        <ol class="plain">
+          <li>Download the backup file below and copy it to that computer.</li>
+          <li>Install without starting setup: <span class="mono">curl -fsSL https://innernetcorp.com/install.sh | INNERNET_NO_START=1 sh</span></li>
+          <li>If this computer already has an INNERnet key, move it away first: <span class="mono">mv ~/.innernet/provider/identity.key ~/identity.key.old</span></li>
+          <li>Restore: <span class="mono">innernet-provider restore innernet-backup.json</span> (asks this passphrase), then <span class="mono">innernet-provider start</span>.</li>
+        </ol>
+        <div class="admin-row">
+          <button class="btn btn-light" type="button" id="dl">Download backup file</button>
+          <button class="btn" type="button" id="reveal">Show the key</button>
+        </div>
+        <p class="notice" id="key-box" hidden></p>
+        <p class="note">Anyone with this key can act as your machine. Do not paste it into chats, emails or websites.</p>
+      </section>
+
+      <section class="card frame step" id="nobackup" hidden>
+        <h2>No backup, or the passphrase is gone</h2>
+        <p>Then the key cannot be recovered. Retire the machine on your <a href="dashboard">dashboard</a> ("Lost this machine or its key?"): clients move their files away and the payout contract becomes free. Install again on any computer, add it to your account, and use the same payout contract.</p>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

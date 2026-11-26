@@ -464,11 +464,17 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
             "SELECT 1 FROM claims WHERE provider=?", (pid,))
         if not exists:
             raise HTTPException(404, "unknown machine")
+        # This machine's id may also be its account's id: keep the account's passkeys and sign-ins while
+        # other machines still belong to it.
+        others = [r["provider"] for r in store.q("SELECT provider FROM machine_owner WHERE owner=? AND provider!=?", (pid, pid))]
         with store.tx() as db:
             db.execute("DELETE FROM providers WHERE id=?", (pid,))
-            for t in MACHINE_TABLES:
+            for t in MACHINE_TABLES + ("machine_owner", "key_backups"):
+                if others and t in ("passkeys", "sessions"):
+                    continue
                 db.execute(f"DELETE FROM {t} WHERE provider=?", (pid,))
-        log("deleted", pid, "machine and its records deleted; payments history kept", request)
+        log("deleted", pid, "machine and its records deleted; payments history kept"
+            + (f"; its account keeps {len(others)} other machines" if others else ""), request)
         return {"ok": True}
 
     @app.post(P + "/api/admin/machines/{pid}/logout")

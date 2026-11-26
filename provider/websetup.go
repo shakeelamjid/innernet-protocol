@@ -10,7 +10,9 @@ package main
 import (
 	"bytes"
 	"crypto/ed25519"
+	cryptorand "crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -34,6 +36,7 @@ type webSetup struct {
 	Offer    webOffer `json:"offer"`
 	Service  bool     `json:"service"`
 	Backup   *sealed  `json:"backup"`
+	Escrow   bool     `json:"escrow"` // also keep the encrypted backup with the registry (recovery by passphrase)
 	Nonce    string   `json:"nonce"`
 	Issued   int64    `json:"issued_at"`
 }
@@ -280,7 +283,15 @@ func applyWebSetup(reg, poll string, priv ed25519.PrivateKey, f *facts, box *sea
 		if err == nil {
 			path := backupPath()
 			if err = writeBackup(priv, path, pass); err == nil {
-				p.set("backup", "Key backup", "ok", "encrypted with your passphrase, saved on this machine: "+path)
+				where := "saved on this machine: " + path
+				if ws.Escrow {
+					if raw, rerr := os.ReadFile(path); rerr == nil && uploadBackup(reg, priv, raw) == nil {
+						where += "; an encrypted copy is kept with INNERnet for \"Forgot your key?\""
+					} else {
+						where += "; keeping a copy with INNERnet failed (run innernet-provider backup again later)"
+					}
+				}
+				p.set("backup", "Key backup", "ok", "encrypted with your passphrase, "+where)
 				break
 			}
 		}
@@ -498,4 +509,30 @@ func lingerMissing() string {
 		return ""
 	}
 	return "it stops when you log out and does not start after a reboot. Run once: sudo loginctl enable-linger " + u
+}
+
+// uploadBackup keeps the encrypted backup file with the registry, signed by this machine. The registry
+// cannot open it; the owner's browser opens it with the passphrase on the recovery page.
+func uploadBackup(reg string, priv ed25519.PrivateKey, raw []byte) error {
+	blob := strings.TrimSpace(string(raw))
+	sum := sha256.Sum256([]byte(blob))
+	nb := make([]byte, 16)
+	_, _ = cryptorand.Read(nb)
+	payload := map[string]any{"version": "REG-1-INTENT", "provider": providerID(priv), "action": "backup-store",
+		"target": hex.EncodeToString(sum[:]), "nonce": hex.EncodeToString(nb), "issued_at": time.Now().Unix()}
+	sig, err := signCanonical(priv, intentDomain, payload)
+	if err != nil {
+		return err
+	}
+	body, _ := json.Marshal(map[string]any{"intent": map[string]any{"payload": payload, "signature": sig}, "backup": blob})
+	resp, err := httpClient.Post(strings.TrimRight(reg, "/")+"/providers/"+providerID(priv)+"/backup", "application/json",
+		bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 200 {
+		return fmt.Errorf("registry answered %s", resp.Status)
+	}
+	return nil
 }

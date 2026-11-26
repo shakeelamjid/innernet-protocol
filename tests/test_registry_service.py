@@ -1565,3 +1565,56 @@ def test_states_change_automatically_unless_an_admin_holds_them(env, monkeypatch
     assert store.provider(pid)["state"] == "suspended" and store.provider(pid)["admin_lock"] == 1
     assert client.post(P + f"/api/admin/machines/{pid}/state", json={"state": "auto"}, headers=H).json()["state"] == "testing"
     assert store.provider(pid)["admin_lock"] == 0
+
+
+def test_key_backup_kept_for_recovery_and_admin_delete_keeps_the_account(env):
+    client, store, fake, s = env
+    k1, k2 = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    p1, p2 = (k.public_key().public_bytes_raw().hex() for k in (k1, k2))
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "cpus": 4, "reachable": True}
+    first = client.post(P + "/v1/connect", json=connect_record(k1, det)).json()
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": first["code"]}, headers=H).json()
+    client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])}, headers=H)
+    assert client.post(P + "/v1/apply", json=provider_record(k1)).status_code == 200
+    second = client.post(P + "/v1/connect", json=connect_record(k2, det)).json()
+    client.post(P + "/api/claim/link", json={"code": second["code"]}, headers=H)
+    assert client.post(P + "/v1/apply", json=provider_record(k2, payto="0x" + "ab" * 20)).status_code == 200
+    store.x("UPDATE claims SET status='done'")
+    # The machine keeps its encrypted backup with the registry (signed); the owner downloads it.
+    blob = json.dumps({"version": "INNERNET-PROVIDER-BACKUP-1", "provider_id": p1, "kdf": "pbkdf2-hmac-sha256",
+                       "iterations": 600000, "salt": "00" * 16, "nonce": "11" * 12, "ciphertext": "22" * 48})
+    sha = hashlib.sha256(blob.encode()).hexdigest()
+    bad = client.post(P + f"/v1/providers/{p1}/backup", json={"intent": intent_record(k1, "backup-store", "0" * 64), "backup": blob})
+    assert bad.status_code == 422                                              # hash does not match
+    other = blob.replace(p1, p2)
+    assert client.post(P + f"/v1/providers/{p1}/backup", json={"intent": intent_record(
+        k1, "backup-store", hashlib.sha256(other.encode()).hexdigest()), "backup": other}).status_code == 422  # not its own
+    assert client.post(P + f"/v1/providers/{p1}/backup", json={"intent": intent_record(k1, "backup-store", sha),
+                                                               "backup": blob}).status_code == 200
+    machines = {m["id"]: m for m in client.get(P + "/api/me").json()["machines"]}
+    assert machines[p1]["backup_kept"] is True and machines[p2]["backup_kept"] is False
+    got = client.get(P + f"/api/me/backup?m={p1}").json()
+    assert got["backup"]["provider_id"] == p1 and got["backup"]["ciphertext"] == "22" * 48
+    assert client.get(P + f"/api/me/backup?m={p2}").status_code == 404
+    assert client.get(P + "/recover").status_code == 200
+    # Admin deletes the account's first machine: the account (passkeys, sign-in, second machine) survives.
+    from innernet2.registry_service.admin_web import new_login_link
+    admin = SoftAuthenticator()
+    tok = new_login_link(store, ORIGIN, P).split("#token=")[1]
+    o = client.post(P + "/api/admin/enroll/options", json={"token": tok}, headers=H).json()
+    client.post(P + "/api/admin/enroll/verify", json={"flow": o["flow"], "credential": admin.create(o["options"])}, headers=H)
+    assert client.post(P + f"/api/admin/machines/{p1}/delete", json={"confirm": p1[:8]}, headers=H).status_code == 200
+    assert store.one("SELECT COUNT(*) AS n FROM passkeys WHERE provider=?", (p1,))["n"] == 1      # account passkey kept
+    assert store.one("SELECT 1 FROM key_backups WHERE provider=?", (p1,)) is None
+    assert [m["id"] for m in client.get(P + "/api/me").json()["machines"]] == [p2]
+
+
+def test_stats_never_add_real_and_test_usdc(env):
+    client, store, fake, s = env
+    now = int(time.time())
+    for net, amount in (("eip155:8453", 2_000_000), ("eip155:84532", 9_000_000)):
+        store.x("INSERT INTO payments(network, tx_hash, log_index, provider, payto, payer, amount, block, ts) VALUES (?,?,?,?,?,?,?,?,?)",
+                (net, "0x" + os.urandom(32).hex(), 0, "p", "0x", "0x", amount, 1, now))
+    st = client.get(P + "/v1/stats").json()["payments_30d"]
+    assert st["usdc"] == "2.00" and st["test_usdc"] == "9.00"

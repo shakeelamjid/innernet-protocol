@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Forgot your key, one logo everywhere, housekeeping
+
+- Forgot your key: a machine can keep its encrypted key backup with the registry (setup page "Also keep the encrypted backup with INNERnet", or `innernet-provider backup`). The upload is signed by the machine (`backup-store` intent, target = SHA-256 of the file); the registry checks the format and that the file belongs to that machine, and cannot open it. `/registry/recover`: sign in, choose the machine, type the passphrase; the browser opens the backup itself (PBKDF2-SHA256 600000 + AES-GCM) and offers the backup file or the key. Links from the sign-in box, the lost-key card and the website footer.
+- Website: "Log in" for providers in the header of every page (also on phones) and "Forgot your key?" in the footer; copy updated for website setup, the background service, home connections, mainnet beta and compute.
+- New mark and favicon on every website and registry page; social preview image and Apple touch icon redone.
+- Admin delete keeps the owner's account (passkeys, sign-in, other machines) when other machines are linked to it, and also removes the machine's account link and kept backup.
+- `/v1/stats`: real (Base) and test (Base Sepolia) USDC totals are reported separately and never added.
+- Python client: with no key given, the registry key seen first is pinned in `<home>/registry-key.pin` (trust on first use), so the `/build` example runs as written.
+- Dashboard and setup page: an account without machines is told how to add one instead of showing an error.
+- `provider/LATEST` is `provider-v0.6.6`.
+
 ### Owner accounts, shared payout, automatic states, admin at scale, Base mainnet beta
 
 - Owner accounts: one sign-in, many machines. A machine joins an account when the signed-in owner enters its machine code (dashboard "Add a machine", or the claim page). Every page works per machine (`?m=<id>`). The dashboard opens with a table of all the account's machines (state, online, services, region, uptime, earnings) and shows the chosen machine below. A new passkey made with a machine code starts that machine's own account. Each machine still checks the owner's passkey itself before signing.

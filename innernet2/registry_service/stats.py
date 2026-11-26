@@ -75,13 +75,17 @@ def network_stats(store: Store, now: int | None = None) -> dict:
     for s in sorted(reg.SERVICES):
         offers = [m for m in machines if s in m["services"] and m["prices"].get(s)]
         cheapest[s] = sorted(offers, key=lambda m: (_num(m["prices"][s]), -(m["uptime_7d"] or 0)))[:5]
-    paid = store.one("SELECT COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM payments WHERE ts>=?",
-                     (now - 30 * DAY,))
+    by_net = {r["network"]: r for r in store.q("SELECT network, COUNT(*) AS n, COALESCE(SUM(amount), 0) AS total FROM payments "
+                                              "WHERE ts>=? GROUP BY network", (now - 30 * DAY,))}
+    main, test = by_net.get("eip155:8453"), by_net.get("eip155:84532")
     return {"generated_at": now, "totals": totals, "market": presence.market(store),
             "units": dict(UNITS),
             "leaders": {"reliable": reliable, "cheapest": cheapest},
             "machines": sorted(machines, key=lambda m: (not m["online"], -(m["uptime_7d"] or 0), m["name"] or "")),
-            "payments_30d": {"count": paid["n"], "usdc": f"{paid['total'] / 1e6:.2f}"}}
+            # Real and test USDC are never added together.
+            "payments_30d": {"count": main["n"] if main else 0, "usdc": f"{(main['total'] if main else 0) / 1e6:.2f}",
+                             "test_count": test["n"] if test else 0,
+                             "test_usdc": f"{(test['total'] if test else 0) / 1e6:.2f}"}}
 
 
 class StatsCache:

@@ -369,13 +369,27 @@ class Client:
         self.terms = accept_terms or ""
 
     # registry
+    def _pin(self) -> list[bytes]:
+        """The registry key to trust. Given keys win; otherwise the key seen first is kept in
+        <home>/registry-key.pin and every later document must be signed by it (trust on first use)."""
+        if self.pinned:
+            return self.pinned
+        pin = self.home / "registry-key.pin"
+        if pin.exists():
+            return [bytes.fromhex(pin.read_text().strip())]
+        if not self.registry_url:
+            raise BulkError("no registry key pinned")
+        key = httpx.get(self.registry_url.rstrip("/") + "/registry-key", timeout=20).json()["registry_key"]
+        _private(pin, key.encode())
+        return [bytes.fromhex(key)]
+
     def providers(self) -> list[dict]:
         doc = self._doc
         if doc is None:
             if not self.registry_url:
                 raise BulkError("no registry configured")
             doc = httpx.get(self.registry_url.rstrip("/") + "/registry.json", timeout=20).json()
-        payload = verify_registry(doc, self.pinned, now=int(self.now()))
+        payload = verify_registry(doc, self._pin(), now=int(self.now()))
         self._no_rollback(doc)
         return payload["providers"]
 

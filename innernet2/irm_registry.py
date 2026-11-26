@@ -635,8 +635,8 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
 INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
 INTENT_VERSION = "REG-1-INTENT"
 INTENTS = {"pause", "resume", "leave", "reinstate"}
-MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set", "setup-fetch", "tx-claim"}
-_TARGETED = {"passkey-remove", "pairing-set", "tx-claim"}   # pairing-set: target is SHA-256 hex of the machine code
+MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set", "setup-fetch", "tx-claim", "backup-store"}
+_TARGETED = {"passkey-remove", "pairing-set", "tx-claim", "backup-store"}   # pairing-set: target is SHA-256 hex of the machine code
 
 
 def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, str, str]:
@@ -653,6 +653,8 @@ def verify_intent(record: dict, *, now: int | None = None, max_age: int = 300) -
         raise BulkError("pairing-set needs the SHA-256 of the machine code")
     if p["action"] == "tx-claim" and not re.match(r"^eip155:[0-9]{1,10}:0x[0-9a-f]{64}$", p["target"]):
         raise BulkError("tx-claim needs network:transaction")
+    if p["action"] == "backup-store" and not re.match(r"^[0-9a-f]{64}$", p["target"]):
+        raise BulkError("backup-store needs the SHA-256 of the backup file")
     issued = _int(p["issued_at"], 0, 2**53, "intent issued_at")
     instant = int(time.time()) if now is None else now
     if not instant - max_age <= issued <= instant + FUTURE_SKEW:

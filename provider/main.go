@@ -658,6 +658,15 @@ func cmdBackup(args []string) error {
 		return err
 	}
 	fmt.Println("Encrypted backup written to", args[0])
+	if c, err := loadConfig(); err == nil && os.Getenv("INNERNET_BACKUP_PASSPHRASE") == "" &&
+		askYes("Also keep this encrypted backup with INNERnet, so \"Forgot your key?\" on the website can give it back", true) {
+		raw, _ := os.ReadFile(args[0])
+		if err := uploadBackup(registryURL(c), priv, raw); err != nil {
+			fmt.Println("Keeping a copy with INNERnet failed:", err)
+		} else {
+			fmt.Println("Kept with INNERnet. It opens only with your passphrase.")
+		}
+	}
 	fmt.Println("Keep it offline (USB stick, password manager). Without it and the passphrase, a lost key cannot be recovered.")
 	return nil
 }

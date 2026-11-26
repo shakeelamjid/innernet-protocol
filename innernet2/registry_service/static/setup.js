@@ -335,6 +335,7 @@
     $('send').disabled = true;
     try {
       if (wantBackup) offer.backup = await sealTo(setup.detected.seal_key, $('pass1').value);
+      if (wantBackup) offer.escrow = $('escrow-on').checked;
       say('send-msg', 'Checking the offer…');
       const r = await I.api('/api/setup', offer);
       say('send-msg', 'Confirm with your passkey…');
@@ -431,6 +432,7 @@
     return load();
   }).catch(function (err) {
     if (err.status === 401) { location.replace(I.BASE + '/claim'); return; }
+    if (err.status === 404) { $('err').innerHTML = 'No machine is waiting for setup on this account. Run the installer on the machine (<a href="/provide#install">how</a>) and enter the code it shows at <a href="' + I.BASE + '/claim">Add a machine</a>.'; $('err').hidden = false; return; }
     say('err', I.friendly(err), true); $('err').hidden = false;
   });
 })();

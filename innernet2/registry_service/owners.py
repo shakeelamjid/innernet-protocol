@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS machine_owner (
   provider TEXT PRIMARY KEY, owner TEXT NOT NULL, linked_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS machine_owner_by_owner ON machine_owner(owner);
+CREATE TABLE IF NOT EXISTS key_backups (     -- encrypted with the owner's passphrase, the registry cannot open them
+  provider TEXT PRIMARY KEY, blob TEXT NOT NULL, stored_at INTEGER NOT NULL
+);
 CREATE TABLE IF NOT EXISTS tx_claims (
   network TEXT NOT NULL, tx TEXT NOT NULL, provider TEXT NOT NULL, claimed_at INTEGER NOT NULL,
   PRIMARY KEY (network, tx)

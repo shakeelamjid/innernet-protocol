@@ -269,6 +269,7 @@
     } catch (err) {
       if (err.status === 401) showLogin();
       else if (err.status === 409) location.replace(I.BASE + '/setup' + location.search);
+      else if (err.status === 404) { $('login-msg').innerHTML = 'Your account has no machines right now. Run the installer on a machine (<a href="/provide#install">how</a>), then enter its code at <a href="' + I.BASE + '/claim">Add a machine</a>.'; showLogin(); }
       else { $('login-msg').textContent = I.friendly(err); showLogin(); }
     }
   }

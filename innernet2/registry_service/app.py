@@ -545,6 +545,35 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         """Public: prices, capacity and leaderboards for the website. Cached for 2 minutes."""
         return JSONResponse(stats_cache.get(), headers={"Cache-Control": "public, max-age=60"})
 
+    @app.post(P + "/v1/providers/{pid}/backup")
+    async def store_backup(pid: str, request: Request):
+        """Keep a machine's encrypted key backup (made with the owner's passphrase), so the owner can recover
+        the key from any browser. Signed by the machine key; the registry cannot decrypt it."""
+        ip = client_ip(request)
+        limiter.check("intent", ip, 20, 600)
+        data = await body_json(request)
+        record, blob = data.get("intent"), data.get("backup")
+        try:
+            prov, action, nonce = reg.verify_intent(record or {})
+        except BulkError as exc:
+            raise HTTPException(422, str(exc))
+        if prov.hex() != pid or action != "backup-store":
+            raise HTTPException(422, "intent is for another provider or action")
+        if not isinstance(blob, str) or len(blob) > 4096 or hashlib.sha256(blob.encode()).hexdigest() != reg.intent_target(record):
+            raise HTTPException(422, "backup does not match its signed hash")
+        try:
+            b = json.loads(blob)
+            ok = (b.get("version") == "INNERNET-PROVIDER-BACKUP-1" and b.get("provider_id") == pid and
+                  b.get("kdf") == "pbkdf2-hmac-sha256" and 100000 <= int(b.get("iterations", 0)) <= 10000000)
+        except (ValueError, TypeError):
+            ok = False
+        if not ok:
+            raise HTTPException(422, "not an encrypted INNERnet provider backup for this machine")
+        store.x("INSERT INTO key_backups(provider, blob, stored_at) VALUES (?,?,?) ON CONFLICT(provider) DO UPDATE SET "
+                "blob=excluded.blob, stored_at=excluded.stored_at", (pid, blob, int(time.time())))
+        store.audit(pid, "backup-stored", f"encrypted key backup kept for recovery, nonce {nonce}", ip)
+        return {"ok": True}
+
     @app.get(P + "/v1/market")
     def market_prices():
         """Typical prices of listed providers, for setting a price."""
@@ -1216,6 +1245,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         body = await body_json(request)
         backup = body.pop("backup", None)
         service = bool(body.pop("service", False))
+        escrow = bool(body.pop("escrow", False))
         detected = json.loads(c["detected"])
         if detected.get("reachable") is False:
             raise HTTPException(422, "Clients cannot reach this machine yet. Test again after opening the port on your "
@@ -1232,6 +1262,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                  "nonce": secrets.token_hex(16), "issued_at": int(time.time())}
         if backup:
             setup["backup"] = dict(backup, to=detected["seal_key"])
+            setup["escrow"] = escrow
         challenge = reg.setup_challenge(setup)
         options = generate_authentication_options(
             rp_id=settings.rp_id, challenge=challenge, user_verification=UserVerificationRequirement.PREFERRED,
@@ -1359,11 +1390,38 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 det = json.loads(c["detected"]) if c else {}
                 name, state, services, region, payto = det.get("name"), "setup", [], det.get("region"), ""
             out.append({"id": m, "name": name, "state": state, "needs_setup": bool(c and c["status"] in OPEN),
+                        "backup_kept": store.one("SELECT 1 FROM key_backups WHERE provider=?", (m,)) is not None,
                         "online": bool(live.get("online")), "path": ((live.get("record") or {}).get("payload") or {}).get("path"),
                         "services": services, "region": region, "payto": payto,
                         "earned_30d": chain.usdc(e30["net"]),
                         "uptime_7d": health(m)["7d"]["uptime"] if p else None})
         return out
+
+    @app.get(P + "/api/me/backup")
+    def my_backup(request: Request):
+        """The encrypted key backup of one of your machines. Your browser opens it with your passphrase."""
+        s = need_session(request)
+        limiter.check("backup", client_ip(request), 30, 600)
+        pid = pick(request, s["provider"])
+        row = store.one("SELECT * FROM key_backups WHERE provider=?", (pid,))
+        if row is None:
+            raise HTTPException(404, "No key backup is kept for this machine. Make one on the machine "
+                                     "(innernet-provider backup FILE) or in Change settings.")
+        store.audit(pid, "backup-downloaded", "by the owner for recovery", client_ip(request))
+        return {"machine": pid, "backup": json.loads(row["blob"]), "stored_at": row["stored_at"]}
+
+    @app.post(P + "/api/me/backup/delete")
+    def delete_my_backup(request: Request):
+        guard(request)
+        s = need_session(request)
+        pid = pick(request, s["provider"])
+        store.x("DELETE FROM key_backups WHERE provider=?", (pid,))
+        store.audit(pid, "backup-deleted", "by the owner", client_ip(request))
+        return {"ok": True}
+
+    @app.get(P + "/recover")
+    def recover_page():
+        return page("recover.html")
 
     @app.post(P + "/api/me/lost-key")
     async def lost_key(request: Request):
