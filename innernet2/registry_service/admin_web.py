@@ -493,13 +493,18 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
         guard(request)
         admin_session(request)
         what = str((await body_json(request)).get("what") or "update,payout")
-        n = 0
+        n = able = 0
+        now = int(time.time())
         for p in store.providers():
             if p["state"] not in ("removed", "gone"):
                 own.ask_check(store, p["id"], what)
                 n += 1
+                live = presence.live(store, p["id"], now) or {}
+                sw = str(((live.get("record") or {}).get("payload") or {}).get("software", "")).split("/")[-1]
+                parts = [int(x) for x in sw.split(".")[:3] if x.isdigit()]
+                able += int(len(parts) == 3 and tuple(parts) >= (0, 6, 9))
         log("check-now", "", f"{what} on {n} machines", request)
-        return {"ok": True, "machines": n}
+        return {"ok": True, "machines": n, "able": able}
 
     @app.post(P + "/api/admin/machines/{pid}/delete")
     async def delete_machine(pid: str, request: Request):

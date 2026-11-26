@@ -17,6 +17,11 @@
   const short = function (id) { return id ? id.slice(0, 10) + '…' : ''; };
   const pct = function (v) { return v == null ? '–' : (v * 100).toFixed(1) + '%'; };
   const when = function (t) { return t ? I.when(t) : '–'; };
+  function versionAtLeast(v, min) {
+    const a = String(v).split('.').map(Number), b = min.split('.').map(Number);
+    for (let i = 0; i < 3; i++) { if ((a[i] || 0) !== b[i]) return (a[i] || 0) > b[i]; }
+    return true;
+  }
   function td(tr, text, cls) { const c = el('td', cls, text); tr.append(c); return c; }
   function stateTag(r) { return el('span', 'state ' + r.state, r.state + (r.held ? ' · held' : '')); }
   function qs(o) { return Object.keys(o).filter(function (k) { return o[k] !== '' && o[k] != null; }).map(function (k) { return k + '=' + encodeURIComponent(o[k]); }).join('&'); }
@@ -144,11 +149,19 @@
     if (d.state !== 'suspended') acts.append(btn('Suspend', function () { return setState([d.id], 'suspended'); }));
     if (d.state !== 'removed') acts.append(btn('Remove', function () { return setState([d.id], 'removed'); }, true));
     if (d.held || d.state === 'suspended' || d.state === 'removed') acts.append(btn('Return to automatic', function () { return setState([d.id], 'auto'); }));
-    acts.append(btn('Ask machine to check now', function () {
+    const sw = ((d.presence && d.presence.record && d.presence.record.payload.software) || '').split('/')[1] || '';
+    const canAsk = versionAtLeast(sw, '0.6.9');
+    const ask = btn('Ask machine to check now', function () {
       return I.api('/api/admin/machines/' + d.id + '/check', { what: 'update,payout' }).then(function () {
-        say('act-msg', d.name + ' will check for a new release and its payout contract within about a minute (provider 0.6.9 or newer).');
+        say('act-msg', d.name + ' will check for a new release and its payout contract within about a minute.');
       });
-    }));
+    });
+    if (!canAsk) {
+      ask.disabled = true;
+      ask.title = 'This machine runs ' + (sw || 'an unknown version') + '. Only 0.6.9 or newer can be asked; it updates itself every 6 hours.';
+      b.append(el('p', 'dim', 'This machine runs provider ' + (sw || '?') + ', which cannot be asked to check now. It updates itself within 6 hours of its last start; after that, "Ask machine to check now" works.'));
+    }
+    acts.append(ask);
     acts.append(btn('Log out owner', function () { return I.api('/api/admin/machines/' + d.id + '/logout', {}); }));
     acts.append(btn('Delete machine', function () {
       const typed = prompt('This deletes the machine, its setups, machine code and presence. Its payout contract becomes free. Payment history is kept.\n\nType the first 8 characters of the machine id (' + d.id.slice(0, 8) + ') to confirm:');
@@ -343,7 +356,8 @@
   $('check-all').addEventListener('click', async function () {
     try {
       const r = await I.api('/api/admin/check-all', { what: 'update,payout' });
-      say('act-msg', r.machines + ' machines will check for a new release and their payout contract within about a minute (provider 0.6.9 or newer; older ones check every 6 hours).');
+      say('act-msg', r.able + ' of ' + r.machines + ' machines will check within about a minute.' +
+        (r.machines > r.able ? ' ' + (r.machines - r.able) + ' run an older provider that cannot be asked; they update themselves within 6 hours.' : ''));
     } catch (err) { say('act-msg', I.friendly(err), true); }
   });
   $('signin-btn').addEventListener('click', signIn);
