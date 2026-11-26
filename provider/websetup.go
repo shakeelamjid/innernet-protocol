@@ -18,6 +18,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -261,7 +262,7 @@ func applyWebSetup(reg, poll string, priv ed25519.PrivateKey, f *facts, box *sea
 		return fail("sign", "Offer", fmt.Errorf("the offer is not valid: %v", err))
 	}
 	if old, err := loadConfig(); err == nil && !terminal {
-		c.Hours, c.Created = old.Hours, old.Created
+		c.Created = old.Created
 	}
 	quietApply = true
 	err = finishSetup(c, priv)
@@ -330,6 +331,9 @@ func serviceFromWeb(want bool) string {
 		return "not installed (" + err.Error() + ") · run innernet-provider serve yourself"
 	}
 	if c, err := loadConfig(); err == nil && waitHealthy(c.Port, 3*time.Second) {
+		if note := lingerMissing(); note != "" {
+			return fmt.Sprintf("running on port %d, but %s", c.Port, note)
+		}
 		return fmt.Sprintf("ok:running on port %d, starts with this computer", c.Port)
 	}
 	return "installed, not answering yet · check: innernet-provider service status"
@@ -477,4 +481,21 @@ func (s *server) joinWebSetup(reg string) error {
 		return err
 	}
 	return applyWebSetup(reg, poll, s.priv, f, box, st, false)
+}
+
+// lingerMissing: on Linux a user service stops at logout and does not start at boot unless
+// "lingering" is on for that user. Returns what to run, or "".
+func lingerMissing() string {
+	if runtime.GOOS != "linux" || os.Geteuid() == 0 {
+		return ""
+	}
+	u := os.Getenv("USER")
+	if u == "" {
+		return ""
+	}
+	out, err := exec.Command("loginctl", "show-user", u, "-p", "Linger").Output()
+	if err != nil || strings.TrimSpace(string(out)) != "Linger=no" {
+		return ""
+	}
+	return "it stops when you log out and does not start after a reboot. Run once: sudo loginctl enable-linger " + u
 }

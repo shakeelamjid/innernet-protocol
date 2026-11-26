@@ -1362,3 +1362,134 @@ def test_admin_password_sign_in(env, monkeypatch):
     assert client.post(P + "/api/admin/login/password", json={"user": "shakeel", "password": "a-long-admin-password-123"},
                        headers=H).status_code == 429                      # too many tries from this address
 
+
+
+def test_schedule_days_of_month_and_days_off():
+    from innernet2.bulk_v080 import BulkError
+    from innernet2.registry_service.offer import check_hours, check_month_days, check_skip
+    from datetime import datetime, timezone
+    av = {"tz": "UTC", "weekly": [[0, 540, 1020]], "monthdays": [1, 2, 3], "skip": ["2026-12-01"]}
+    reg.validate_availability(av)
+    reg.validate_availability({"tz": "UTC", "monthdays": [15]})
+    for bad in ({"tz": "UTC"}, {"tz": "UTC", "monthdays": [0]}, {"tz": "UTC", "monthdays": [3, 1]},
+                {"tz": "UTC", "weekly": [[0, 0, 60]], "skip": ["2026-13-01"]}, {"tz": "UTC", "monthdays": [1], "x": 1}):
+        with pytest.raises(BulkError):
+            reg.validate_availability(bad)
+    ts = lambda s: int(datetime.fromisoformat(s).replace(tzinfo=timezone.utc).timestamp())  # noqa: E731
+    e = {"availability": av}
+    assert reg.in_hours(e, ts("2027-02-01T10:00"))          # Monday the 1st, 10:00
+    assert not reg.in_hours(e, ts("2027-02-01T18:00"))      # after hours
+    assert not reg.in_hours(e, ts("2027-03-08T10:00"))      # a Monday, but the 8th
+    assert not reg.in_hours(e, ts("2026-12-01T10:00"))      # day off (a Tuesday anyway)
+    assert reg.in_hours({"availability": {"tz": "UTC", "monthdays": list(range(1, 32)), "skip": ["2027-01-01"]}},
+                        ts("2027-01-02T03:00"))
+    assert reg.available_minutes({"availability": {"tz": "UTC", "monthdays": [15]}}) == round(7 * 1440 / 30.44)
+    assert check_hours("Mon-Fri 21:00-08:00, sat 10-14") == "mon-fri 21:00-08:00, sat 10-14"
+    assert check_hours(None) == "always"
+    for bad in ("mon", "funday 10:00-12:00", "mon 10:00-10:00", "mon 25:00-26:00"):
+        with pytest.raises(BulkError):
+            check_hours(bad)
+    assert check_month_days([5, 1, 1]) == [1, 5] and check_month_days(list(range(1, 32))) == []
+    assert check_skip(["2027-01-01", "2026-12-25"]) == ["2026-12-25", "2027-01-01"]
+    with pytest.raises(BulkError):
+        check_skip(["25/12/2026"])
+
+
+def test_change_settings_starts_from_the_applied_offer_and_lost_key(env):
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    pid = key.public_key().public_bytes_raw().hex()
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 500,
+           "cpus": 8, "memory_mib": 16384, "os": "linux", "arch": "amd64", "reachable": True, "version": "0.6.3"}
+    started = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    poll = {"X-Poll-Token": started["poll"]}
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).json()
+    assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])},
+                       headers=H).status_code == 200
+    offer = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_gib": 0,
+             "compute": True, "cpus": 3, "memory_mib": 3072, "per_client": 5, "reserve_gib": 6,
+             "hours": "mon-fri 21:00-08:00", "month_days": [1, 2, 3], "skip_dates": ["2026-12-25"],
+             "network": SEPOLIA, "payout": "0x" + "ab" * 20, "terms": current_terms("provider")["sha256"]}
+    assert client.post(P + "/api/setup", json=dict(offer, hours="funday 1-2"), headers=H).status_code == 422
+    confirm_setup(client, auth, offer)
+    st = client.get(P + "/v1/connect/status", headers=poll).json()
+    assert st["setup"]["offer"]["hours"] == "mon-fri 21:00-08:00" and st["setup"]["offer"]["month_days"] == [1, 2, 3]
+    assert client.post(P + "/v1/connect/finish", headers=poll).status_code == 200
+    store.x("INSERT INTO providers(id, record, state, reason, applied_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (pid, json.dumps(provider_record(key)), "listed", "", int(time.time()), int(time.time())))
+    page = client.get(P + "/api/setup").json()                       # Change settings, no terminal
+    assert page["last"]["cpus"] == 3 and page["last"]["per_client"] == 5 and page["last"]["skip_dates"] == ["2026-12-25"]
+    # Lost key: retire the machine; its payout contract is free for a reinstall.
+    assert client.post(P + "/api/me/lost-key", json={"confirm": "nope"}, headers=H).status_code == 422
+    assert client.post(P + "/api/me/lost-key", json={"confirm": pid[:8]}, headers=H).status_code == 200
+    assert store.provider(pid)["state"] == "leaving"
+    assert client.get(P + "/api/me").status_code == 401                # signed out
+    other = Ed25519PrivateKey.generate()
+    assert client.post(P + "/v1/apply", json=provider_record(other)).status_code == 200
+
+
+def test_public_network_stats(env):
+    client, store, fake, s = env
+    k1, k2 = Ed25519PrivateKey.generate(), Ed25519PrivateKey.generate()
+    for k, pay in ((k1, "0x" + "a1" * 20), (k2, "0x" + "a2" * 20)):
+        assert client.post(P + "/v1/apply", json=provider_record(k, payto=pay)).status_code == 200
+        pid = k.public_key().public_bytes_raw().hex()
+        store.x("UPDATE providers SET state='listed', listed_at=? WHERE id=?", (int(time.time()), pid))
+    p1 = k1.public_key().public_bytes_raw().hex()
+    now = int(time.time())
+    for i in range(30):
+        store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)", (p1, now - i * 600, 1 if i else 0, 20))
+    st = client.get(P + "/v1/stats").json()
+    assert st["totals"]["machines"] == 2 and st["totals"]["storage_gib"] == 400 and st["totals"]["cpus"] == 8
+    assert st["market"]["STO-1"]["providers"] == 2 and st["units"]["CMP-1"] == "CPU-hour"
+    assert [m["name"] for m in st["leaders"]["reliable"]] == ["lahore-box-1"]           # only the one with a day of checks
+    assert st["leaders"]["reliable"][0]["uptime_7d"] == round(29 / 30, 4)
+    assert len(st["leaders"]["cheapest"]["STO-1"]) == 2 and st["payments_30d"]["usdc"] == "0.00"
+    text = json.dumps(st)
+    assert "node1.example.test" not in text and "0xa1a1" not in text                  # no addresses, no wallets
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_provider_tester_against_a_real_provider(tmp_path, capsys, monkeypatch):
+    """The provider tester sees a running provider the way a client does and passes the free checks."""
+    import httpx
+    from innernet2 import provider_test
+    server, th, port, fake, store = live_registry(tmp_path, split_factory={SEPOLIA: "0x" + "fa" * 20})
+    proc = None
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        wallet = "0x" + "46" * 20
+        fake.splits[wallet] = "0x" + "5e" * 20
+        sport = free_tcp_port()
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "p"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
+               "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_FIREWALL": "1", "INNERNET_PRESENCE_SEC": "1", "INNERNET_NO_UPDATE": "1",
+               "INNERNET_NO_KEEPER": "1", "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
+        r = subprocess.run([str(binary), "start", "--yes", "--wallet", wallet, "--port", str(sport)], env=env,
+                           capture_output=True, text=True, stdin=subprocess.DEVNULL, timeout=60)
+        assert r.returncode == 0, r.stdout + r.stderr
+        pid = json.loads((tmp_path / "p" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        store.x("UPDATE providers SET state='listed', listed_at=? WHERE id=?", (int(time.time()), pid))
+        proc = subprocess.Popen([str(binary), "serve"], env=env, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        api = httpx.Client(base_url=f"http://127.0.0.1:{port}/registry/v1")
+        for _ in range(80):
+            got = api.get(f"/presence/{pid}")
+            if got.status_code == 200 and got.json()["online"]:
+                break
+            time.sleep(0.1)
+        monkeypatch.setenv("INNERNET_CLIENT_HOME", str(tmp_path / "client"))
+        monkeypatch.setenv("INNERNET_TRANSPORT", "http")
+        code = provider_test.main([pid[:10], "--registry", f"http://127.0.0.1:{port}/registry/v1", "--json"])
+        out = json.loads(capsys.readouterr().out)
+        checks = {c["check"]: c["result"] for c in out[0]["checks"]}
+        assert code == 0 and out[0]["passed"], out
+        assert checks["Listed"] == checks["Online"] == checks["Signed answer"] == checks["Storage round trip"] == "pass"
+        assert checks["CPU job"] == "skip"                         # paid check only with --credit-tx
+        assert provider_test.main(["nobody", "--registry", f"http://127.0.0.1:{port}/registry/v1"]) == 2
+    finally:
+        if proc:
+            proc.kill()
+        server.should_exit = True
+        th.join(timeout=5)

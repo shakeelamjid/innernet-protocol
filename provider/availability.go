@@ -16,6 +16,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strconv"
@@ -144,16 +145,69 @@ func weeklyMinutes(ws []window) int {
 	return t
 }
 
-func availabilityEntry(hours, tz string) (map[string]any, error) {
+// availabilityEntry: weekly hours, optionally only on some days of the month, minus days off.
+// Days off alone (always on otherwise) are written as every day of the month minus those days.
+func availabilityEntry(hours, tz string, monthDays []int, skip []string) (map[string]any, error) {
 	ws, err := parseHours(hours)
-	if err != nil || ws == nil {
+	if err != nil {
 		return nil, err
 	}
-	weekly := make([]any, len(ws))
-	for i, w := range ws {
-		weekly[i] = []any{w.Day, w.From, w.To}
+	if err := checkSchedule(monthDays, skip); err != nil {
+		return nil, err
 	}
-	return map[string]any{"tz": tz, "weekly": weekly}, nil
+	if ws == nil && len(monthDays) == 0 && len(skip) == 0 {
+		return nil, nil // always on
+	}
+	av := map[string]any{"tz": tz}
+	if ws != nil {
+		weekly := make([]any, len(ws))
+		for i, w := range ws {
+			weekly[i] = []any{w.Day, w.From, w.To}
+		}
+		av["weekly"] = weekly
+	}
+	md := monthDays
+	if ws == nil && len(md) == 0 {
+		md = make([]int, 31) // only days off: every day of the month
+		for i := range md {
+			md[i] = i + 1
+		}
+	}
+	if len(md) > 0 {
+		out := make([]any, len(md))
+		for i, d := range md {
+			out[i] = d
+		}
+		av["monthdays"] = out
+	}
+	if len(skip) > 0 {
+		out := make([]any, len(skip))
+		for i, d := range skip {
+			out[i] = d
+		}
+		av["skip"] = out
+	}
+	return av, nil
+}
+
+var reDate = regexp.MustCompile(`^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$`)
+
+// checkSchedule: days of the month sorted, 1-31, no repeats; days off sorted YYYY-MM-DD, at most 64.
+func checkSchedule(monthDays []int, skip []string) error {
+	for i, d := range monthDays {
+		if d < 1 || d > 31 || (i > 0 && d <= monthDays[i-1]) {
+			return errors.New("days of the month: sorted, 1-31, no repeats")
+		}
+	}
+	if len(skip) > 64 {
+		return errors.New("days off: at most 64")
+	}
+	for i, d := range skip {
+		if !reDate.MatchString(d) || (i > 0 && d <= skip[i-1]) {
+			return errors.New("days off: sorted YYYY-MM-DD dates, no repeats")
+		}
+	}
+	return nil
 }
 
 func describeHours(hours string) string {

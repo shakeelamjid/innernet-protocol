@@ -503,6 +503,14 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(409, str(exc))
         return out
 
+    from .stats import StatsCache
+    stats_cache = StatsCache(store)
+
+    @app.get(P + "/v1/stats")
+    def network_stats():
+        """Public: prices, capacity and leaderboards for the website. Cached for 2 minutes."""
+        return JSONResponse(stats_cache.get(), headers={"Cache-Control": "public, max-age=60"})
+
     @app.get(P + "/v1/market")
     def market_prices():
         """Typical prices of listed providers, for setting a price."""
@@ -1087,6 +1095,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 "mode": "service" if c.get("kind") == "service" else "terminal",
                 "waiting_for_machine": waiting, "can_seal": reg.valid_seal_key(detected.get("seal_key")),
                 "draft": json.loads(c["draft"]) if c["draft"] else None,
+                "last": last_offer(pid),
                 "current": current["entry"] if current else None,
                 "defaults": {"prices": offers.DEFAULT_PRICES, "units": offers.UNITS},
                 "fee_bps": settings.fee_bps, "networks": nets, "market": presence.market(store)}
@@ -1104,6 +1113,12 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             raise HTTPException(409, "Your machine is not waiting for setup. Run innernet-provider start on it.")
         store.x("UPDATE claims SET request=? WHERE code_hash=?", (action, c["code_hash"]))
         return {"ok": True}
+
+    def last_offer(pid: str) -> dict | None:
+        """The offer last applied from the website: Change settings starts from it."""
+        row = store.one("SELECT draft FROM claims WHERE provider=? AND status='done' AND draft IS NOT NULL "
+                        "ORDER BY COALESCE(finished_at, submitted_at, created_at) DESC LIMIT 1", (pid,))
+        return json.loads(row["draft"]) if row else None
 
     def check_backup(blob, detected: dict) -> dict | None:
         if blob is None:
@@ -1256,6 +1271,29 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             "audit": [dict(ts=r["ts"], event=r["event"], detail=r["detail"], ip=r["ip"])
                       for r in store.q("SELECT * FROM audit WHERE provider=? ORDER BY id DESC LIMIT 100", (pid,))],
         }
+
+    @app.post(P + "/api/me/lost-key")
+    async def lost_key(request: Request):
+        """The owner lost this machine or its key: retire it, so a reinstall (new key) can use the payout
+        contract and set up again. Confirmed by typing the first 8 characters of the machine id."""
+        guard(request)
+        s = need_session(request)
+        pid = s["provider"]
+        if str((await body_json(request)).get("confirm", "")).lower() != pid[:8]:
+            raise HTTPException(422, "type the first 8 characters of the machine id to confirm")
+        p = store.provider(pid)
+        if p is None:
+            raise HTTPException(404, "this machine has no listing")
+        now = int(time.time())
+        with store.tx() as db:
+            db.execute("UPDATE providers SET state='leaving', reason=?, updated_at=? WHERE id=?",
+                       ("the owner lost this machine's key; clients move their files away", now, pid))
+            db.execute("DELETE FROM pairing WHERE provider=?", (pid,))
+            db.execute("UPDATE claims SET status='superseded' WHERE provider=? AND status IN "
+                       "('waiting','claimed','signing','submitted','service','fetched')", (pid,))
+            db.execute("UPDATE sessions SET revoked=1 WHERE provider=?", (pid,))
+        store.audit(pid, "key-lost", "retired by the owner from the dashboard; payout contract free", client_ip(request))
+        return {"ok": True}
 
     @app.post(P + "/api/me/intent")
     async def web_intent(request: Request):

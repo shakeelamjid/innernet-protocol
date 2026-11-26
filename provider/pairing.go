@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -80,10 +81,19 @@ func ensureMachineCode(registry string, priv ed25519.PrivateKey) (string, error)
 	return code, saveMachineCode(code, true)
 }
 
-func cmdCode() error {
+func cmdCode(args ...string) error {
 	code, registered := machineCode()
 	if _, err := os.Stat(machineCodePath()); err != nil {
 		return errors.New("this machine has no code yet: run innernet-provider start")
+	}
+	if len(args) > 0 && (args[0] == "--json" || args[0] == "-json") {
+		out := map[string]any{"code": code, "registered": registered}
+		if priv, err := loadKey(); err == nil {
+			out["provider"] = providerID(priv)
+		}
+		raw, _ := json.Marshal(out)
+		fmt.Println(string(raw))
+		return nil
 	}
 	fmt.Println("Machine code:", bold(code))
 	if !registered {

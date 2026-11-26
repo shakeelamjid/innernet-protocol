@@ -191,6 +191,9 @@ type webOffer struct {
 	VPN       bool              `json:"vpn"`
 	VPNOK     bool              `json:"vpn_consent"`
 	VPNPorts  string            `json:"vpn_ports"`
+	Hours     string            `json:"hours"`
+	MonthDays []int             `json:"month_days"`
+	SkipDates []string          `json:"skip_dates"`
 	PerClient int               `json:"per_client"`
 	Prices    map[string]string `json:"prices"`
 	Network   string            `json:"network"`
@@ -209,7 +212,7 @@ func networkKey(caip2 string) string {
 func (o *webOffer) config(reg string) *Config {
 	c := &Config{Version: "1", Name: o.Name, Region: o.Region, Host: o.Host, Port: o.Port, Network: networkKey(o.Network),
 		Payout: o.Payout, Registry: reg, Storage: o.StorageGB, RelayCap: o.RelayGB, Compute: o.Compute, CPUs: o.CPUs,
-		MemMiB: o.MemMiB, Prices: defaultPrices(),
+		MemMiB: o.MemMiB, Prices: defaultPrices(), Hours: o.Hours, MonthDays: o.MonthDays, SkipDates: o.SkipDates,
 		Created: time.Now().UTC().Format(time.RFC3339)}
 	for k, v := range o.Prices {
 		if _, ok := units[k]; ok && v != "" {

@@ -111,6 +111,28 @@
         </section>
 
         <section class="card frame step">
+          <h2>When you offer it</h2>
+          <p class="note">In this machine's time zone (<span id="tz-name">local</span>). Clients only use it inside these hours, and uptime is counted only inside them.</p>
+          <div class="offer">
+            <label class="toggle"><input type="radio" name="sched" id="sched-always" value="always"> <span><strong>Always on</strong> Best for storage: clients can fetch their files at any time.</span></label>
+            <label class="toggle"><input type="radio" name="sched" id="sched-custom" value="custom"> <span><strong>Only at chosen times</strong> Days of the week, days of the month, or both.</span></label>
+          </div>
+          <div id="sched-fields" hidden>
+            <table class="sched">
+              <thead><tr><th>Day</th><th>From</th><th>To</th></tr></thead>
+              <tbody id="sched-days"></tbody>
+            </table>
+            <p class="note">A window that ends earlier than it starts runs past midnight (for example 21:00 to 08:00). 00:00 to 24:00 is the whole day.</p>
+            <div class="fields">
+              <label>Only on these days of the month (empty: every day)<input id="sched-month" class="field" placeholder="1-5, 15, 28" autocomplete="off"></label>
+              <label>Days off (holidays)<input id="sched-skip" class="field" placeholder="2026-12-25, 2027-01-01" autocomplete="off"></label>
+            </div>
+            <p class="notice" id="sched-storage" hidden>You offer storage with limited hours. Clients cannot fetch their files while this machine is off, so they will prefer machines that are always on. Consider offering storage only on an always-on machine.</p>
+            <p class="msg" id="sched-msg" role="status"></p>
+          </div>
+        </section>
+
+        <section class="card frame step">
           <h2>Your payout contract</h2>
           <p>Clients pay this contract. It sends <strong id="share-you">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the network, and nobody can change that.</p>
           <p class="msg">Connect the wallet that should receive your share: a wallet on Base that you control, such as the Coinbase Wallet app, MetaMask, Rabby or a hardware wallet. Do not use an exchange deposit address. You never give anyone its key; the contract only stores its address. The same address works on the test network and later on Base mainnet.</p>

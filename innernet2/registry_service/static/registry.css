@@ -180,3 +180,10 @@ select.field { color: var(--text); background-color: #000; }
 .admin-audit td { padding: 6px 10px 6px 0; border-top: 1px solid var(--border-2); vertical-align: top; overflow-wrap: anywhere; }
 .notice { border: 1px solid var(--warn); padding: 12px 14px; font-size: .88rem; color: var(--text, #EDEDED); margin-top: 10px; }
 .notice strong { color: var(--warn); }
+
+/* schedule */
+.sched { width: 100%; max-width: 520px; border-collapse: collapse; margin: 12px 0; font-size: .9rem; }
+.sched th { text-align: left; color: var(--dim); font-weight: 500; padding: 4px 12px 4px 0; }
+.sched td { padding: 4px 12px 4px 0; }
+.sched input[type=time] { width: 120px; }
+.sched label { display: flex; gap: 8px; align-items: center; }

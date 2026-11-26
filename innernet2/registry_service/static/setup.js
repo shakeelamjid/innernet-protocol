@@ -30,6 +30,8 @@
   function say(id, t, err) { $(id).textContent = t; $(id).classList.toggle('error', !!err); }
   let machineGiB = 0;
   function sync() {
+    $('sched-fields').hidden = !$('sched-custom').checked;
+    $('sched-storage').hidden = !($('sched-custom').checked && $('sto-on').checked);
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = !$(el.getAttribute('data-for')).checked; });
     $('bw-fields').hidden = !($('rly-on').checked || $('vpn-on').checked);
     const compute = $('cmp-on').checked || (!$('gpu-block').hidden && $('gpu-on').checked);
@@ -86,6 +88,109 @@
     } catch (err) { say('reach-msg', I.friendly(err), true); }
   }
 
+  // ---- schedule ----
+  const DAYS = ['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'];
+  const DAYNAMES = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+  function buildDays() {
+    const tb = $('sched-days'); tb.textContent = '';
+    DAYS.forEach(function (d, i) {
+      const tr = document.createElement('tr');
+      const a = document.createElement('td'), b = document.createElement('td'), c = document.createElement('td');
+      a.innerHTML = '<label><input type="checkbox" id="sd-' + d + '"> ' + DAYNAMES[i] + '</label>';
+      b.innerHTML = '<input type="time" class="field" id="sf-' + d + '" value="09:00">';
+      c.innerHTML = '<input type="time" class="field" id="st-' + d + '" value="17:00">';
+      tr.append(a, b, c); tb.append(tr);
+    });
+  }
+  function hhmm(min) { return String(Math.floor(min / 60)).padStart(2, '0') + ':' + String(min % 60).padStart(2, '0'); }
+  function clock(v) { const p = String(v).split(':'); return parseInt(p[0], 10) * 60 + parseInt(p[1] || '0', 10); }
+  // "mon-fri 21:00-08:00, sat 10:00-14:00" -> per-day {from,to} (first window of each day)
+  function parseHours(text) {
+    const out = {};
+    String(text || '').toLowerCase().split(',').forEach(function (part) {
+      const f = part.trim().split(/\s+/); if (f.length !== 2) return;
+      const sp = f[1].split('-'); if (sp.length !== 2) return;
+      let days = [];
+      if (f[0] === 'daily' || f[0] === 'every' || f[0] === 'all') days = [0, 1, 2, 3, 4, 5, 6];
+      else if (f[0] === 'weekdays') days = [0, 1, 2, 3, 4];
+      else if (f[0] === 'weekends') days = [5, 6];
+      else {
+        const ab = f[0].split('-'), i = DAYS.indexOf(ab[0].slice(0, 3)), j = ab[1] ? DAYS.indexOf(ab[1].slice(0, 3)) : i;
+        if (i < 0 || j < 0) return;
+        for (let d = i; ; d = (d + 1) % 7) { days.push(d); if (d === j) break; }
+      }
+      days.forEach(function (d) { if (!out[d]) out[d] = { from: sp[0], to: sp[1] }; });
+    });
+    return out;
+  }
+  function hoursFromWeekly(weekly) {      // descriptor windows back to text (midnight-split windows rejoined)
+    const parts = [];
+    (weekly || []).forEach(function (w) { parts.push(DAYS[w[0]] + ' ' + hhmm(w[1]) + '-' + (w[2] === 1440 ? '24:00' : hhmm(w[2]))); });
+    return parts.join(', ');
+  }
+  function setSchedule(hours, monthDays, skip) {
+    const always = (!hours || hours === 'always') && !(monthDays && monthDays.length) && !(skip && skip.length);
+    $('sched-always').checked = always; $('sched-custom').checked = !always;
+    const per = parseHours(hours);
+    DAYS.forEach(function (d, i) {
+      $('sd-' + d).checked = !!per[i] || (!hours || hours === 'always');
+      if (per[i]) { $('sf-' + d).value = per[i].from.length === 5 ? per[i].from : per[i].from.padStart(5, '0'); $('st-' + d).value = per[i].to === '24:00' ? '23:59' : per[i].to; }
+      else if (!hours || hours === 'always') { $('sf-' + d).value = '00:00'; $('st-' + d).value = '23:59'; }
+    });
+    $('sched-month').value = ranges(monthDays || []);
+    $('sched-skip').value = (skip || []).join(', ');
+  }
+  function ranges(list) {
+    const out = []; let i = 0;
+    while (i < list.length) { let j = i; while (j + 1 < list.length && list[j + 1] === list[j] + 1) j++; out.push(j > i ? list[i] + '-' + list[j] : String(list[i])); i = j + 1; }
+    return out.join(', ');
+  }
+  function readSchedule() {
+    if ($('sched-always').checked) return { hours: 'always', month_days: [], skip_dates: [] };
+    const parts = [];
+    DAYS.forEach(function (d) {
+      if (!$('sd-' + d).checked) return;
+      let a = $('sf-' + d).value || '00:00', b = $('st-' + d).value || '23:59';
+      if (b === '23:59') b = '24:00';
+      if (a === b) throw new Error('Schedule: ' + d + ' starts and ends at the same time.');
+      parts.push(d + ' ' + a + '-' + b);
+    });
+    const md = [];
+    $('sched-month').value.split(',').forEach(function (p) {
+      p = p.trim(); if (!p) return;
+      const m = p.match(/^(\d{1,2})(?:\s*-\s*(\d{1,2}))?$/);
+      if (!m) throw new Error('Days of the month look like 1-5, 15 (not "' + p + '").');
+      const a = +m[1], b = m[2] ? +m[2] : a;
+      if (a < 1 || b > 31 || a > b) throw new Error('Days of the month are 1 to 31.');
+      for (let d = a; d <= b; d++) if (md.indexOf(d) < 0) md.push(d);
+    });
+    md.sort(function (x, y) { return x - y; });
+    const skip = $('sched-skip').value.split(',').map(function (x) { return x.trim(); }).filter(Boolean);
+    skip.forEach(function (d) { if (!/^20\d\d-\d\d-\d\d$/.test(d)) throw new Error('Days off look like 2026-12-25 (not "' + d + '").'); });
+    if (!parts.length && !md.length) throw new Error('Choose at least one day of the week, or days of the month.');
+    const allWeek = parts.length === 7 && parts.every(function (p) { return / 00:00-24:00$/.test(p); });
+    return { hours: allWeek || !parts.length ? 'always' : parts.join(', '), month_days: md, skip_dates: Array.from(new Set(skip)).sort() };
+  }
+
+  // The offer as it is listed now (fallback when no website setup was applied yet).
+  function fromEntry(e) {
+    if (!e) return null;
+    const svc = e.services || [], lim = e.limits || {}, pr = {};
+    Object.keys(e.prices || {}).forEach(function (k) { pr[k] = e.prices[k].amount; });
+    const bw = (lim['RLY-1'] || lim['VPN-1'] || {}).max_gib_per_month || 0;
+    const av = e.availability;
+    return {
+      name: e.name, region: e.region, host: (e.endpoints || [])[0] && e.endpoints[0].host, port: (e.endpoints || [])[0] && e.endpoints[0].port,
+      storage_gib: (lim['STO-1'] || {}).max_storage_gib || 0, relay_gib: bw, relay: svc.indexOf('RLY-1') >= 0,
+      vpn: svc.indexOf('VPN-1') >= 0, vpn_consent: svc.indexOf('VPN-1') >= 0, vpn_ports: (lim['VPN-1'] || {}).all_ports ? 'all' : 'web',
+      compute: svc.indexOf('CMP-1') >= 0, cpus: (lim['CMP-1'] || {}).max_cpus || 1, memory_mib: (lim['CMP-1'] || {}).max_memory_mib || 1024,
+      gpu: svc.indexOf('GPU-1') >= 0, gpus: (lim['GPU-1'] || {}).max_gpus || 1, prices: pr,
+      payout: Object.values(e.payto || {})[0] || '',
+      hours: av && av.weekly ? hoursFromWeekly(av.weekly) : 'always',
+      month_days: av && av.monthdays && av.monthdays.length < 31 ? av.monthdays : [], skip_dates: (av && av.skip) || []
+    };
+  }
+
   function num(id) { const v = parseInt($(id).value, 10); return isNaN(v) ? 0 : v; }
 
   function gpuLine(g) {
@@ -119,9 +224,12 @@
     });
   }
   function fill(d) {
-    const det = d.detected || {}, draft = d.draft, cur = d.current;
+    const det = d.detected || {}, cur = d.current;
+    const draft = d.draft || d.last || fromEntry(cur);   // Change settings starts from what is applied now
     fillFacts(det);
     const src = draft || {};
+    $('tz-name').textContent = det.tz || 'local';
+    setSchedule(src.hours || 'always', src.month_days, src.skip_dates);
     $('name').value = src.name || (cur && cur.name) || det.name || '';
     $('region').value = src.region || (cur && cur.region) || det.region || '';
     $('host').value = src.host || det.host || '';
@@ -169,6 +277,8 @@
 
   $('reach-retest').addEventListener('click', function () { reach('retest'); });
   $('reach-out').addEventListener('click', function () { reach('outgoing'); });
+  buildDays();
+  ['sched-always', 'sched-custom'].forEach(function (id) { $(id).addEventListener('change', sync); });
   ['sto-on', 'rly-on', 'vpn-on', 'cmp-on', 'gpu-on', 'reserve-gib', 'backup-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
   $('reserve-gib').addEventListener('input', sync);
 
@@ -200,6 +310,7 @@
     };
     if ($('vpn-on').checked && !$('vpn-consent').checked) { say('send-msg', 'VPN exit needs your consent (the box under VPN exit), or untick VPN exit.', true); return; }
     if (!$('terms-ok').checked) { say('send-msg', 'Read and agree to the provider terms first.', true); return; }
+    try { Object.assign(offer, readSchedule()); } catch (err) { say('send-msg', err.message, true); return; }
     const wantBackup = !$('backup-block').hidden && $('backup-on').checked;
     if (wantBackup) {
       if ($('pass1').value.length < 12) { say('send-msg', 'The backup passphrase needs at least 12 characters, or untick the key backup.', true); return; }

@@ -12,7 +12,7 @@ DEFAULT_PRICES = {"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0200", "GPU-
 _EVM = re.compile(r"^0x[0-9a-fA-F]{40}$")
 _KEYS = {"name", "region", "host", "port", "storage_gib", "relay_gib", "compute", "cpus", "memory_mib",
          "gpu", "gpus", "reserve_gib", "per_client", "terms", "relay", "vpn", "vpn_consent",
-         "vpn_ports", "prices", "network", "payout"}
+         "vpn_ports", "prices", "network", "payout", "hours", "month_days", "skip_dates"}
 
 
 def _int(v, lo, hi, label):
@@ -25,6 +25,62 @@ def best_gpu(detected: dict | None) -> dict | None:
     """The machine's strongest GPU for rent (most memory), or None. Generic display adapters never count."""
     gpus = [g for g in (detected or {}).get("gpus") or [] if g.get("api", "none") != "none"]
     return max(gpus, key=lambda g: (g.get("vram_mib", 0), g.get("cores", 0)), default=None)
+
+
+_DAYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+_DATE = re.compile(r"^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+
+
+def _day(name: str) -> int:
+    for i, d in enumerate(_DAYS):
+        if name.startswith(d):
+            return i
+    return -1
+
+
+def check_hours(text) -> str:
+    """Weekly hours as the machine reads them: "always" or e.g. "mon-fri 21:00-08:00, sat 10:00-14:00"."""
+    t = str(text or "always").strip().lower()
+    if t in ("", "always", "24/7"):
+        return "always"
+    if len(t) > 400:
+        raise BulkError("hours: too long")
+    for part in t.split(","):
+        f = part.split()
+        if len(f) != 2:
+            raise BulkError(f"hours: write days then hours, e.g. mon-fri 21:00-08:00 (not {part.strip()!r})")
+        days, span = f
+        if days not in ("daily", "every", "all", "weekdays", "weekends"):
+            a, _, b = days.partition("-")
+            if _day(a) < 0 or (b and _day(b) < 0):
+                raise BulkError(f"hours: days are mon..sun, weekdays, weekends or daily (not {days!r})")
+        m = re.match(r"^([0-9]{1,2})(?::([0-9]{2}))?-([0-9]{1,2})(?::([0-9]{2}))?$", span)
+        if not m:
+            raise BulkError(f"hours: times look like 21:00-08:00 (not {span!r})")
+        a = int(m[1]) * 60 + int(m[2] or 0)
+        b = int(m[3]) * 60 + int(m[4] or 0)
+        if a >= 1440 or b > 1440 or a == b or int(m[2] or 0) > 59 or int(m[4] or 0) > 59:
+            raise BulkError(f"hours: times look like 21:00-08:00 (not {span!r})")
+    return t
+
+
+def check_month_days(days) -> list[int]:
+    if not isinstance(days, list) or len(days) > 31:
+        raise BulkError("days of the month: a list of 1..31")
+    out = sorted({_int(d, 1, 31, "day of the month") for d in days})
+    if out and len(out) == 31:
+        return []          # every day: same as none
+    return out
+
+
+def check_skip(dates) -> list[str]:
+    if not isinstance(dates, list) or len(dates) > 64:
+        raise BulkError("dates off: at most 64")
+    out = sorted({str(d).strip() for d in dates})
+    for d in out:
+        if not _DATE.match(d):
+            raise BulkError(f"dates off: use YYYY-MM-DD (not {d!r})")
+    return out
 
 
 def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -> dict:
@@ -53,6 +109,9 @@ def check_offer(offer: dict, networks: set[str], detected: dict | None = None) -
         "prices": {k: str(v).strip() for k, v in dict(offer.get("prices") or {}).items() if k in UNITS},
         "network": str(offer.get("network", "")),
         "payout": str(offer.get("payout", "")).strip(),
+        "hours": check_hours(offer.get("hours", "always")),
+        "month_days": check_month_days(offer.get("month_days") or []),
+        "skip_dates": check_skip(offer.get("skip_dates") or []),
     }
     if o["vpn"] and not o["vpn_consent"]:
         raise BulkError("VPN exit needs your consent: you are allowed to offer internet exit where you operate, "

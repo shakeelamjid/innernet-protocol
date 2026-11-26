@@ -65,13 +65,15 @@ type Config struct {
 	PerClient   int               `json:"max_jobs_per_client,omitempty"` // running CPU + GPU jobs per client
 	Prices      map[string]string `json:"prices_usdc"`
 	Created     string            `json:"created_at"`
-	PortMap     string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
-	Hours       string            `json:"hours,omitempty"`    // "always" or e.g. "mon-fri 21:00-08:00"
-	TZ          string            `json:"tz,omitempty"`       // time zone the hours are in
-	Class       string            `json:"class,omitempty"`    // server, desktop or laptop
-	State       string            `json:"state,omitempty"`    // paused or leaving, set by pause/leave
-	Relay       *relayTarget      `json:"relay,omitempty"`    // reached through this ST81 relay (RLY-0)
-	Tunnel      bool              `json:"tunnel,omitempty"`   // reached through the registry's HTTPS tunnel
+	PortMap     string            `json:"port_map,omitempty"`   // natpmp or upnp: serve keeps the router mapping alive
+	Hours       string            `json:"hours,omitempty"`      // "always" or e.g. "mon-fri 21:00-08:00"
+	MonthDays   []int             `json:"month_days,omitempty"` // only on these days of the month (1-31)
+	SkipDates   []string          `json:"skip_dates,omitempty"` // days off, YYYY-MM-DD
+	TZ          string            `json:"tz,omitempty"`         // time zone the hours are in
+	Class       string            `json:"class,omitempty"`      // server, desktop or laptop
+	State       string            `json:"state,omitempty"`      // paused or leaving, set by pause/leave
+	Relay       *relayTarget      `json:"relay,omitempty"`      // reached through this ST81 relay (RLY-0)
+	Tunnel      bool              `json:"tunnel,omitempty"`     // reached through the registry's HTTPS tunnel
 	TunnelHost  string            `json:"tunnel_host,omitempty"`
 }
 
@@ -217,6 +219,9 @@ func (c *Config) validate(forApply bool) error {
 	if _, err := parseHours(c.Hours); err != nil {
 		problems = append(problems, "hours: "+err.Error())
 	}
+	if err := checkSchedule(c.MonthDays, c.SkipDates); err != nil {
+		problems = append(problems, err.Error())
+	}
 	if c.Class != "" && c.Class != "server" && c.Class != "desktop" && c.Class != "laptop" {
 		problems = append(problems, "class: server, desktop or laptop")
 	}
@@ -273,7 +278,7 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	if c.TermsSHA != "" {
 		entry["terms"] = c.TermsSHA
 	}
-	if av, err := availabilityEntry(c.Hours, orDefault(c.TZ, "UTC")); err == nil && av != nil {
+	if av, err := availabilityEntry(c.Hours, orDefault(c.TZ, "UTC"), c.MonthDays, c.SkipDates); err == nil && av != nil {
 		entry["availability"] = av
 	}
 	if c.Class != "" {

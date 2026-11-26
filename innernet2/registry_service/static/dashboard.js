@@ -84,6 +84,20 @@
     showLogin();
   });
 
+  $('lost-key').addEventListener('click', async function () {
+    const id = (window.__provider || '').slice(0, 8);
+    const typed = prompt('This retires the machine for good: clients move their files away, its machine code stops working, ' +
+      'and its payout contract becomes free for a new install. Only do this if the key is lost.\n\n' +
+      'Type the first 8 characters of the machine id (' + id + ') to confirm:');
+    if (!typed) return;
+    try {
+      await I.api('/api/me/lost-key', { confirm: typed.trim().toLowerCase() });
+      $('lost-msg').classList.remove('error');
+      $('lost-msg').textContent = 'Retired. You are signed out. Install again on any machine and use the same payout contract.';
+      setTimeout(showLogin, 4000);
+    } catch (err) { $('lost-msg').textContent = I.friendly(err); $('lost-msg').classList.add('error'); }
+  });
+
   $('add-passkey').addEventListener('click', async function () {
     const msg = $('passkey-msg');
     msg.classList.remove('error');
@@ -102,6 +116,7 @@
 
   function render(d) {
     const e = d.provider;
+    window.__provider = e.id;
     $('login').hidden = true;
     $('dash').hidden = false;
     $('logout').hidden = false;

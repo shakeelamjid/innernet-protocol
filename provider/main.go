@@ -62,7 +62,7 @@ func main() {
 	case "terms":
 		err = cmdTerms(args)
 	case "code":
-		err = cmdCode()
+		err = cmdCode(args...)
 	case "rekey":
 		err = cmdRekey()
 	case "st81-echo", "st81-ping":
@@ -120,7 +120,7 @@ Registry
   login                get a one-time link to the web dashboard (add a passkey there)
   passkeys [remove N]  list the passkeys that open your dashboard; remove a lost one
   terms [accept]       show the provider and client terms; agree to the current provider terms
-  code                 show this machine's code (enter it on the website; stays until you rekey)
+  code [--json]        show this machine's code (enter it on the website; stays until you rekey)
   rekey                replace the machine code (the old one stops working at once)
 
 Other

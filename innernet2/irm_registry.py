@@ -92,29 +92,56 @@ CLASSES = {"server", "desktop", "laptop"}
 _TZ = re.compile(r"^(UTC[+-][0-9]{2}:[0-9]{2}|[A-Za-z_]{1,32}(/[A-Za-z0-9_+-]{1,32}){0,2}|UTC)$")
 
 
+_DATE = re.compile(r"^20[0-9]{2}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$")
+
+
 def validate_availability(av) -> None:
-    """Weekly hours: {"tz": zone, "weekly": [[day 0=Mon..6, from_minute, to_minute], ...]}, sorted,
-    non-overlapping, each window inside one day. Missing availability means always on."""
-    _exact_keys(av, {"tz", "weekly"}, label="availability")
+    """Promised hours, in the provider's time zone. Missing availability means always on.
+
+    weekly    [[day 0=Mon..6, from_minute, to_minute], ...], sorted, non-overlapping, inside one day
+    monthdays [1..31, ...] sorted: only on these days of the month (with weekly: both must match)
+    skip      ["YYYY-MM-DD", ...] sorted: days off (holidays)
+    At least weekly or monthdays."""
+    _exact_keys(av, {"tz"}, {"weekly", "monthdays", "skip"}, label="availability")
     if not isinstance(av["tz"], str) or not _TZ.match(av["tz"]):
         raise BulkError("invalid availability time zone")
-    weekly = av["weekly"]
-    if not isinstance(weekly, list) or not 1 <= len(weekly) <= 64:
-        raise BulkError("invalid availability windows")
-    last = (-1, 0)
-    for w in weekly:
-        if not isinstance(w, list) or len(w) != 3:
-            raise BulkError("invalid availability window")
-        day, start, end = (_int(w[0], 0, 6, "availability day"), _int(w[1], 0, 1439, "availability start"),
-                           _int(w[2], 1, 1440, "availability end"))
-        if start >= end or (day, start) < last or (day == last[0] and start < last[1]):
-            raise BulkError("availability windows must be sorted and must not overlap")
-        last = (day, end)
+    if "weekly" not in av and "monthdays" not in av:
+        raise BulkError("availability needs weekly hours or days of the month")
+    if "weekly" in av:
+        weekly = av["weekly"]
+        if not isinstance(weekly, list) or not 1 <= len(weekly) <= 64:
+            raise BulkError("invalid availability windows")
+        last = (-1, 0)
+        for w in weekly:
+            if not isinstance(w, list) or len(w) != 3:
+                raise BulkError("invalid availability window")
+            day, start, end = (_int(w[0], 0, 6, "availability day"), _int(w[1], 0, 1439, "availability start"),
+                               _int(w[2], 1, 1440, "availability end"))
+            if start >= end or (day, start) < last or (day == last[0] and start < last[1]):
+                raise BulkError("availability windows must be sorted and must not overlap")
+            last = (day, end)
+    if "monthdays" in av:
+        md = av["monthdays"]
+        if not isinstance(md, list) or not 1 <= len(md) <= 31 or md != sorted(set(md)):
+            raise BulkError("invalid availability monthdays")
+        for d in md:
+            _int(d, 1, 31, "availability monthday")
+    if "skip" in av:
+        sk = av["skip"]
+        if not isinstance(sk, list) or not 1 <= len(sk) <= 64 or sk != sorted(set(sk)) or \
+                not all(isinstance(d, str) and _DATE.match(d) for d in sk):
+            raise BulkError("invalid availability skip dates")
 
 
 def available_minutes(entry: dict) -> int:
+    """Promised minutes in an average week."""
     av = entry.get("availability")
-    return 7 * 1440 if av is None else sum(w[2] - w[1] for w in av["weekly"])
+    if av is None:
+        return 7 * 1440
+    week = sum(w[2] - w[1] for w in av["weekly"]) if "weekly" in av else 7 * 1440
+    if "monthdays" in av:
+        week = round(week * len(av["monthdays"]) / 30.44)
+    return week
 
 
 def validate_hardware(hw: dict) -> None:
@@ -661,5 +688,11 @@ def in_hours(entry: dict, instant: int) -> bool:
     except Exception:
         return True                                   # unknown zone: do not penalise
     local = datetime.fromtimestamp(instant, zone)
+    if local.strftime("%Y-%m-%d") in av.get("skip", ()):
+        return False
+    if "monthdays" in av and local.day not in av["monthdays"]:
+        return False
+    if "weekly" not in av:
+        return True
     minute = local.hour * 60 + local.minute
     return any(w[0] == local.weekday() and w[1] <= minute < w[2] for w in av["weekly"])

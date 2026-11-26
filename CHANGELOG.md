@@ -2,6 +2,17 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Schedules, settings that remember, lost keys, live market, provider tester
+
+- Change settings starts from what is applied: the last offer applied from the website (all fields), or the current listing.
+- Schedule on the setup page: days of the week with times, days of the month, days off. Availability (REG-1) gains optional `monthdays` and `skip`; `weekly` becomes optional (one of the two is required). Uptime still counts only inside the promised hours. A warning when storage is offered with limited hours.
+- Dashboard: "Retire this machine (key lost)": leaving, machine code removed, payout contract free; explains restoring from a backup instead.
+- `/registry/v1/stats` (public, cached): totals, free capacity, prices, leaderboards (most reliable, cheapest per service), payments in 30 days. Public names only; no addresses, wallets or earnings.
+- Website: live market on `/provide/`; new `/build/` page for app builders (what you can use, live prices and capacity, how an app uses INNERnet in seven parts, examples); `llms.txt`; `openapi.json`.
+- `python -m innernet2.provider_test <provider|all>`: listed, online, signed answer, response time, 1 MiB storage round trip; with `--credit-tx` and `--wasm`, a paid CPU job with its receipt. `--json`.
+- Provider: `code --json`; on Linux, setup reports when lingering is off (the service would stop at logout and not start after a reboot) with the one command that fixes it.
+- `provider/LATEST` is `provider-v0.6.4`.
+
 ### Setup finishes on the website; the terminal asks nothing
 
 - `start` goes straight to the website (no 1/2 question; `--mode terminal` or `--yes` for agents). Everything is chosen there, including the key backup passphrase and the background service, then **Apply** asks for the passkey. The terminal applies it and exits by itself; no more y/n prompts.

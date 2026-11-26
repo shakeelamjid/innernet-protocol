@@ -114,6 +114,14 @@
           <h2>Activity log</h2>
           <div class="scroll"><table><tbody id="audit"></tbody></table></div>
         </section>
+
+        <section class="card frame span-12">
+          <h2>Lost this machine or its key?</h2>
+          <p><strong>You have a key backup:</strong> on the new or reinstalled machine run <span class="mono">innernet-provider restore FILE</span>, then <span class="mono">innernet-provider start</span>. It comes back as this same machine, with its listing, earnings history and passkeys.</p>
+          <p><strong>No backup:</strong> the key cannot be recovered (nobody has a copy, not even us). Retire this machine below: clients move their files away, the machine code stops working and the payout contract becomes free. Then install again on any machine (<span class="mono">curl -fsSL https://innernetcorp.com/install.sh | sh</span>) and use the same payout contract.</p>
+          <button class="btn btn-sm btn-danger" id="lost-key" type="button">Retire this machine (key lost)</button>
+          <p class="msg" id="lost-msg" role="status"></p>
+        </section>
       </div>
     </div>
   </main>

@@ -110,6 +110,21 @@ Other commands: `init` (terminal questions only, also accepts every value as a f
 
 Every request is signed by the client's Ed25519 key over method, path, body hash, time and a random nonce; replays and requests more than 5 minutes off the clock are refused. The first client to write to a lease owns it. Every JSON reply is signed with the provider key, so both sides keep evidence. Each payment transaction can be credited once. `INNERNET_RPC` sets the JSON-RPC endpoint used to check payments (default `https://sepolia.base.org`).
 
+## On a Linux server (Contabo, Hetzner, any VPS)
+
+No Docker needed. As a normal user (not root; `adduser innernet` if needed):
+
+    curl -fsSL https://innernetcorp.com/install.sh | sh
+
+A server with a public address is reached directly (no tunnel). If ufw or firewalld is on, setup asks once for sudo to allow the port; `uninstall` removes the rule. Keep "Keep serving in the background" ticked: setup installs a systemd user service. For it to keep running after you log out and to start after a reboot, the user needs lingering; setup turns it on, and if it cannot, it says to run `sudo loginctl enable-linger <user>` once. Check with `innernet-provider status` after a reboot. If Coolify runs on the same server it uses ports 80, 443 and 8000; the provider's 9443 does not clash (choose another with `start --port`).
+
+## Testing a provider
+
+    python -m innernet2.provider_test <provider id, prefix or name>     # or: all
+    python -m innernet2.provider_test <provider> --credit-tx 0x… --wasm echo.wasm --accept-terms <client terms sha256>
+
+Free checks: listed in the signed registry document, online (live presence and path), a signed answer from the listed key, response time, and a 1 MiB storage round trip on that provider. Paid check: pay test USDC to the provider's payout contract from your own wallet, then pass the transaction; the tester credits it, runs a CPU job and checks the signed receipt. It never sees a wallet key. `--json` for scripts.
+
 ## Files
 
 Everything lives in `~/.innernet/provider` (`%USERPROFILE%\.innernet\provider` on Windows), or in `INNERNET_HOME` if set. The folder is private to your user (0700).
