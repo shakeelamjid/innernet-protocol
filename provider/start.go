@@ -10,7 +10,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -41,6 +40,7 @@ func cmdStart(args []string) error {
 	noOpen := fs.Bool("no-browser", false, "do not try to open the browser")
 	svc := fs.Bool("service", false, "with --yes: also install the background service")
 	via := fs.String("via", "", "force how clients reach this machine: relay (ST81 relay) or tunnel (HTTPS); default: try direct first")
+	again := fs.Bool("again", false, "run the whole setup again on a machine that is already set up")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -49,10 +49,17 @@ func cmdStart(args []string) error {
 		pollEvery = time.Duration(ms) * time.Millisecond
 	}
 	updateBeforeStart()
+	if !*again && !*yes && *mode == "" && alreadySetUp() {
+		return showSetUp(reg)
+	}
 	banner("provider setup", "base-sepolia")
 	fmt.Println(dim("  Test network: no real money moves yet. Your key never leaves this machine."))
 	fmt.Println()
-	st := newStepper(6)
+	total := 9 // 4 checks here, then 5 steps applying the website's choice
+	if *yes || strings.EqualFold(*mode, "terminal") {
+		total = 6
+	}
+	st := newStepper(total)
 	st.begin("Machine key")
 	priv, err := loadKey()
 	if err != nil {
@@ -73,15 +80,7 @@ func cmdStart(args []string) error {
 	}
 	fmt.Println()
 	if m == "" {
-		fmt.Println(bold("  How do you want to finish setup?"))
-		fmt.Println("    1  On the website (recommended): you get a code, then choose everything in your browser")
-		fmt.Println("    2  Here in the terminal (power users and agents)")
-		if strings.HasPrefix(ask("  Choose 1 or 2", "1"), "2") {
-			m = "terminal"
-		} else {
-			m = "web"
-		}
-		fmt.Println()
+		m = "web" // agents and power users: --mode terminal (or --yes)
 	}
 	switch m {
 	case "web":
@@ -94,7 +93,31 @@ func cmdStart(args []string) error {
 
 // ---------- website setup ----------
 
-func connectRecord(priv ed25519.PrivateKey, f *facts, now int64) (map[string]any, error) {
+// alreadySetUp: settings and a signed listing exist, so `start` shows where things stand instead of
+// starting over. Changes are made on the website; the background service applies them.
+func alreadySetUp() bool {
+	if _, err := loadConfig(); err != nil {
+		return false
+	}
+	_, err := os.Stat(descPath())
+	return err == nil
+}
+
+func showSetUp(reg string) error {
+	_ = cmdStatus(nil)
+	fmt.Println("  " + green(markOK) + " This machine is already set up.")
+	fmt.Println()
+	setupURL := strings.TrimSuffix(strings.TrimRight(reg, "/"), "/v1") + "/setup"
+	fmt.Println("  Change what you offer: " + bold(setupURL) + " (sign in with your passkey).")
+	if code, ok := machineCode(); ok && code != "" {
+		fmt.Println("  No passkey on this device? Enter the machine code at the claim page: " + bold(code))
+	}
+	fmt.Println(dim("  The background service applies the change; no terminal needed. Start over: innernet-provider start --again"))
+	fmt.Println()
+	return nil
+}
+
+func connectRecord(priv ed25519.PrivateKey, f *facts, now int64, sealKey string) (map[string]any, error) {
 	nb := make([]byte, 16)
 	_, _ = rand.Read(nb)
 	detected := map[string]any{"name": f.Name, "region": f.Region, "port": f.Port, "storage_free_gib": f.StorageFreeGiB,
@@ -133,6 +156,9 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64) (map[string]any
 		gpus = append(gpus, m)
 	}
 	detected["gpus"] = gpus
+	if sealKey != "" {
+		detected["seal_key"] = sealKey
+	}
 	payload := map[string]any{"version": "REG-1-CONNECT", "provider": providerID(priv), "detected": detected,
 		"nonce": hex.EncodeToString(nb), "issued_at": now}
 	sig, err := signCanonical(priv, connectDomain, payload)
@@ -189,14 +215,9 @@ func (o *webOffer) config(reg string) *Config {
 }
 
 func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error {
-	rec, err := connectRecord(priv, f, time.Now().Unix())
+	box, err := newSealBox()
 	if err != nil {
 		return err
-	}
-	raw, _ := json.Marshal(rec)
-	resp, err := httpClient.Post(reg+"/connect", "application/json", bytes.NewReader(raw))
-	if err != nil {
-		return fmt.Errorf("could not reach the registry: %v", err)
 	}
 	var cr struct {
 		Code, Poll, URL string
@@ -205,131 +226,74 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		Resumed         bool             `json:"resumed"`
 		SetupURL        string           `json:"setup_url"`
 	}
-	err = json.NewDecoder(io.LimitReader(resp.Body, 8<<10)).Decode(&cr)
-	resp.Body.Close()
-	if resp.StatusCode != 200 || err != nil || cr.Code == "" {
-		return fmt.Errorf("registry refused to start setup (%s)", resp.Status)
+	for attempt := 0; ; attempt++ {
+		seal := box.public()
+		if attempt > 0 {
+			seal, box = "", nil // an older registry does not know the sealed backup yet
+		}
+		rec, err := connectRecord(priv, f, time.Now().Unix(), seal)
+		if err != nil {
+			return err
+		}
+		raw, _ := json.Marshal(rec)
+		resp, err := httpClient.Post(reg+"/connect", "application/json", bytes.NewReader(raw))
+		if err != nil {
+			return fmt.Errorf("could not reach the registry: %v", err)
+		}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 8<<10))
+		resp.Body.Close()
+		if resp.StatusCode == 422 && attempt == 0 && strings.Contains(string(body), "detected") {
+			continue
+		}
+		if resp.StatusCode != 200 || json.Unmarshal(body, &cr) != nil || cr.Code == "" {
+			return fmt.Errorf("registry refused to start setup (%s)", resp.Status)
+		}
+		break
 	}
 	fmt.Println()
-	if cr.Resumed {
-		fmt.Println("  " + green(markOK) + " Continuing the setup you started earlier on the website.")
-		fmt.Println("    If that browser tab is still open and signed in, just finish there: " + bold(cr.SetupURL))
-		fmt.Println("    Otherwise use the code below; you will only confirm your passkey.")
-	}
 	claimURL := strings.TrimSuffix(strings.TrimRight(reg, "/"), "/v1") + "/claim"
 	if code, err := ensureMachineCode(reg, priv); err == nil {
 		// The machine code is the one to remember: it stays the same until innernet-provider rekey.
-		fmt.Println("  Open " + bold(claimURL) + " and enter your machine code:")
+		fmt.Println("  Finish on the website: open " + bold(claimURL) + " and enter your machine code:")
 		fmt.Println()
 		fmt.Println("    Machine code:  " + bold(code))
 		fmt.Println()
 		fmt.Println(dim("  It stays the same until you run innernet-provider rekey (see it again: innernet-provider code)."))
-		fmt.Println(dim("  Keep it private. Every listing and payout change is still confirmed here, on this machine."))
 		cr.URL = claimURL
 	} else {
 		fmt.Println(dim("  (Machine code not available: " + err.Error() + "; using a one-time code.)"))
-		fmt.Println("  Open this link, or go to " + claimURL + " and enter the code:")
+		fmt.Println("  Finish on the website: open this link, or go to " + claimURL + " and enter the code:")
 		fmt.Println()
 		fmt.Println("    " + bold(cr.URL))
 		fmt.Println()
 		fmt.Println("    Code:  " + bold(cr.Code))
 		fmt.Println()
-		fmt.Println(dim("  The code works as long as this terminal stays open (up to 24 hours)."))
 	}
-	fmt.Println()
+	if cr.Resumed {
+		fmt.Println("  " + green(markOK) + " You started this setup earlier. If that page is still open, finish there: " + bold(cr.SetupURL))
+	}
 	if n := len(cr.Passkeys); n > 0 {
 		names := make([]string, n)
 		for i, m := range cr.Passkeys {
 			name, _ := m["name"].(string)
 			names[i] = fmt.Sprintf("%s (%s)", name, passkeyWhen(m))
 		}
-		fmt.Printf("  This machine already has %d passkey(s): %s\n", n, strings.Join(names, "; "))
-		fmt.Println(dim("  On the website, confirm it on the device that has it, or add a new one if you lost it."))
-		fmt.Println(dim("  Remove a lost one afterwards: innernet-provider passkeys remove NAME"))
-		fmt.Println()
+		fmt.Printf("  Passkeys for this machine: %s\n", strings.Join(names, "; "))
 	}
+	fmt.Println(dim("  Everything is chosen on the website and confirmed with your passkey. This terminal asks nothing;"))
+	fmt.Println(dim("  it applies your choice, then finishes on its own. Ctrl+C stops waiting."))
+	fmt.Println()
 	if !noOpen {
 		openBrowser(cr.URL)
 	}
-	offer, err := waitForOffer(reg, cr.Poll)
+	st, err := waitForSetup(reg, cr.Poll, 24*time.Hour, func(string) {
+		fmt.Println("  " + green(markOK) + " Signed in on the website. Waiting for you to press Apply…")
+	})
 	if err != nil {
 		return err
 	}
-	c := offer.config(strings.TrimSuffix(reg, ""))
-	if offer.GPU {
-		// The GPU model comes from this machine's own detection, never from the website.
-		if err := c.setGPU(f.GPUs, offer.GPUs); err != nil {
-			return fmt.Errorf("the offer from the website is not valid: %v", err)
-		}
-	}
-	if offer.Port == f.Port {
-		c.PortMap = f.PortMap
-	}
-	c.Relay, c.Tunnel, c.TunnelHost, c.Class, c.TZ = f.Relay, f.Tunnel, f.TunnelHost, f.Class, f.TZ
-	if offer.Reserve != nil && *offer.Reserve >= 0 {
-		c.ReserveMiB = *offer.Reserve << 10
-		if c.ReserveMiB == 0 {
-			c.ReserveMiB = 1 // "keep nothing" (0 would mean the default)
-		}
-	}
-	c.PerClient = offer.PerClient
-	c.TermsSHA = offer.Terms // agreed on the website; the registry checked it is the current version
-	if offer.Relay != nil {
-		c.NoRelay = !*offer.Relay
-	}
-	if offer.VPN && offer.VPNOK { // the consent was given on the website; it is confirmed again here below
-		c.VPN, c.VPNAllPorts, c.VPNConsent = true, offer.VPNPorts == "all", time.Now().UTC().Format(time.RFC3339)
-	}
-	if err := c.validate(true); err != nil {
-		return fmt.Errorf("the offer from the website is not valid: %v", err)
-	}
 	fmt.Println()
-	printOffer(c)
-	if !askYes("Sign this offer with this machine's key and apply", true) {
-		return errors.New("cancelled; nothing was applied. Run innernet-provider start again when ready")
-	}
-	if err := finishSetup(c, priv); err != nil {
-		return err
-	}
-	req, _ := http.NewRequest("POST", reg+"/connect/finish", nil)
-	req.Header.Set("X-Poll-Token", cr.Poll)
-	if r, err := httpClient.Do(req); err == nil {
-		r.Body.Close()
-	}
-	afterSetup(false, true)
-	return nil
-}
-
-func waitForOffer(reg, poll string) (*webOffer, error) {
-	deadline := time.Now().Add(24 * time.Hour) // the registry keeps the code alive while we poll
-	last := ""
-	for time.Now().Before(deadline) {
-		req, _ := http.NewRequest("GET", reg+"/connect/status", nil)
-		req.Header.Set("X-Poll-Token", poll)
-		resp, err := httpClient.Do(req)
-		if err == nil {
-			var st struct {
-				Status string    `json:"status"`
-				Offer  *webOffer `json:"offer"`
-			}
-			_ = json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&st)
-			resp.Body.Close()
-			if st.Status != last {
-				switch st.Status {
-				case "claimed":
-					fmt.Println("  " + green(markOK) + " Code accepted. Waiting for you to finish on the website…")
-				case "expired":
-					return nil, errors.New("the code expired; run innernet-provider start again")
-				}
-				last = st.Status
-			}
-			if st.Status == "submitted" && st.Offer != nil {
-				return st.Offer, nil
-			}
-		}
-		time.Sleep(pollEvery)
-	}
-	return nil, errors.New("timed out waiting for the website; run innernet-provider start again")
+	return applyWebSetup(reg, cr.Poll, priv, f, box, st, true)
 }
 
 func openBrowser(url string) {

@@ -46,6 +46,10 @@ CREATE INDEX IF NOT EXISTS presence_log_by_provider ON presence_log(provider, ts
 PROVIDER_COLUMNS = {"resume_to": "TEXT", "trial_since": "INTEGER", "last_seen": "INTEGER"}
 
 
+# Website setup signed with a passkey: what was signed, the signature, the machine's live progress.
+CLAIM_COLUMNS = {"signed": "TEXT", "auth": "TEXT", "progress": "TEXT", "finished_at": "INTEGER", "kind": "TEXT"}
+
+
 def migrate(store: Store) -> None:
     for stmt in SCHEMA.strip().split(";"):
         if stmt.strip():
@@ -54,6 +58,10 @@ def migrate(store: Store) -> None:
     for col, kind in PROVIDER_COLUMNS.items():
         if col not in have:
             store.x(f"ALTER TABLE providers ADD COLUMN {col} {kind}")
+    have = {r["name"] for r in store.q("PRAGMA table_info(claims)")}
+    for col, kind in CLAIM_COLUMNS.items():
+        if col not in have:
+            store.x(f"ALTER TABLE claims ADD COLUMN {col} {kind}")
 
 
 def info_check(host: str, port: int, provider: str, timeout: float = 5.0) -> bool:

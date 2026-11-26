@@ -475,6 +475,15 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 db.execute("INSERT INTO pairing(provider, code_hash, set_at) VALUES (?,?,?)", (pid, target, now))
             store.audit(pid, "machine-code-set", f"nonce {nonce}", ip)
             return {"ok": True}
+        if action == "setup-fetch":
+            row = store.one("SELECT * FROM claims WHERE provider=? AND status='service' AND expires_at>? "
+                            "ORDER BY created_at DESC LIMIT 1", (pid, int(time.time())))
+            if row is None:
+                raise HTTPException(404, "no setup is waiting for this machine")
+            poll = secrets.token_urlsafe(24)
+            store.x("UPDATE claims SET poll_hash=?, status='fetched' WHERE code_hash=?", (token_hash(poll), row["code_hash"]))
+            store.audit(pid, "setup-fetched", f"machine, nonce {nonce}", ip)
+            return {"poll": poll}
         if action == "passkey-remove":
             target = reg.intent_target(record)
             row = store.one("SELECT * FROM passkeys WHERE provider=? AND (cred_id=? OR name=?) ORDER BY created_at LIMIT 1",
@@ -523,13 +532,13 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         code, poll = new_claim_code(), secrets.token_urlsafe(24)
         now = int(time.time())
         # Same machine again within the 30 minutes (terminal was closed): continue that setup.
-        prev = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('claimed','submitted') AND expires_at>? "
+        prev = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('claimed','signing','submitted') AND expires_at>? "
                          "ORDER BY created_at DESC LIMIT 1", (pid, now))
         status, draft, claimed_at = "waiting", None, None
         if prev is not None:
             status, draft, claimed_at = "claimed", prev["draft"], prev["claimed_at"]
         # Only the newest terminal is listening, so only its code works; older ones say so.
-        store.x("UPDATE claims SET status='superseded' WHERE provider=? AND status IN ('waiting','claimed','submitted')",
+        store.x("UPDATE claims SET status='superseded' WHERE provider=? AND status IN ('waiting','claimed','signing','submitted','service')",
                 (pid,))
         store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status, draft, "
                 "claimed_at) VALUES (?,?,?,?,?,?,?,?,?)",
@@ -557,24 +566,76 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         c = claim_by_poll(request)
         status = c["status"]
         now = int(time.time())
-        if status in ("waiting", "claimed") and c["expires_at"] < now:
+        if status in ("waiting", "claimed", "signing") and c["expires_at"] < now:
             status = "expired"
-        elif status in ("waiting", "claimed", "submitted"):
+        elif status in ("waiting", "claimed", "signing", "submitted"):
             # The terminal is still waiting: keep its code alive (up to a day after it was made).
             store.x("UPDATE claims SET expires_at=? WHERE code_hash=?",
                     (min(now + CLAIM_TTL, c["created_at"] + CLAIM_MAX), c["code_hash"]))
         out = {"status": status}
         if c["draft"] and status == "submitted":
             out["offer"] = json.loads(c["draft"])
+            if c.get("signed") and c.get("auth"):
+                # What the person's passkey signed, and the signature: the machine checks it itself.
+                out["setup"] = json.loads(c["signed"])
+                out["auth"] = json.loads(c["auth"])
         return out
 
+    def progress_steps(body: dict) -> str:
+        steps = body.get("steps")
+        if not isinstance(steps, list) or len(steps) > 12:
+            raise HTTPException(422, "steps: a list of at most 12")
+        clean = []
+        for st in steps:
+            if not isinstance(st, dict) or st.get("state") not in ("run", "ok", "warn", "fail", "skip"):
+                raise HTTPException(422, "each step needs a state: run, ok, warn, fail or skip")
+            clean.append({"id": str(st.get("id", ""))[:24], "state": st["state"],
+                          "label": str(st.get("label", ""))[:60], "text": str(st.get("text", ""))[:240]})
+        return json.dumps(clean)
+
+    @app.post(P + "/v1/connect/progress")
+    async def connect_progress(request: Request):
+        """The machine reports each step after the offer was submitted; the website shows them live."""
+        c = claim_by_poll(request)
+        if c["status"] not in ("submitted", "done"):
+            raise HTTPException(409, "nothing is being applied")
+        store.x("UPDATE claims SET progress=? WHERE code_hash=?", (progress_steps(await body_json(request)),
+                                                                    c["code_hash"]))
+        return {"ok": True}
+
     @app.post(P + "/v1/connect/finish")
-    def connect_finish(request: Request):
+    async def connect_finish(request: Request):
         c = claim_by_poll(request)
         if c["status"] != "submitted":
             raise HTTPException(409, "nothing to finish")
-        store.x("UPDATE claims SET status='done' WHERE code_hash=?", (c["code_hash"],))
+        body = await body_json(request) if int(request.headers.get("content-length") or 0) else {}
+        progress = progress_steps(body) if body.get("steps") is not None else c.get("progress")
+        store.x("UPDATE claims SET status='done', progress=?, finished_at=? WHERE code_hash=?",
+                (progress, int(time.time()), c["code_hash"]))
         return {"ok": True}
+
+    @app.get(P + "/v1/providers/{pid}/setup-pending")
+    def setup_pending(pid: str):
+        """The background service asks this every few seconds: has the owner opened the setup page?"""
+        if not re.match(r"^[0-9a-f]{64}$", pid):
+            raise HTTPException(404, "unknown provider")
+        row = store.one("SELECT 1 FROM claims WHERE provider=? AND status='service' AND expires_at>?",
+                        (pid, int(time.time())))
+        return {"pending": row is not None}
+
+    @app.post(P + "/v1/connect/attach")
+    async def connect_attach(request: Request):
+        """The background service joins a setup opened on the website, with fresh signed facts."""
+        c = claim_by_poll(request)
+        if c["status"] != "fetched" or c["expires_at"] < int(time.time()):
+            raise HTTPException(409, "this setup is not waiting for the machine")
+        pid, detected = verify_connect(await body_json(request))
+        if pid.hex() != c["provider"]:
+            raise HTTPException(422, "connect record is for another provider")
+        store.x("UPDATE claims SET detected=?, status='claimed', claimed_at=? WHERE code_hash=?",
+                (json.dumps(detected), int(time.time()), c["code_hash"]))
+        store.audit(c["provider"], "machine-connected", "background service joined the setup", client_ip(request))
+        return {"ok": True, "passkeys": passkey_list(c["provider"])}
 
     downloads = rel.Releases(settings.release_repo)
 
@@ -851,7 +912,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if row["expires_at"] < int(time.time()):
             raise HTTPException(410, "This code expired: the terminal that made it stopped waiting. "
                                      "Run innernet-provider start again, or sign in with this machine's passkey.")
-        if row["status"] == "waiting" or (allow_claimed and row["status"] in ("claimed", "submitted")):
+        if row["status"] == "waiting" or (allow_claimed and row["status"] in ("claimed", "signing", "submitted")):
             return dict(row)
         raise HTTPException(409, "This code was already used.")
 
@@ -916,7 +977,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             if pair:   # the machine code may also add a passkey to a setup already in progress
                 cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' WHEN 'pairing' THEN 'done' "
                                  "ELSE status END, claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? "
-                                 "AND status IN ('waiting','claimed','submitted','pairing') AND expires_at>?", (now, f["token_hash"], now))
+                                 "AND status IN ('waiting','claimed','signing','submitted','pairing') AND expires_at>?", (now, f["token_hash"], now))
             else:
                 cur = db.execute("UPDATE claims SET status='claimed', claimed_at=? WHERE code_hash=? AND status='waiting' "
                                  "AND expires_at>?", (now, f["token_hash"], now))
@@ -949,7 +1010,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         with store.tx() as db:
             cur = db.execute("UPDATE claims SET status=CASE status WHEN 'waiting' THEN 'claimed' WHEN 'pairing' THEN 'done' "
                              "ELSE status END, claimed_at=COALESCE(claimed_at, ?) WHERE code_hash=? "
-                             "AND status IN ('waiting','claimed','submitted','pairing') "
+                             "AND status IN ('waiting','claimed','signing','submitted','pairing') "
                              "AND expires_at>?", (now, f["token_hash"], now))
             if cur.rowcount != 1:
                 raise HTTPException(409, "This code has expired. Run innernet-provider start again.")
@@ -959,29 +1020,72 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         start_session(request, f["provider"], response)
         return response
 
-    def open_claim(pid: str) -> dict | None:
+    OPEN = ("waiting", "claimed", "signing", "submitted")
+
+    def open_claim(pid: str, service: bool = False) -> dict | None:
         # Signed in with this machine's passkey: any live setup of the machine is yours, even one
-        # whose code was never entered.
-        row = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('waiting','claimed','submitted') "
-                        "AND expires_at>? ORDER BY created_at DESC LIMIT 1", (pid, int(time.time())))
+        # whose code was never entered. service: also a change opened on the website for the running machine.
+        sts = OPEN + (("service", "fetched") if service else ())
+        row = store.one(f"SELECT * FROM claims WHERE provider=? AND status IN ({','.join('?' * len(sts))}) "
+                        "AND expires_at>? ORDER BY created_at DESC LIMIT 1", (pid, *sts, int(time.time())))
         return dict(row) if row else None
+
+    def service_claim(pid: str) -> dict | None:
+        """No terminal is waiting, but the machine is set up: its background service picks the change up."""
+        if store.provider(pid) is None:
+            return None
+        last = store.one("SELECT detected FROM claims WHERE provider=? AND detected!='{}' ORDER BY created_at DESC LIMIT 1",
+                         (pid,))
+        now = int(time.time())
+        code = token_hash(secrets.token_urlsafe(24))
+        store.x("INSERT INTO claims(code_hash, poll_hash, provider, detected, created_at, expires_at, status, kind) "
+                "VALUES (?,?,?,?,?,?,'service','service')", (code, token_hash(secrets.token_urlsafe(24)), pid,
+                                                   last["detected"] if last else "{}", now, now + CLAIM_TTL))
+        return dict(store.one("SELECT * FROM claims WHERE code_hash=?", (code,)))
 
     @app.get(P + "/api/setup")
     def setup_get(request: Request):
         s = need_session(request)
         pid = s["provider"]
-        c = open_claim(pid)
+        c = open_claim(pid, service=True) or service_claim(pid)
         current = store.provider(pid)
         if c is None:
             raise HTTPException(404, "No machine is waiting for setup. Run innernet-provider start on it.")
+        now = int(time.time())
+        if c["status"] in ("service", "fetched"):
+            # Keep it alive while the page is open; the machine joins within a few seconds.
+            store.x("UPDATE claims SET expires_at=? WHERE code_hash=?",
+                    (min(now + CLAIM_TTL, c["created_at"] + CLAIM_MAX), c["code_hash"]))
         detected = json.loads(c["detected"])
         nets = [{"caip2": n, "name": NETWORK_NAMES.get(n, n), "factory": settings.split_factory.get(n)}
                 for n in settings.fee_payto]
+        waiting = c["status"] in ("service", "fetched")
         return {"provider": pid, "status": c["status"], "detected": detected,
+                "mode": "service" if c.get("kind") == "service" else "terminal",
+                "waiting_for_machine": waiting, "can_seal": reg.valid_seal_key(detected.get("seal_key")),
                 "draft": json.loads(c["draft"]) if c["draft"] else None,
                 "current": current["entry"] if current else None,
                 "defaults": {"prices": offers.DEFAULT_PRICES, "units": offers.UNITS},
                 "fee_bps": settings.fee_bps, "networks": nets, "market": presence.market(store)}
+
+    def check_backup(blob, detected: dict) -> dict | None:
+        if blob is None:
+            return None
+        if not reg.valid_seal_key(detected.get("seal_key")):
+            raise HTTPException(422, "Update the provider on this machine to back up its key from the website.")
+        if not isinstance(blob, dict) or set(blob) != {"epk", "iv", "ct"}:
+            raise HTTPException(422, "backup: epk, iv and ct")
+        sizes = {"epk": (65, 65), "iv": (12, 12), "ct": (28, 1040)}
+        for k, (lo, hi) in sizes.items():
+            try:
+                n = len(base64url_to_bytes(str(blob[k])))
+            except Exception:
+                n = -1
+            if not lo <= n <= hi or not re.match(r"^[A-Za-z0-9_-]+$", str(blob[k])):
+                raise HTTPException(422, f"backup: invalid {k}")
+        if not reg.valid_seal_key(blob["epk"]):
+            raise HTTPException(422, "backup: invalid epk")
+        return {k: str(blob[k]) for k in ("epk", "iv", "ct")}
 
     @app.post(P + "/api/setup")
     async def setup_post(request: Request):
@@ -990,15 +1094,91 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         pid = s["provider"]
         c = open_claim(pid)
         if c is None:
-            raise HTTPException(404, "No machine is waiting for setup. Run innernet-provider start on it.")
-        o = offers.check_offer(await body_json(request), set(settings.fee_payto), json.loads(c["detected"]))
+            raise HTTPException(404, "Your machine is not connected to this setup yet. Keep this page open, "
+                                     "or run innernet-provider start on it.")
+        body = await body_json(request)
+        backup = body.pop("backup", None)
+        service = bool(body.pop("service", False))
+        detected = json.loads(c["detected"])
+        o = offers.check_offer(body, set(settings.fee_payto), detected)
         ok, why = chain.payout_check(settings, o["network"], o["payout"], rpc)
         if not ok:
             raise HTTPException(422, why)
-        store.x("UPDATE claims SET draft=?, status='submitted', submitted_at=? WHERE code_hash=?",
-                (json.dumps(o), int(time.time()), c["code_hash"]))
-        store.audit(pid, "offer-submitted", ", ".join(offers.to_entry(o, pid)["services"]), client_ip(request))
-        return {"ok": True, "note": why}
+        backup = check_backup(backup, detected)
+        rows = store.q("SELECT cred_id FROM passkeys WHERE provider=?", (pid,))
+        if not rows:
+            raise HTTPException(409, "This machine has no passkey yet. Add one on the dashboard first.")
+        setup = {"version": reg.SETUP_VERSION, "provider": pid, "offer": o, "service": service,
+                 "nonce": secrets.token_hex(16), "issued_at": int(time.time())}
+        if backup:
+            setup["backup"] = dict(backup, to=detected["seal_key"])
+        challenge = reg.setup_challenge(setup)
+        options = generate_authentication_options(
+            rp_id=settings.rp_id, challenge=challenge, user_verification=UserVerificationRequirement.PREFERRED,
+            allow_credentials=[PublicKeyCredentialDescriptor(id=base64url_to_bytes(r["cred_id"])) for r in rows])
+        flow = new_flow("setup-sign", challenge, pid, None)
+        store.x("UPDATE webauthn_flows SET token_hash=? WHERE id=?", (c["code_hash"], flow))
+        store.x("UPDATE claims SET draft=?, signed=?, auth=NULL, progress=NULL, status='signing' WHERE code_hash=?",
+                (json.dumps(o), json.dumps(setup), c["code_hash"]))
+        return {"ok": True, "note": why, "flow": flow, "options": json.loads(options_to_json(options)),
+                "services": offers.to_entry(o, pid)["services"]}
+
+    @app.post(P + "/api/setup/confirm")
+    async def setup_confirm(request: Request):
+        """The person's passkey signed this exact setup. Only now does the machine receive it."""
+        guard(request)
+        s = need_session(request)
+        ip = client_ip(request)
+        limiter.check("webauthn", ip, 60, 600)
+        data = await body_json(request)
+        f = take_flow(data.get("flow", ""), "setup-sign")
+        if f["provider"] != s["provider"]:
+            raise HTTPException(401, "this confirmation belongs to another machine")
+        c = store.one("SELECT * FROM claims WHERE code_hash=? AND status='signing'", (f["token_hash"],))
+        if c is None or reg.setup_challenge(json.loads(c["signed"])) != f["challenge"]:
+            raise HTTPException(409, "The setup changed in the meantime. Press Apply again.")
+        cred = data.get("credential") or {}
+        row = store.one("SELECT * FROM passkeys WHERE cred_id=? AND provider=?",
+                        (str(cred.get("rawId", cred.get("id", ""))), f["provider"]))
+        if row is None:
+            raise HTTPException(401, "That passkey belongs to a different machine.")
+        try:
+            v = verify_authentication_response(
+                credential=cred, expected_challenge=f["challenge"], expected_rp_id=settings.rp_id,
+                expected_origin=settings.origin, credential_public_key=row["public_key"],
+                credential_current_sign_count=row["sign_count"])
+        except Exception as exc:
+            raise HTTPException(401, f"passkey was not accepted: {exc}") from None
+        resp = cred.get("response") or {}
+        auth = {"cred_id": row["cred_id"], "public_key": bytes_to_base64url(row["public_key"]),
+                "authenticator_data": str(resp.get("authenticatorData", "")),
+                "client_data": str(resp.get("clientDataJSON", "")), "signature": str(resp.get("signature", ""))}
+        now = int(time.time())
+        store.x("UPDATE passkeys SET sign_count=?, last_used=? WHERE cred_id=?", (v.new_sign_count, now, row["cred_id"]))
+        store.x("UPDATE claims SET status='submitted', submitted_at=?, auth=? WHERE code_hash=?",
+                (now, json.dumps(auth), c["code_hash"]))
+        o = json.loads(c["draft"])
+        store.audit(f["provider"], "offer-submitted", ", ".join(offers.to_entry(o, f["provider"])["services"])
+                    + f" (confirmed with passkey {row['name']})", ip)
+        return {"ok": True}
+
+    @app.get(P + "/api/setup/progress")
+    def setup_progress(request: Request):
+        """Live view after Apply: what the machine did, then what the registry found."""
+        s = need_session(request)
+        pid = s["provider"]
+        c = store.one("SELECT * FROM claims WHERE provider=? AND status IN ('submitted','done') "
+                      "ORDER BY COALESCE(submitted_at, created_at) DESC LIMIT 1", (pid,))
+        if c is None:
+            raise HTTPException(404, "nothing was applied yet")
+        p = store.provider(pid)
+        listing = None
+        if p is not None and (c["submitted_at"] or 0) <= (p["applied_at"] or 0):
+            listing = {"state": p["state"], "reason": p["reason"], "applied_at": p["applied_at"],
+                       "listed_at": p["listed_at"], "checked_at": p["checked_at"], "health": health(pid),
+                       "services": p["entry"].get("services", [])}
+        return {"status": c["status"], "steps": json.loads(c["progress"]) if c["progress"] else [],
+                "submitted_at": c["submitted_at"], "finished_at": c["finished_at"], "listing": listing}
 
     # ---- dashboard data -------------------------------------------------
     @app.get(P + "/api/me")
@@ -1007,7 +1187,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         pid = s["provider"]
         p = store.provider(pid)
         if p is None or open_claim(pid):
-            raise HTTPException(409, "setup")    # not set up yet, or the machine is waiting for setup now
+            raise HTTPException(409, "setup")    # a terminal is waiting (a change for the running machine does not count)    # not set up yet, or the machine is waiting for setup now
         now = int(time.time())
         e30 = chain.earnings(store, pid, settings.fee_bps, since=now - 30 * DAY)
         eall = chain.earnings(store, pid, settings.fee_bps, since=0)

@@ -10,6 +10,8 @@ canonical JSON of the payload.
 """
 from __future__ import annotations
 
+import base64
+import hashlib
 import re
 import time
 from decimal import Decimal, InvalidOperation
@@ -489,10 +491,26 @@ def verify_login(record: dict, *, expected_challenge: str, registry_host: str,
 # machine then signs the final descriptor itself. The key never leaves it.
 
 CONNECT_DOMAIN = b"INNERnet/REG-1/provider-connect\x00"
+# A setup chosen on the website: the person's passkey signs SHA-256(SETUP_DOMAIN || canonical(setup)),
+# and the machine checks that signature against the passkeys it trusts before it signs the offer.
+SETUP_DOMAIN = b"INNERnet/REG-1/setup-offer\x00"
+SETUP_VERSION = "REG-1-SETUP"
+
+
+def setup_challenge(setup: dict) -> bytes:
+    return hashlib.sha256(SETUP_DOMAIN + canonical(setup)).digest()
+
+
+def valid_seal_key(value) -> bool:
+    """An uncompressed P-256 public key, base64url without padding (the browser seals the backup passphrase to it)."""
+    if not isinstance(value, str) or not re.match(r"^[A-Za-z0-9_-]{87}$", value):
+        return False
+    raw = base64.urlsafe_b64decode(value + "=")
+    return len(raw) == 65 and raw[0] == 4
 CONNECT_VERSION = "REG-1-CONNECT"
 _DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
                   "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str, "class": str,
-                  "tz": str, "port_map": str, "path": str, "gpus": list}
+                  "tz": str, "port_map": str, "path": str, "gpus": list, "seal_key": str}
 
 
 def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:
@@ -519,6 +537,8 @@ def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) 
             _int(value, 0, 2**40, f"detected {key}")
         elif type(value) is not kind or (kind is str and len(value) > 253):
             raise BulkError(f"invalid detected {key}")
+        elif key == "seal_key" and not valid_seal_key(value):
+            raise BulkError("invalid detected seal_key")
     provider = _bytes(payload["provider"], 32, "provider id")
     try:
         Ed25519PublicKey.from_public_bytes(provider).verify(
@@ -587,7 +607,7 @@ def verify_presence(record: dict, *, now: int | None = None, max_age: int = 300)
 INTENT_DOMAIN = b"INNERnet/REG-1/provider-intent\x00"
 INTENT_VERSION = "REG-1-INTENT"
 INTENTS = {"pause", "resume", "leave", "reinstate"}
-MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set"}
+MACHINE_ACTIONS = INTENTS | {"passkey-list", "passkey-remove", "pairing-set", "setup-fetch"}
 _TARGETED = {"passkey-remove", "pairing-set"}   # pairing-set: target is SHA-256 hex of the machine code
 
 

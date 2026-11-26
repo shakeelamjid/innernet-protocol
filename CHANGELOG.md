@@ -2,6 +2,16 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Setup finishes on the website; the terminal asks nothing
+
+- `start` goes straight to the website (no 1/2 question; `--mode terminal` or `--yes` for agents). Everything is chosen there, including the key backup passphrase and the background service, then **Apply** asks for the passkey. The terminal applies it and exits by itself; no more y/n prompts.
+- The passkey signs the exact setup (REG-1-SETUP: offer, service, sealed backup, nonce, time). The machine verifies the WebAuthn assertion itself (ES256, EdDSA, RS256) before signing with its own key, refuses other machines' setups, old ones and replays, and remembers which passkeys may confirm later changes (`passkeys.json`; `passkeys remove` forgets one).
+- The backup passphrase is sealed in the browser to a one-time key of the machine (P-256 ECDH, HKDF-SHA256, AES-256-GCM); the registry only carries ciphertext; the backup is written on the machine.
+- The website shows each step live (passkey checked, offer signed, backup, service, registry) and then the listing state. New: `/api/setup/confirm`, `/api/setup/progress`, `/v1/connect/progress`.
+- `start` on a machine that is already set up shows its status, machine code and setup link, then exits (`--again` to start over). Dashboard → Change settings: the running background service joins the setup (`setup-pending`, `setup-fetch` intent, `/v1/connect/attach`), applies the passkey-confirmed change and restarts with it.
+- VPN exit is refused while the machine is reachable only through the HTTPS tunnel (it cannot carry VPN traffic).
+- `provider/LATEST` is `provider-v0.6.2`.
+
 ### VPN exit (VPN-1) under Bandwidth; installs and updates from innernetcorp.com
 
 - Bandwidth is one group with a shared monthly GiB limit: **Relay** (sealed INNERnet traffic) and **VPN exit** (clients' TCP connections reach the internet from the provider's connection), each priced per GiB. VPN exit is opt-in and needs the owner's consent ("allowed to offer internet exit where I operate; accept the abuse policy"); web only by default, or every port except 25.

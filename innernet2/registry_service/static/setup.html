@@ -28,6 +28,18 @@
       </div>
       <p class="msg error" id="err" hidden></p>
 
+      <section class="card frame step" id="waiting" hidden>
+        <h2>Connecting to your machine…</h2>
+        <p>Your machine's background service joins this page within a few seconds. If nothing happens, check the machine is on and online, or run <span class="mono">innernet-provider start</span> on it.</p>
+      </section>
+
+      <section class="card frame step" id="progress" hidden>
+        <h2 id="prog-title">Applying on your machine…</h2>
+        <ul class="steps" id="prog-steps"></ul>
+        <p class="msg" id="prog-listing" role="status"></p>
+        <p><a class="btn btn-light" href="dashboard" id="prog-done" hidden>Go to your dashboard</a></p>
+      </section>
+
       <form id="form" hidden novalidate>
         <section class="card frame step">
           <h2>Your machine</h2>
@@ -102,12 +114,26 @@
         </section>
 
         <section class="card frame step">
-          <h2>Send to your machine</h2>
-          <div class="offer terms-box">
-            <label class="toggle"><input type="checkbox" id="terms-ok"> <span><strong>I agree to the <a href="terms#provider" target="_blank" rel="noopener">provider terms</a></strong> <span id="terms-version">Your machine signs the version you agree to into its listing.</span></span></label>
+          <h2>Finish on your machine</h2>
+          <div class="offer">
+            <div id="backup-block">
+              <label class="toggle"><input type="checkbox" id="backup-on" checked> <span><strong>Back up this machine's key</strong> Recommended. The key is this provider's identity; without a backup, a lost machine cannot be recovered.</span></label>
+              <div class="fields" data-for="backup-on">
+                <label>Backup passphrase (12+ characters)<input id="pass1" class="field" type="password" minlength="12" autocomplete="new-password"></label>
+                <label>Type it again<input id="pass2" class="field" type="password" minlength="12" autocomplete="new-password"></label>
+              </div>
+              <p class="msg" data-for="backup-on">Your browser locks the passphrase with a key only your machine has, so this website only passes on scrambled text. The machine writes the encrypted backup to <span class="mono">~/.innernet/provider-backup.json</span>; copy that file somewhere safe and keep the passphrase.</p>
+            </div>
+            <p class="msg" id="backup-old" hidden>To back up the key from here, update the provider on your machine. For now run <span class="mono">innernet-provider backup FILE</span> on it.</p>
+            <div id="service-block">
+              <label class="toggle"><input type="checkbox" id="service-on" checked> <span><strong>Keep serving in the background</strong> Also after a restart. Recommended; otherwise you run <span class="mono">innernet-provider serve</span> yourself.</span></label>
+            </div>
+            <div class="terms-box">
+              <label class="toggle"><input type="checkbox" id="terms-ok"> <span><strong>I agree to the <a href="terms#provider" target="_blank" rel="noopener">provider terms</a></strong> <span id="terms-version">Your machine signs the version you agree to into its listing.</span></span></label>
+            </div>
           </div>
-          <p>Your terminal will show this offer and ask you to confirm. Then it signs and applies.</p>
-          <button class="btn btn-light" type="submit" id="send">Send to my machine</button>
+          <p>Apply asks for your passkey. Your machine checks that your passkey confirmed exactly this, signs it with its own key and applies it. You can follow every step here.</p>
+          <button class="btn btn-light" type="submit" id="send">Apply and confirm with passkey</button>
           <p class="msg" id="send-msg" role="status"></p>
         </section>
       </form>

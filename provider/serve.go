@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -112,6 +113,17 @@ func cmdServe(args []string) error {
 		s.sched.drain(30 * time.Minute) // let running jobs finish first
 		_ = ln.Close()
 	})
+	if os.Getenv("INNERNET_NO_PRESENCE") != "1" {
+		// Changes made on the website: join, apply after the passkey check, restart with them.
+		go s.setupWatch(registryURL(c), func() {
+			s.sched.drain(30 * time.Minute)
+			if runtime.GOOS == "windows" {
+				_ = ln.Close()
+			}
+			log.Printf("restarting with the settings chosen on the website")
+			restartSelf()
+		})
+	}
 	return s.serveBoth(ln, srv)
 }
 

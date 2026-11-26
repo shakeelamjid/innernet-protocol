@@ -249,6 +249,7 @@ func cmdPasskeys(args []string) error {
 			return err
 		}
 		fmt.Printf(" %s Removed passkey %q. Every web session was logged out.\n", green(markOK), out["removed"])
+		keepTrusted(out["passkeys"])
 		printPasskeys(out["passkeys"])
 		return nil
 	}
@@ -315,4 +316,30 @@ func (s *server) adaptPath(registry string) {
 	s.cfg.Relay = r
 	_ = saveConfig(s.cfg)
 	go s.attachLoop(*r, func(ok bool) { s.pathUp.Store(ok) })
+}
+
+// keepTrusted forgets passkeys the registry no longer lists for this machine, so a removed
+// passkey cannot confirm changes any more.
+func keepTrusted(list any) {
+	items, _ := list.([]any)
+	keep := map[string]bool{}
+	for _, it := range items {
+		if m, ok := it.(map[string]any); ok {
+			if id, _ := m["id"].(string); id != "" {
+				keep[id] = true
+			}
+		}
+	}
+	t := loadTrustedPasskeys()
+	changed := false
+	for id := range t {
+		if !keep[id] {
+			delete(t, id)
+			changed = true
+		}
+	}
+	if changed {
+		raw, _ := json.MarshalIndent(t, "", "  ")
+		_ = os.WriteFile(trustedPasskeysPath(), append(raw, '\n'), 0o600)
+	}
 }

@@ -18,11 +18,12 @@ import pytest
 cbor2 = pytest.importorskip("cbor2")
 pytest.importorskip("webauthn")
 
-from cryptography.hazmat.primitives import hashes  # noqa: E402
+from cryptography.hazmat.primitives import hashes, serialization  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric import ec  # noqa: E402
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
+from innernet2 import irm_registry as reg  # noqa: E402
 from innernet2.irm_registry import LOGIN_DOMAIN, sign_descriptor, verify_registry  # noqa: E402
 from innernet2.registry_service.terms import current as current_terms  # noqa: E402
 from innernet2.mailbox_e2ee import canonical  # noqa: E402
@@ -506,6 +507,15 @@ def connect_record(key, detected, now=None, nonce="ab" * 16):
     return {"payload": payload, "signature": key.sign(CONNECT_DOMAIN + canonical(payload)).hex()}
 
 
+def intent_record(key, action, target=None):
+    import secrets
+    p = {"version": "REG-1-INTENT", "provider": key.public_key().public_bytes_raw().hex(), "action": action,
+         "nonce": secrets.token_hex(16), "issued_at": int(time.time())}
+    if target is not None:
+        p["target"] = target
+    return {"payload": p, "signature": key.sign(reg.INTENT_DOMAIN + canonical(p)).hex()}
+
+
 def test_connect_record_rules():
     key = Ed25519PrivateKey.generate()
     det = {"name": "box", "host": "1.2.3.4", "port": 9443, "cpus": 4, "reachable": True}
@@ -587,12 +597,112 @@ def test_claim_and_setup_api(env):
     fake.code = "0x"
     assert client.post(P + "/api/setup", json=offer, headers=H).status_code == 422   # payout is not a contract
     fake.code = "0x6080"
-    assert client.post(P + "/api/setup", json=offer, headers=H).status_code == 200
+    r = client.post(P + "/api/setup", json=offer, headers=H)
+    assert r.status_code == 200
+    # Nothing reaches the machine until the passkey confirms this exact setup.
+    assert client.get(P + "/v1/connect/status", headers=poll).json() == {"status": "signing"}
+    signed = json.loads(store.one("SELECT signed FROM claims WHERE provider=? AND status='signing'", (pid,))["signed"])
+    assert unb64u(r.json()["options"]["challenge"]) == reg.setup_challenge(signed)
+    assert signed["provider"] == pid and signed["offer"]["prices"]["STO-1"] == "0.0012" and "backup" not in signed
+    other = SoftAuthenticator()                                   # a passkey of no machine
+    assert client.post(P + "/api/setup/confirm", json={"flow": r.json()["flow"], "credential": other.get(r.json()["options"])},
+                       headers=H).status_code == 401
+    r = client.post(P + "/api/setup", json=offer, headers=H).json()  # the flow was used up: apply again
+    forged = dict(r["options"], challenge=b64u(b"x" * 32))
+    assert client.post(P + "/api/setup/confirm", json={"flow": r["flow"], "credential": auth.get(forged)},
+                       headers=H).status_code == 401              # signed something else
+    r = client.post(P + "/api/setup", json=offer, headers=H).json()
+    assert client.post(P + "/api/setup/confirm", json={"flow": r["flow"], "credential": auth.get(r["options"])},
+                       headers=H).status_code == 200
     st = client.get(P + "/v1/connect/status", headers=poll).json()
     assert st["status"] == "submitted" and st["offer"]["prices"]["STO-1"] == "0.0012"
-    assert client.post(P + "/v1/connect/finish", headers=poll).json() == {"ok": True}
+    assert reg.setup_challenge(st["setup"]) == unb64u(json.loads(unb64u(st["auth"]["client_data"]))["challenge"])
+    assert st["auth"]["cred_id"] == b64u(auth.cred_id)
+    steps = {"steps": [{"id": "check", "label": "Passkey", "state": "ok", "text": "confirmed"}]}
+    assert client.post(P + "/v1/connect/progress", json=steps, headers=poll).json() == {"ok": True}
+    prog = client.get(P + "/api/setup/progress").json()
+    assert prog["status"] == "submitted" and prog["steps"][0]["state"] == "ok" and prog["listing"] is None
+    assert client.post(P + "/v1/connect/progress", json={"steps": [{"state": "bogus"}]}, headers=poll).status_code == 422
+    assert client.post(P + "/v1/connect/finish", json=steps, headers=poll).json() == {"ok": True}
     assert client.get(P + "/v1/connect/status", headers=poll).json()["status"] == "done"
+    assert client.get(P + "/api/setup/progress").json()["status"] == "done"
     assert pid in {a["provider"] for a in [dict(r) for r in store.q("SELECT provider FROM audit")]}
+
+
+def seal_to(machine_key: str, text: str) -> dict:
+    """What the setup page does in the browser: P-256 ECDH, HKDF-SHA256, AES-256-GCM."""
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+    from cryptography.hazmat.primitives import serialization as ser
+    pub = ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), unb64u(machine_key))
+    eph = ec.generate_private_key(ec.SECP256R1())
+    shared = eph.exchange(ec.ECDH(), pub)
+    key = HKDF(hashes.SHA256(), 32, salt=None, info=b"INNERnet/REG-1/setup-seal").derive(shared)
+    iv = os.urandom(12)
+    ct = AESGCM(key).encrypt(iv, text.encode(), b"INNERnet backup passphrase")
+    epk = eph.public_key().public_bytes(ser.Encoding.X962, ser.PublicFormat.UncompressedPoint)
+    return {"epk": b64u(epk), "iv": b64u(iv), "ct": b64u(ct)}
+
+
+def confirm_setup(web, auth, offer: dict) -> None:
+    r = web.post(P + "/api/setup", json=offer, headers=H)
+    assert r.status_code == 200, r.text
+    c = web.post(P + "/api/setup/confirm", json={"flow": r.json()["flow"], "credential": auth.get(r.json()["options"])},
+                 headers=H)
+    assert c.status_code == 200, c.text
+
+
+def test_setup_checks_vpn_reach_backup_and_service_changes(env):
+    client, store, fake, s = env
+    key = Ed25519PrivateKey.generate()
+    pid = key.public_key().public_bytes_raw().hex()
+    seal = b64u(ec.generate_private_key(ec.SECP256R1()).public_key().public_bytes(
+        serialization.Encoding.X962, serialization.PublicFormat.UncompressedPoint))
+    det = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_free_gib": 500,
+           "cpus": 8, "memory_mib": 16384, "os": "darwin", "arch": "arm64", "reachable": True, "version": "0.6.2",
+           "path": "tunnel", "seal_key": seal}
+    assert client.post(P + "/v1/connect", json=connect_record(key, dict(det, seal_key="nope"))).status_code == 422
+    started = client.post(P + "/v1/connect", json=connect_record(key, det)).json()
+    poll = {"X-Poll-Token": started["poll"]}
+    auth = SoftAuthenticator()
+    opt = client.post(P + "/api/claim/options", json={"code": started["code"]}, headers=H).json()
+    assert client.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"])},
+                       headers=H).status_code == 200
+    setup = client.get(P + "/api/setup").json()
+    assert setup["can_seal"] is True and setup["mode"] == "terminal" and setup["waiting_for_machine"] is False
+    offer = {"name": "box", "region": "asia-south", "host": "203.0.113.7", "port": 9443, "storage_gib": 10,
+             "relay_gib": 50, "vpn": True, "vpn_consent": True, "network": SEPOLIA, "payout": "0x" + "ab" * 20,
+             "terms": current_terms("provider")["sha256"]}
+    r = client.post(P + "/api/setup", json=offer, headers=H)
+    assert r.status_code == 422 and "tunnel" in r.text                    # VPN needs direct or relay reach
+    offer["vpn"] = False
+    assert client.post(P + "/api/setup", json=dict(offer, backup={"epk": seal, "iv": "AA", "ct": "AA"}),
+                       headers=H).status_code == 422
+    backup = seal_to(seal, "correct horse battery staple")
+    confirm_setup(client, auth, dict(offer, backup=backup, service=True))
+    st = client.get(P + "/v1/connect/status", headers=poll).json()
+    assert st["setup"]["backup"] == dict(backup, to=seal) and st["setup"]["service"] is True
+    assert client.post(P + "/v1/connect/finish", headers=poll).status_code == 200
+    # Machine listed; the owner opens the setup page again with no terminal: the service joins it.
+    store.x("INSERT INTO providers(id, record, state, reason, applied_at, updated_at) VALUES (?,?,?,?,?,?)",
+            (pid, json.dumps(provider_record(key)), "listed", "", int(time.time()), int(time.time())))
+    assert client.get(P + f"/v1/providers/{pid}/setup-pending").json() == {"pending": False}
+    page = client.get(P + "/api/setup").json()
+    assert page["waiting_for_machine"] is True and page["mode"] == "service"
+    assert client.get(P + "/api/me").status_code == 200                   # the dashboard still works meanwhile
+    assert client.get(P + f"/v1/providers/{pid}/setup-pending").json() == {"pending": True}
+    fetched = client.post(P + f"/v1/providers/{pid}/intent", json=intent_record(key, "setup-fetch")).json()
+    assert client.get(P + f"/v1/providers/{pid}/setup-pending").json() == {"pending": False}
+    spoll = {"X-Poll-Token": fetched["poll"]}
+    stranger = Ed25519PrivateKey.generate()
+    assert client.post(P + "/v1/connect/attach", json=connect_record(stranger, det), headers=spoll).status_code == 422
+    assert client.post(P + "/v1/connect/attach", json=connect_record(key, dict(det, path="relay")),
+                       headers=spoll).status_code == 200
+    page = client.get(P + "/api/setup").json()
+    assert page["waiting_for_machine"] is False and page["mode"] == "service" and page["detected"]["path"] == "relay"
+    confirm_setup(client, auth, dict(offer, vpn=True))                    # through a relay VPN exit is allowed
+    st = client.get(P + "/v1/connect/status", headers=spoll).json()
+    assert st["status"] == "submitted" and st["setup"]["offer"]["vpn"] is True
 
 
 def live_registry(tmp_path, **kw):
@@ -641,7 +751,7 @@ def test_go_start_web_setup_end_to_end(tmp_path):
                 code = line.split(":", 1)[1].strip()
         out = "".join(lines)
         assert "Internet address" in out and "127.0.0.1" in out and "reachable from the internet" in out   # real dial-back
-        assert "[1/6]" in out and "Machine key" in out and "\x1b[" not in out        # steps; no colour codes in a pipe
+        assert "[1/9]" in out and "Machine key" in out and "\x1b[" not in out        # steps; no colour codes in a pipe
         web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
         auth = SoftAuthenticator()
         assert len(code) == 19                                          # the permanent machine code
@@ -656,16 +766,101 @@ def test_go_start_web_setup_end_to_end(tmp_path):
                  "storage_gib": 10, "relay_gib": 0, "compute": False, "cpus": 1, "memory_mib": 512,
                  "prices": {"STO-1": "0.0015"}, "network": SEPOLIA, "payout": payout,
                  "terms": current_terms("provider")["sha256"]}
-        assert web.post(P + "/api/setup", json=offer).status_code == 200
-        rest, _ = proc.communicate("y\nn\n", timeout=60)              # confirm on the machine, skip backup
+        assert web.get(P + "/api/setup").json()["can_seal"] is True
+        # Everything on the website: offer, backup passphrase (sealed to the machine), passkey. The terminal asks nothing.
+        confirm_setup(web, auth, dict(offer, backup=seal_to(det["seal_key"], "a long backup passphrase"), service=False))
+        rest, _ = proc.communicate(timeout=60)
         assert proc.returncode == 0, out + rest
-        assert payout in rest and "Application received" in rest
-        pid = json.loads((tmp_path / "home" / "descriptor.json").read_text())["payload"]["provider"]["id"]
+        assert "Setup finished" in rest and "Application received" in rest and "(y/n)" not in rest
+        home = tmp_path / "home"
+        pid = json.loads((home / "descriptor.json").read_text())["payload"]["provider"]["id"]
         p = store.provider(pid)
         assert p["state"] == "testing" and p["entry"]["prices"]["STO-1"]["amount"] == "0.0015"
         assert p["entry"]["endpoints"] == [{"host": "node.example.test", "port": offer_port}]
+        backup = json.loads((tmp_path / "provider-backup.json").read_text())
+        assert backup and "a long backup passphrase" not in json.dumps(backup)
+        assert json.loads((home / "passkeys.json").read_text()) == {b64u(auth.cred_id): b64u(auth._cose())}
+        prog = web.get(P + "/api/setup/progress").json()
+        assert prog["status"] == "done" and prog["listing"]["state"] == "testing"
+        assert [s["id"] for s in prog["steps"]] == ["check", "sign", "backup", "service", "registry"]
+        assert [s["state"] for s in prog["steps"]][:3] == ["ok", "ok", "ok"]
         assert web.get(P + "/api/me").status_code == 200                        # dashboard works now
+        # Running start again on a set-up machine shows where it stands and exits; it does not start over.
+        again = subprocess.run([str(binary), "start"], env=env, capture_output=True, text=True, timeout=60)
+        assert again.returncode == 0 and "already set up" in again.stdout and "Machine code" not in again.stdout
     finally:
+        server.should_exit = True
+        th.join(timeout=5)
+
+
+@pytest.mark.skipif(GO is None, reason="Go toolchain not installed")
+def test_go_serve_applies_a_change_made_on_the_website(tmp_path):
+    """No terminal: the owner changes the offer on the website and the background service applies it."""
+    import httpx
+    server, th, port, fake, store = live_registry(tmp_path)
+    serve = None
+    try:
+        binary = tmp_path / "innernet-provider"
+        subprocess.run([GO, "build", "-o", str(binary), "."], cwd=os.path.join(os.path.dirname(__file__), "..", "provider"),
+                       env={**os.environ, "CGO_ENABLED": "0"}, check=True, capture_output=True)
+        offer_port = free_tcp_port()
+        env = {**os.environ, "INNERNET_HOME": str(tmp_path / "home"), "INNERNET_POLL_MS": "100", "INNERNET_NO_SERVICE": "1",
+               "INNERNET_NO_PORTMAP": "1", "INNERNET_NO_UPDATE": "1", "INNERNET_PRESENCE_SEC": "1",
+               "INNERNET_REGISTRY": f"http://127.0.0.1:{port}/registry/v1"}
+        proc = subprocess.Popen([str(binary), "start", "--no-browser", "--port", str(offer_port)],
+                                env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        code = None
+        while code is None:
+            line = proc.stdout.readline()
+            assert line
+            if line.strip().startswith("Machine code:"):
+                code = line.split(":", 1)[1].strip()
+        web = httpx.Client(base_url=f"http://127.0.0.1:{port}", headers=H)
+        auth = SoftAuthenticator()
+        opt = web.post(P + "/api/claim/options", json={"code": code}).json()
+        assert web.post(P + "/api/claim/verify", json={"flow": opt["flow"], "credential": auth.create(opt["options"]),
+                                                       "pair": opt.get("pair", False)}).status_code == 200
+        det = web.get(P + "/api/setup").json()["detected"]
+        offer = {"name": det["name"], "region": det["region"], "host": "127.0.0.1", "port": offer_port,
+                 "storage_gib": 10, "network": SEPOLIA, "payout": "0x" + "c3" * 20,
+                 "terms": current_terms("provider")["sha256"]}
+        confirm_setup(web, auth, offer)
+        proc.communicate(timeout=60)
+        assert proc.returncode == 0
+        serve = subprocess.Popen([str(binary), "serve"], env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        page = web.get(P + "/api/setup").json()
+        assert page["mode"] == "service"
+        for _ in range(100):
+            if not page["waiting_for_machine"]:
+                break
+            time.sleep(0.1)
+            page = web.get(P + "/api/setup").json()
+        assert not page["waiting_for_machine"], "the background service did not join"
+        assert page["can_seal"] is True
+        confirm_setup(web, auth, dict(offer, storage_gib=25, prices={"STO-1": "0.0020"},
+                                      backup=seal_to(page["detected"]["seal_key"], "another long passphrase")))
+        pid = page["provider"]
+        for _ in range(100):
+            prog = web.get(P + "/api/setup/progress").json()
+            if prog["status"] == "done" and prog["listing"]:
+                break
+            time.sleep(0.1)
+        assert prog["status"] == "done" and [s_["state"] for s_ in prog["steps"]][:3] == ["ok", "ok", "ok"], prog
+        e = store.provider(pid)["entry"]
+        assert e["limits"]["STO-1"]["max_storage_gib"] == 25 and e["prices"]["STO-1"]["amount"] == "0.0020"
+        assert (tmp_path / "provider-backup.json").exists()
+        # The service restarted with the new settings and keeps answering.
+        for _ in range(100):
+            try:
+                if httpx.get(f"http://127.0.0.1:{offer_port}/sto/v1/info", timeout=1).status_code == 200:
+                    break
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.1)
+        assert serve.poll() is None
+    finally:
+        if serve is not None:
+            serve.kill()
         server.should_exit = True
         th.join(timeout=5)
 

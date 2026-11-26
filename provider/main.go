@@ -414,9 +414,14 @@ func postApplication(c *Config, raw []byte) error {
 	if resp.StatusCode/100 != 2 {
 		return fmt.Errorf("registry refused the application (%s): %s", resp.Status, strings.TrimSpace(string(body)))
 	}
-	fmt.Println("Application received. The registry now checks your machine; follow it with: innernet-provider status")
+	if !quietApply {
+		fmt.Println("Application received. The registry now checks your machine; follow it with: innernet-provider status")
+	}
 	return nil
 }
+
+// quietApply: the website setup reports the application as one of its own steps.
+var quietApply bool
 
 func cmdStatus(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
@@ -649,16 +654,29 @@ func cmdBackup(args []string) error {
 			return errors.New("passphrases do not match")
 		}
 	}
-	raw, err := sealBackup(priv.Seed(), pass)
-	if err != nil {
-		return err
-	}
-	if err := os.WriteFile(args[0], append(raw, '\n'), 0o600); err != nil {
+	if err := writeBackup(priv, args[0], pass); err != nil {
 		return err
 	}
 	fmt.Println("Encrypted backup written to", args[0])
 	fmt.Println("Keep it offline (USB stick, password manager). Without it and the passphrase, a lost key cannot be recovered.")
 	return nil
+}
+
+// writeBackup encrypts this machine's key with pass and writes it to path (never overwriting).
+func writeBackup(priv ed25519.PrivateKey, path, pass string) error {
+	raw, err := sealBackup(priv.Seed(), pass)
+	if err != nil {
+		return err
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(append(raw, '\n')); err != nil {
+		f.Close()
+		return err
+	}
+	return f.Close()
 }
 
 func cmdRestore(args []string) error {
