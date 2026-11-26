@@ -186,7 +186,7 @@ func cmdInit(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	yes := fs.Bool("yes", false, "non-interactive: take every value from flags")
 	c := &Config{Version: "1", Registry: defaultRegistry, Network: "base-sepolia", Port: 9443,
-		CPUs: 1, MemMiB: 512, Prices: map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100"}}
+		CPUs: 1, MemMiB: 512, Prices: defaultPrices()}
 	fs.StringVar(&c.Name, "name", "", "provider name")
 	fs.StringVar(&c.Region, "region", "", "region label, e.g. asia-south")
 	fs.StringVar(&c.Host, "host", "", "public DNS name or IP")
@@ -201,6 +201,8 @@ func cmdInit(args []string) error {
 	ps, pr, pc := fs.String("price-storage", c.Prices["STO-1"], "USDC per GiB-day"),
 		fs.String("price-relay", c.Prices["RLY-1"], "USDC per GiB"),
 		fs.String("price-compute", c.Prices["CMP-1"], "USDC per billion instructions")
+	gpuN := fs.Int("gpus", 0, "GPUs to offer (0 = none); the model is detected")
+	pg := fs.String("price-gpu", c.Prices["GPU-1"], "USDC per GPU-hour")
 	force := fs.Bool("force", false, "overwrite an existing config (the identity key is kept)")
 	if err := fs.Parse(args); err != nil {
 		return err
@@ -208,7 +210,12 @@ func cmdInit(args []string) error {
 	if _, err := os.Stat(configPath()); err == nil && !*force {
 		return errors.New("already set up here; use --force to redo the setup (your key is kept)")
 	}
-	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc}
+	c.Prices = map[string]string{"STO-1": *ps, "RLY-1": *pr, "CMP-1": *pc, "GPU-1": *pg}
+	if *gpuN > 0 {
+		if err := c.setGPU(detectGPUs(), *gpuN); err != nil {
+			return err
+		}
+	}
 
 	if !*yes || c.Host == "" || c.Name == "" || c.Region == "" {
 		d := detect(registryURL(c), c.Port, !*yes)
@@ -673,7 +680,7 @@ func printStatus(w io.Writer, s *statusReply) {
 	if s.Health != nil {
 		fmt.Fprintf(w, "Health (7 days): uptime %s, storage challenges passed %s\n", s.Health.Uptime7d, s.Health.ChallengeOK)
 	}
-	for _, k := range []string{"STO-1", "RLY-1", "CMP-1"} {
+	for _, k := range []string{"STO-1", "RLY-1", "CMP-1", "GPU-1"} {
 		if v, ok := s.Activity[k]; ok {
 			fmt.Fprintf(w, "Activity %s: %s\n", k, v)
 		}
@@ -690,8 +697,8 @@ func askOffer(c *Config) {
 	c.Name = strings.ToLower(ask("Provider name (lowercase, shown publicly)", c.Name))
 	c.Region = strings.ToLower(ask("Region label (e.g. asia-south, eu-central)", c.Region))
 	fmt.Println()
-	fmt.Println("Other machines must be able to reach this one directly.")
-	fmt.Println("Home PCs behind a router can join once relay mode ships; for now use a public address.")
+	fmt.Println("Clients reach this machine at this address. Behind a router, start finds a way in by itself")
+	fmt.Println("(router port, ST81 relay or HTTPS tunnel); here, give the address you want listed.")
 	c.Host = ask("Public host name or IP", c.Host)
 	c.Port = askInt("Public port", c.Port)
 	fmt.Println()
@@ -709,5 +716,23 @@ func askOffer(c *Config) {
 		c.CPUs = askInt("  Max CPUs per job", c.CPUs)
 		c.MemMiB = askInt("  Max memory per job, MiB", c.MemMiB)
 		c.Prices["CMP-1"] = ask("  Price, USDC per billion instructions", c.Prices["CMP-1"])
+	}
+	if gpus := detectGPUs(); len(gpus) > 0 {
+		if _, have, ok := bestGPU(gpus); ok {
+			fmt.Printf("GPU found: %s\n", gpuSummary(gpus))
+			if askYes("  List it for GPU rental? (renting opens when GPU jobs launch)", c.GPU) {
+				n := askInt("  How many to offer", max(1, min(have, c.GPUs)))
+				if c.Prices["GPU-1"] == "" {
+					c.Prices["GPU-1"] = defaultPrices()["GPU-1"]
+				}
+				c.Prices["GPU-1"] = ask("  Price, USDC per GPU per hour", c.Prices["GPU-1"])
+				if err := c.setGPU(gpus, n); err != nil {
+					fmt.Println("  " + err.Error())
+					c.GPU = false
+				}
+			} else {
+				c.GPU = false
+			}
+		}
 	}
 }

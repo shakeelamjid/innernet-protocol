@@ -891,7 +891,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
                 "draft": json.loads(c["draft"]) if c["draft"] else None,
                 "current": current["entry"] if current else None,
                 "defaults": {"prices": offers.DEFAULT_PRICES, "units": offers.UNITS},
-                "fee_bps": settings.fee_bps, "networks": nets}
+                "fee_bps": settings.fee_bps, "networks": nets, "market": presence.market(store)}
 
     @app.post(P + "/api/setup")
     async def setup_post(request: Request):
@@ -901,7 +901,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         c = open_claim(pid)
         if c is None:
             raise HTTPException(404, "No machine is waiting for setup. Run innernet-provider start on it.")
-        o = offers.check_offer(await body_json(request), set(settings.fee_payto))
+        o = offers.check_offer(await body_json(request), set(settings.fee_payto), json.loads(c["detected"]))
         ok, why = chain.payout_check(settings, o["network"], o["payout"], rpc)
         if not ok:
             raise HTTPException(422, why)

@@ -3,7 +3,7 @@
   const pid = location.pathname.split('/').pop().toLowerCase();
   const base = location.pathname.replace(/\/providers\/[^/]*$/, '');
   const $ = function (id) { return document.getElementById(id); };
-  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'Compute' };
+  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'Compute', 'GPU-1': 'GPU' };
 
   function row(dl, key, value) {
     const dt = document.createElement('dt'); dt.textContent = key;
@@ -24,7 +24,7 @@
     const offer = $('offer');
     e.services.forEach(function (svc) {
       const pr = e.prices[svc];
-      row(offer, LABELS[svc] || svc, pr.amount + ' ' + pr.asset + ' per ' + pr.unit);
+      row(offer, LABELS[svc] || svc, (svc === 'GPU-1' && e.hardware ? e.hardware.gpu_model + (e.hardware.gpu_vram_mib ? ' (' + Math.round(e.hardware.gpu_vram_mib / 1024) + ' GiB)' : '') + ', ' : '') + pr.amount + ' ' + pr.asset + ' per ' + pr.unit);
     });
     row(offer, 'Region', e.region);
     row(offer, 'Payment', Object.keys(p.networks).map(function (n) { return p.networks[n]; }).join(', '));

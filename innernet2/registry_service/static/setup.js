@@ -10,17 +10,37 @@
   }
   function num(id) { const v = parseInt($(id).value, 10); return isNaN(v) ? 0 : v; }
 
+  function gpuLine(g) {
+    const mem = g.vram_mib ? ' · ' + Math.round(g.vram_mib / 1024) + ' GiB' + (g.api === 'metal' ? ' shared' : '') : '';
+    const cores = g.cores ? ' · ' + g.cores + ' cores' : '';
+    const api = g.api && g.api !== 'none' ? ' · ' + ({ cuda: 'CUDA', metal: 'Metal', rocm: 'ROCm', oneapi: 'oneAPI' }[g.api] || g.api) : ' · display only';
+    return g.model + cores + mem + api;
+  }
+  function gpuText(gpus) {
+    if (!gpus) return 'not reported (update the provider)';
+    if (!gpus.length) return 'none found';
+    const counts = {};
+    gpus.forEach(function (g) { const k = gpuLine(g); counts[k] = (counts[k] || 0) + 1; });
+    return Object.keys(counts).map(function (k) { return (counts[k] > 1 ? counts[k] + ' × ' : '') + k; }).join('; ');
+  }
+  function bestGpu(gpus) {
+    return (gpus || []).filter(function (g) { return g.api && g.api !== 'none'; })
+      .sort(function (a, b) { return (b.vram_mib || 0) - (a.vram_mib || 0) || (b.cores || 0) - (a.cores || 0); })[0] || null;
+  }
+
   function fill(d) {
     const det = d.detected || {}, draft = d.draft, cur = d.current;
     const facts = $('facts');
     [['System', (det.os || '?') + ' / ' + (det.arch || '?')], ['CPUs', String(det.cpus || '?')],
       ['Free disk', det.storage_free_gib ? det.storage_free_gib + ' GiB' : 'unknown'],
-      ['Memory', det.memory_mib ? Math.round(det.memory_mib / 1024) + ' GiB' : 'unknown']].forEach(function (r) {
+      ['Memory', det.memory_mib ? Math.round(det.memory_mib / 1024) + ' GiB' : 'unknown'],
+      ['GPU', gpuText(det.gpus)]].forEach(function (r) {
       const dt = document.createElement('dt'); dt.textContent = r[0];
       const dd = document.createElement('dd'); dd.textContent = r[1];
       facts.append(dt, dd);
     });
-    if (det.path === 'relay') say('reach', 'Reachability: clients reach this machine through the INNERnet relay (it connects out, so no router settings are needed). Data stays encrypted end to end.');
+    if (det.path === 'tunnel') say('reach', 'Reachability: clients reach this machine through the INNERnet HTTPS tunnel (it connects out, so no router settings are needed). Requests stay signed end to end.');
+    else if (det.path === 'relay') say('reach', 'Reachability: clients reach this machine through the INNERnet relay (it connects out, so no router settings are needed). Data stays encrypted end to end.');
     else if (det.reachable === true) say('reach', 'Reachability: other machines can reach ' + det.host + ':' + det.port + (det.path === 'router' ? ' (port opened on your router).' : '.'));
     else say('reach', 'Reachability: we could not reach ' + (det.host || 'your machine') + ':' + (det.port || '') +
       ' from the internet. Open this TCP port on your firewall or router, or use a server with a public address.', true);
@@ -38,6 +58,20 @@
     $('cmp-cpus').value = draft ? draft.cpus : Math.max(1, Math.min(4, (det.cpus || 2) - 1));
     $('cmp-mem').value = draft ? draft.memory_mib : 1024;
     const prices = Object.assign({}, d.defaults.prices, (draft && draft.prices) || {});
+    const g = bestGpu(det.gpus);
+    $('gpu-block').hidden = !g;
+    if (g) {
+      const same = det.gpus.filter(function (x) { return x.model === g.model; }).length;
+      $('gpu-name').textContent = g.model;
+      $('gpu-count').max = same;
+      $('gpu-count').value = draft && draft.gpu ? draft.gpus : same;
+      $('gpu-on').checked = !!(draft && draft.gpu);
+      $('gpu-price').value = prices['GPU-1'];
+      const m = d.market && d.market['GPU-1'];
+      const mm = m && m.by_model && m.by_model[g.model];
+      $('gpu-market').textContent = mm ? 'Others with ' + g.model + ' ask ' + mm.median + ' USDC per GPU-hour (typical ' + mm.low + '–' + mm.high + ', ' + mm.providers + ' listed).'
+        : 'No one has listed a ' + g.model + ' yet, so there is no market price to compare with.';
+    }
     $('sto-price').value = prices['STO-1']; $('rly-price').value = prices['RLY-1']; $('cmp-price').value = prices['CMP-1'];
     $('payout').value = (draft && draft.payout) || (cur && cur.payto && Object.values(cur.payto)[0]) || '';
     $('share-you').textContent = (100 - d.fee_bps / 100) + '%';
@@ -45,7 +79,7 @@
     sync();
   }
 
-  ['sto-on', 'rly-on', 'cmp-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
+  ['sto-on', 'rly-on', 'cmp-on', 'gpu-on'].forEach(function (id) { $(id).addEventListener('change', sync); });
 
   $('connect').addEventListener('click', async function () {
     if (!net || !net.factory) { say('pay-msg', 'Payout contracts open as soon as the split factory is deployed. Check back shortly.', true); return; }
@@ -65,7 +99,9 @@
       host: $('host').value.trim(), port: num('port'),
       storage_gib: $('sto-on').checked ? num('sto-gib') : 0, relay_gib: $('rly-on').checked ? num('rly-gib') : 0,
       compute: $('cmp-on').checked, cpus: Math.max(1, num('cmp-cpus')), memory_mib: Math.max(64, num('cmp-mem')),
-      prices: { 'STO-1': $('sto-price').value.trim(), 'RLY-1': $('rly-price').value.trim(), 'CMP-1': $('cmp-price').value.trim() },
+      gpu: !$('gpu-block').hidden && $('gpu-on').checked, gpus: Math.max(1, num('gpu-count')),
+      prices: { 'STO-1': $('sto-price').value.trim(), 'RLY-1': $('rly-price').value.trim(), 'CMP-1': $('cmp-price').value.trim(),
+        'GPU-1': $('gpu-price').value.trim() },
       network: net ? net.caip2 : 'eip155:84532', payout: $('payout').value.trim()
     };
     $('send').disabled = true;

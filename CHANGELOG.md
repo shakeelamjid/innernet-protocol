@@ -2,6 +2,13 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### GPU category (GPU-1), wallet guidance
+
+- `start` detects GPUs on macOS, Linux and Windows with the system's own tools (model, memory, cores, CUDA/Metal/ROCm), shows them in step 1 and reports them to the registry.
+- New service **GPU-1**, priced per GPU-hour. The setup page shows the machine's GPUs, offers the best usable one with a count, and shows the market price for that model; the registry refuses a GPU offer the machine did not report. The signed descriptor carries `hardware.gpu_model` and `limits.GPU-1.max_gpus`. Market prices for GPU-1 are grouped by model. Listing only: GPU jobs are not specified yet (spec 7.7).
+- Setup page: which wallet to connect (a Base wallet you control, not an exchange deposit address; no keys shared); a reachability line for the HTTPS tunnel.
+- Terminal setup no longer says home PCs need a public address.
+
 ### ST81 in Go, storage over ST81, relay for machines behind routers, HTTPS fallback
 
 - **ST81 in Go** (`provider/st81.go`): handshake, key pinning, key confirmation, AEAD framing and strict JSON exactly as `stream_v080.py`; conformance-tested against the Python reference in both directions and against the RFC 8439 ChaCha20-Poly1305 vector. ChaCha20-Poly1305 is the pure-Go code from Go's own source tree (`provider/internal/xcrypto`, BSD), so the provider still needs no external modules.

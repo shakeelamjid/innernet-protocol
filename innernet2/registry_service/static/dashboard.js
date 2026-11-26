@@ -2,7 +2,7 @@
 (function () {
   const I = window.Innernet;
   const $ = function (id) { return document.getElementById(id); };
-  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'Compute' };
+  const LABELS = { 'STO-1': 'Storage', 'RLY-1': 'Bandwidth', 'CMP-1': 'Compute', 'GPU-1': 'GPU' };
   const STATES = {
     testing: 'Testing: being checked before listing',
     listed: 'Listed: visible to everyone',
@@ -47,7 +47,8 @@
     max_storage_gib: function (v) { return 'up to ' + v + ' GiB'; },
     max_gib_per_month: function (v) { return 'up to ' + v + ' GiB a month'; },
     max_cpus: function (v) { return v + (v === 1 ? ' CPU' : ' CPUs'); },
-    max_memory_mib: function (v) { return v + ' MiB memory'; }
+    max_memory_mib: function (v) { return v + ' MiB memory'; },
+    max_gpus: function (v) { return v + (v === 1 ? ' GPU' : ' GPUs'); }
   };
 
   async function showLogin() {
@@ -162,7 +163,7 @@
     offer.replaceChildren();
     e.services.forEach(function (svc) {
       const pr = e.prices[svc];
-      let text = pr.amount + ' ' + pr.asset + ' per ' + pr.unit;
+      let text = (svc === 'GPU-1' && e.hardware ? e.hardware.gpu_model + (e.hardware.gpu_vram_mib ? ' (' + Math.round(e.hardware.gpu_vram_mib / 1024) + ' GiB)' : '') + ', ' : '') + pr.amount + ' ' + pr.asset + ' per ' + pr.unit;
       const lim = (e.limits || {})[svc];
       if (lim) text += ', ' + Object.keys(lim).map(function (k) { return LIMITS[k] ? LIMITS[k](lim[k]) : k.replace(/_/g, ' ') + ' ' + lim[k]; }).join(', ');
       dl(offer, LABELS[svc] || svc, text);

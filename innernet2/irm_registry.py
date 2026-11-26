@@ -32,7 +32,9 @@ ROTATION_VERSION = "REG-1-ROTATE"
 DESCRIPTOR_VERSION = "REG-1-DESCRIPTOR"
 TICKET_VERSION = "PAY-1-TICKET"
 
-SERVICES = frozenset({"STO-1", "RLY-1", "CMP-1"})
+SERVICES = frozenset({"STO-1", "RLY-1", "CMP-1", "GPU-1"})
+GPU_APIS = frozenset({"cuda", "metal", "rocm", "oneapi", "none"})
+_HWTEXT = re.compile(r"^[A-Za-z0-9 ()._+/,-]{1,80}$")
 ASSETS = frozenset({"USDC"})
 MAX_SEQUENCE = 2**63 - 1
 MAX_PROVIDERS = 10_000
@@ -113,9 +115,37 @@ def available_minutes(entry: dict) -> int:
     return 7 * 1440 if av is None else sum(w[2] - w[1] for w in av["weekly"])
 
 
+def validate_hardware(hw: dict) -> None:
+    """Self-described hardware behind GPU-1: what the machine found, signed with the descriptor."""
+    _exact_keys(hw, set(), {"gpu_vendor", "gpu_model", "gpu_api", "gpu_vram_mib"}, "provider hardware")
+    for k in ("gpu_vendor", "gpu_model"):
+        if k in hw and (not isinstance(hw[k], str) or not _HWTEXT.match(hw[k])):
+            raise BulkError(f"invalid hardware {k}")
+    if "gpu_api" in hw and hw["gpu_api"] not in GPU_APIS:
+        raise BulkError("invalid hardware gpu_api")
+    if "gpu_vram_mib" in hw:
+        _int(hw["gpu_vram_mib"], 0, 2**30, "hardware gpu_vram_mib")
+
+
+def validate_gpus(gpus) -> None:
+    """The GPUs a machine reports when it connects (REG-1-CONNECT detected.gpus)."""
+    if not isinstance(gpus, list) or len(gpus) > 16:
+        raise BulkError("invalid detected gpus")
+    for g in gpus:
+        _exact_keys(g, {"vendor", "model"}, {"vram_mib", "cores", "api", "driver"}, "detected gpu")
+        for k in ("vendor", "model", "driver"):
+            if k in g and (not isinstance(g[k], str) or not _HWTEXT.match(g[k])):
+                raise BulkError(f"invalid detected gpu {k}")
+        for k in ("vram_mib", "cores"):
+            if k in g:
+                _int(g[k], 0, 2**30, f"detected gpu {k}")
+        if "api" in g and g["api"] not in GPU_APIS:
+            raise BulkError("invalid detected gpu api")
+
+
 def _validate_provider(entry: dict, *, registry: bool) -> None:
     required = {"id", "name", "region", "endpoints", "services", "payto", "prices"}
-    optional = {"limits", "availability", "class"} | ({"listed_at", "reputation"} if registry else set())
+    optional = {"limits", "availability", "class", "hardware"} | ({"listed_at", "reputation"} if registry else set())
     _exact_keys(entry, required, optional, "provider entry")
     if not isinstance(entry["id"], str) or not _HEX32.match(entry["id"]):
         raise BulkError("invalid provider id")
@@ -157,6 +187,10 @@ def _validate_provider(entry: dict, *, registry: bool) -> None:
                 if not isinstance(k, str) or not _UNIT.match(k.replace("_", "-")):
                     raise BulkError("invalid provider limit name")
                 _int(v, 0, 2**53, "provider limit value")
+    if "hardware" in entry:
+        validate_hardware(entry["hardware"])
+    if ("GPU-1" in services) != ("hardware" in entry and "gpu_model" in entry["hardware"]):
+        raise BulkError("GPU-1 needs hardware.gpu_model, and only GPU-1 may carry it")
     if "class" in entry and entry["class"] not in CLASSES:
         raise BulkError("invalid provider class")
     if "availability" in entry:
@@ -426,7 +460,7 @@ CONNECT_DOMAIN = b"INNERnet/REG-1/provider-connect\x00"
 CONNECT_VERSION = "REG-1-CONNECT"
 _DETECTED_KEYS = {"name": str, "region": str, "host": str, "port": int, "storage_free_gib": int, "cpus": int,
                   "memory_mib": int, "os": str, "arch": str, "reachable": bool, "version": str, "class": str,
-                  "tz": str, "port_map": str, "path": str}
+                  "tz": str, "port_map": str, "path": str, "gpus": list}
 
 
 def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) -> tuple[bytes, dict]:
@@ -447,7 +481,9 @@ def verify_connect(record: dict, *, now: int | None = None, max_age: int = 300) 
         raise BulkError("invalid detected facts")
     for key, value in detected.items():
         kind = _DETECTED_KEYS[key]
-        if kind is int:
+        if kind is list:
+            validate_gpus(value)
+        elif kind is int:
             _int(value, 0, 2**40, f"detected {key}")
         elif type(value) is not kind or (kind is str and len(value) > 253):
             raise BulkError(f"invalid detected {key}")

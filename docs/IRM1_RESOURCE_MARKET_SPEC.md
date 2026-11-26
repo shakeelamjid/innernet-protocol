@@ -15,6 +15,7 @@ IRM-1 lets anyone rent out **storage**, **bandwidth** (relaying) or **compute** 
 | `STO-1` | Paid storage of OB80-2 pieces, with proof-of-storage challenges | OB80-2, ST81 |
 | `RLY-1` | Paid relaying between peers that cannot connect directly | ST81 |
 | `CMP-1` | Paid compute: deterministic jobs, verified by replication or hardware attestation | OB80-2, UV10 |
+| `GPU-1` | GPU time, priced per GPU-hour (draft: listing only, jobs not yet) | REG-1 |
 
 ### 1.1 Principles
 
@@ -338,6 +339,16 @@ Each job states an instruction budget and wall-time limit, and price is per unit
 ### 7.6 What the provider can see
 
 **In `replicate-k` and `spot-check` modes, providers see the job's inputs and outputs in plain form while running it.** Encryption protects data in storage and in transit, not while a normal server computes on it. Only `attested` mode keeps inputs hidden from the provider's operator, and then only as far as the enclave hardware is trustworthy. Clients MUST NOT send confidential data to non-attested compute.
+
+### 7.7 GPU-1: GPU time (draft)
+
+GPU work is its own service because its unit, price and buyers differ from CMP-1: a GPU is rented per **GPU-hour** (`unit: "GPU-hour"`), and prices only compare within a GPU model.
+
+- **Detection.** The provider reports every GPU it finds in `REG-1-CONNECT` `detected.gpus`: a list of at most 16 objects with `vendor`, `model`, and optionally `vram_mib`, `cores`, `api` and `driver`. Text fields use letters, digits, space and `()._+/,-`, at most 80 characters. `api` is what jobs can use: `cuda` (NVIDIA with a working driver), `metal` (Apple), `rocm` (AMD with ROCm installed), `oneapi` (Intel) or `none` (display only). On Apple silicon `vram_mib` is the shared memory. Virtual and server-console adapters are left out. Sources: `system_profiler` (macOS), `nvidia-smi`, then `lspci` (Linux), `nvidia-smi`, then `Win32_VideoController` (Windows). Nothing is installed to detect them.
+- **Offer.** Only a GPU whose `api` is not `none` can be offered; the machine offers its GPU with the most memory, up to the number of that model it has. The model comes from the machine's own detection, never from the website.
+- **Descriptor.** A provider listing `GPU-1` MUST carry `hardware` with `gpu_model` (and `gpu_vendor`, `gpu_api`, optionally `gpu_vram_mib`), and only such a provider may carry `gpu_model`; `limits.GPU-1.max_gpus` is the number offered. These are self-described and signed with the descriptor; registry probes and clients' own jobs are what confirm them.
+- **Market.** `/registry/v1/market` adds `by_model` for `GPU-1`.
+- **Status.** Listing only. GPU jobs (container or WebGPU/CUDA runtime, isolation, metering and checking results) are not specified yet; until they are, a GPU-1 listing shows supply and price, and nothing runs on the GPU.
 
 ## 8. Security and abuse
 

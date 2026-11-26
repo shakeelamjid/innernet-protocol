@@ -130,3 +130,5 @@ Never put the contents of `identity.key`, a wallet seed phrase or any private ke
 ## Status of this tool
 
 Draft. The registry service is in `innernet2/registry_service` (see `docs/IRM1_REGISTRY_SERVICE.md`); until it is deployed, `apply` keeps your signed form and tells you so. `serve` implements storage (STO-1). Relay (RLY-1) and compute (CMP-1) serving follow; until then those offers are listed but not served.
+
+**GPUs.** `start` reports the machine's GPUs (model, memory, cores, and whether CUDA, Metal or ROCm can use them). The setup page offers the best one for rent per GPU-hour, with the market price for that model; in the terminal, `init --gpus N --price-gpu 0.25` or the interactive questions do the same. GPU listings show supply and price; renting GPU time opens when GPU jobs launch. A GPU shows as "display only" when no compute driver is installed (for NVIDIA, install the driver that provides `nvidia-smi`).

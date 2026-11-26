@@ -249,6 +249,11 @@ def market(store: Store) -> dict:
         for e, v in offers:
             by_class.setdefault(e.get("class", "unknown"), []).append(v)
         out[svc]["by_class"] = {c: {"providers": len(v), **_spread(v)} for c, v in sorted(by_class.items())}
+        if svc == "GPU-1":      # GPU prices only compare within a model
+            by_model: dict[str, list[float]] = {}
+            for e, v in offers:
+                by_model.setdefault(e.get("hardware", {}).get("gpu_model", "unknown"), []).append(v)
+            out[svc]["by_model"] = {m: {"providers": len(v), **_spread(v)} for m, v in sorted(by_model.items())}
     return out
 
 

@@ -30,7 +30,11 @@ var networks = map[string]string{
 	"base":         "eip155:8453",
 }
 
-var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "Ginstr"}
+var units = map[string]string{"STO-1": "GiB-day", "RLY-1": "GiB", "CMP-1": "Ginstr", "GPU-1": "GPU-hour"}
+
+func defaultPrices() map[string]string {
+	return map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100", "GPU-1": "0.2500"}
+}
 
 type Config struct {
 	Version    string            `json:"version"`
@@ -46,6 +50,12 @@ type Config struct {
 	Compute    bool              `json:"compute"`
 	CPUs       int               `json:"compute_max_cpus"`
 	MemMiB     int               `json:"compute_max_memory_mib"`
+	GPU        bool              `json:"gpu,omitempty"`
+	GPUs       int               `json:"gpu_count,omitempty"`
+	GPUVendor  string            `json:"gpu_vendor,omitempty"`
+	GPUModel   string            `json:"gpu_model,omitempty"`
+	GPUAPI     string            `json:"gpu_api,omitempty"`
+	GPUVRAM    int               `json:"gpu_vram_mib,omitempty"`
 	Prices     map[string]string `json:"prices_usdc"`
 	Created    string            `json:"created_at"`
 	PortMap    string            `json:"port_map,omitempty"` // natpmp or upnp: serve keeps the router mapping alive
@@ -154,6 +164,9 @@ func (c *Config) services() []string {
 	if c.Compute {
 		s = append(s, "CMP-1")
 	}
+	if c.GPU {
+		s = append(s, "GPU-1")
+	}
 	return s
 }
 
@@ -175,7 +188,10 @@ func (c *Config) validate(forApply bool) error {
 		problems = append(problems, "network: base-sepolia (testnet) or base")
 	}
 	if len(c.services()) == 0 {
-		problems = append(problems, "offer at least one of storage, relay or compute")
+		problems = append(problems, "offer at least one of storage, relay, compute or GPU")
+	}
+	if c.GPU && (c.GPUs < 1 || c.GPUs > 16 || c.GPUModel == "" || hwText(c.GPUModel) != c.GPUModel) {
+		problems = append(problems, "gpu: 1-16 GPUs of a model this machine detected")
 	}
 	for _, s := range c.services() {
 		if !reDecimal.MatchString(c.Prices[s]) {
@@ -214,6 +230,14 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	if c.Compute {
 		limits["CMP-1"] = map[string]any{"max_cpus": c.CPUs, "max_memory_mib": c.MemMiB}
 	}
+	var hardware map[string]any
+	if c.GPU {
+		limits["GPU-1"] = map[string]any{"max_gpus": c.GPUs}
+		hardware = map[string]any{"gpu_vendor": c.GPUVendor, "gpu_model": c.GPUModel, "gpu_api": orDefault(c.GPUAPI, "none")}
+		if c.GPUVRAM > 0 {
+			hardware["gpu_vram_mib"] = c.GPUVRAM
+		}
+	}
 	entry := map[string]any{
 		"id": id, "name": c.Name, "region": c.Region,
 		"endpoints": []any{c.publicEndpoint()},
@@ -223,6 +247,9 @@ func (c *Config) descriptorEntry(id string) map[string]any {
 	}
 	if len(limits) > 0 {
 		entry["limits"] = limits
+	}
+	if hardware != nil {
+		entry["hardware"] = hardware
 	}
 	if av, err := availabilityEntry(c.Hours, orDefault(c.TZ, "UTC")); err == nil && av != nil {
 		entry["availability"] = av
@@ -267,6 +294,9 @@ func writeDetails(c *Config, id string) error {
 	if c.Compute {
 		fmt.Fprintf(&b, "  Compute        %d CPUs, %d MiB at %s USDC per billion instructions\n", c.CPUs, c.MemMiB, c.Prices["CMP-1"])
 	}
+	if c.GPU {
+		fmt.Fprintf(&b, "  GPU            %d × %s at %s USDC per GPU-hour\n", c.GPUs, c.GPUModel, c.Prices["GPU-1"])
+	}
 	fmt.Fprintf(&b, "\nRegistry         %s\n", c.Registry)
 	fmt.Fprintf(&b, "Status page      %s/providers/%s\n", strings.TrimSuffix(c.Registry, "/registry/v1"), id)
 	fmt.Fprintf(&b, "Files            %s\n", home())
@@ -292,4 +322,20 @@ func (c *Config) publicEndpoint() map[string]any {
 		return map[string]any{"host": c.TunnelHost, "port": 443}
 	}
 	return map[string]any{"host": c.Host, "port": c.Port}
+}
+
+// setGPU offers n of this machine's best GPU. The model is what the machine detected.
+func (c *Config) setGPU(gpus []gpuInfo, n int) error {
+	g, have, ok := bestGPU(gpus)
+	if !ok {
+		return errors.New("this machine has no GPU that can run jobs")
+	}
+	if n < 1 || n > have {
+		return fmt.Errorf("this machine has %d %s", have, g.Model)
+	}
+	c.GPU, c.GPUs, c.GPUVendor, c.GPUModel, c.GPUAPI, c.GPUVRAM = true, n, g.Vendor, g.Model, g.API, g.VRAMMiB
+	if c.Prices["GPU-1"] == "" {
+		c.Prices["GPU-1"] = defaultPrices()["GPU-1"]
+	}
+	return nil
 }

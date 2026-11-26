@@ -60,12 +60,22 @@
               <label>Max memory per job, MiB<input id="cmp-mem" class="field" type="number" min="64"></label>
               <label>USDC per billion instructions<input id="cmp-price" class="field" inputmode="decimal"></label>
             </div>
+            <div id="gpu-block" hidden>
+              <label class="toggle"><input type="checkbox" id="gpu-on"> <span><strong>GPU</strong> Rent <span id="gpu-name">your GPU</span> by the hour.</span></label>
+              <div class="fields" data-for="gpu-on">
+                <label>GPUs to offer<input id="gpu-count" class="field" type="number" min="1"></label>
+                <label>USDC per GPU per hour<input id="gpu-price" class="field" inputmode="decimal"></label>
+              </div>
+              <p class="msg" data-for="gpu-on">Your GPU is listed with its model, so clients and the market price can see it. Renting GPU time opens when GPU jobs launch; until then nothing runs on it.</p>
+              <p class="msg" id="gpu-market" data-for="gpu-on"></p>
+            </div>
           </div>
         </section>
 
         <section class="card frame step">
           <h2>Your payout contract</h2>
           <p>Clients pay this contract. It sends <strong id="share-you">97.5%</strong> to your wallet and <strong id="share-fee">2.5%</strong> to the network, and nobody can change that.</p>
+          <p class="msg">Connect the wallet that should receive your share: a wallet on Base that you control, such as the Coinbase Wallet app, MetaMask, Rabby or a hardware wallet. Do not use an exchange deposit address. You never give anyone its key; the contract only stores its address. The same address works on the test network and later on Base mainnet.</p>
           <button class="btn" type="button" id="connect">Connect wallet and find or create it</button>
           <label>Payout contract<input id="payout" class="field mono" maxlength="42" autocomplete="off" placeholder="0x…"></label>
           <p class="msg" id="pay-msg" role="status"></p>

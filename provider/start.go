@@ -114,6 +114,24 @@ func connectRecord(priv ed25519.PrivateKey, f *facts, now int64) (map[string]any
 	if f.Path != "" {
 		detected["path"] = f.Path
 	}
+	gpus := []any{}
+	for _, g := range f.GPUs {
+		m := map[string]any{"vendor": g.Vendor, "model": g.Model}
+		if g.VRAMMiB > 0 {
+			m["vram_mib"] = g.VRAMMiB
+		}
+		if g.Cores > 0 {
+			m["cores"] = g.Cores
+		}
+		if g.API != "" {
+			m["api"] = g.API
+		}
+		if g.Driver != "" {
+			m["driver"] = g.Driver
+		}
+		gpus = append(gpus, m)
+	}
+	detected["gpus"] = gpus
 	payload := map[string]any{"version": "REG-1-CONNECT", "provider": providerID(priv), "detected": detected,
 		"nonce": hex.EncodeToString(nb), "issued_at": now}
 	sig, err := signCanonical(priv, connectDomain, payload)
@@ -133,6 +151,8 @@ type webOffer struct {
 	Compute   bool              `json:"compute"`
 	CPUs      int               `json:"cpus"`
 	MemMiB    int               `json:"memory_mib"`
+	GPU       bool              `json:"gpu"`
+	GPUs      int               `json:"gpus"`
 	Prices    map[string]string `json:"prices"`
 	Network   string            `json:"network"`
 	Payout    string            `json:"payout"`
@@ -150,7 +170,7 @@ func networkKey(caip2 string) string {
 func (o *webOffer) config(reg string) *Config {
 	c := &Config{Version: "1", Name: o.Name, Region: o.Region, Host: o.Host, Port: o.Port, Network: networkKey(o.Network),
 		Payout: o.Payout, Registry: reg, Storage: o.StorageGB, RelayCap: o.RelayGB, Compute: o.Compute, CPUs: o.CPUs,
-		MemMiB: o.MemMiB, Prices: map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100"},
+		MemMiB: o.MemMiB, Prices: defaultPrices(),
 		Created: time.Now().UTC().Format(time.RFC3339)}
 	for k, v := range o.Prices {
 		if _, ok := units[k]; ok && v != "" {
@@ -215,6 +235,12 @@ func startWeb(reg string, priv ed25519.PrivateKey, f *facts, noOpen bool) error 
 		return err
 	}
 	c := offer.config(strings.TrimSuffix(reg, ""))
+	if offer.GPU {
+		// The GPU model comes from this machine's own detection, never from the website.
+		if err := c.setGPU(f.GPUs, offer.GPUs); err != nil {
+			return fmt.Errorf("the offer from the website is not valid: %v", err)
+		}
+	}
 	if offer.Port == f.Port {
 		c.PortMap = f.PortMap
 	}
@@ -291,7 +317,7 @@ func openBrowser(url string) {
 
 func startTerminal(reg string, priv ed25519.PrivateKey, f *facts, yes bool, wallet string, wantService bool) error {
 	c := &Config{Version: "1", Registry: reg, Network: "base-sepolia", Port: f.Port, CPUs: 1, MemMiB: 512,
-		Prices: map[string]string{"STO-1": "0.0010", "RLY-1": "0.0050", "CMP-1": "0.0100"}}
+		Prices: defaultPrices()}
 	if old, err := loadConfig(); err == nil {
 		c = old
 		c.Registry = reg
@@ -410,6 +436,9 @@ func printOffer(c *Config) {
 	}
 	if c.Compute {
 		rows = append(rows, [2]string{"Compute", fmt.Sprintf("%d CPUs, %d MiB at %s USDC per billion instr.", c.CPUs, c.MemMiB, c.Prices["CMP-1"])})
+	}
+	if c.GPU {
+		rows = append(rows, [2]string{"GPU", fmt.Sprintf("%d × %s at %s USDC per GPU-hour (rentable when GPU jobs launch)", c.GPUs, c.GPUModel, c.Prices["GPU-1"])})
 	}
 	rows = append(rows, [2]string{"Payout", c.Payout + " (" + c.Network + ")"})
 	box("Offer to sign", rows)

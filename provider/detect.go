@@ -35,6 +35,7 @@ type facts struct {
 	Tunnel         bool
 	TunnelHost     string
 	TZ             string `json:"tz,omitempty"`
+	GPUs           []gpuInfo
 	reachChecked   bool
 	reachNote      string
 }
@@ -59,8 +60,10 @@ func detectSteps(registry string, port int, st *stepper, interactive bool) *fact
 	}
 	f.StorageFreeGiB = freeDiskGiB(home())
 	f.MemoryMiB = totalMemoryMiB()
+	f.GPUs = detectGPUs()
 	if st != nil {
-		st.ok("%s %s · %d CPU · %s memory · %s free", osName(f.OS), f.Arch, f.CPUs, mib(f.MemoryMiB), gib(f.StorageFreeGiB))
+		st.ok("%s %s · %d CPU · %s memory · %s free · %s", osName(f.OS), f.Arch, f.CPUs, mib(f.MemoryMiB),
+			gib(f.StorageFreeGiB), gpuSummary(f.GPUs))
 		st.begin("Internet address")
 	}
 	ip, err := whoami(registry)
