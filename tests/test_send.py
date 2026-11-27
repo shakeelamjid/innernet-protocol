@@ -16,7 +16,8 @@ from fastapi.testclient import TestClient
 
 from innernet2.registry_service import send
 from innernet2.registry_service.app import create_app
-from tests.test_registry_service import ORIGIN, P, FakeChain, settings
+from innernet2.registry_service.config import USDC
+from tests.test_registry_service import FEE_WALLET, ORIGIN, SEPOLIA, P, FakeChain, settings
 
 H = {"X-Innernet": "1", "Origin": ORIGIN}
 API = P + "/send/api"
@@ -38,6 +39,7 @@ class Device:
 @pytest.fixture
 def app(tmp_path, monkeypatch):
     monkeypatch.setenv("INNERNET_SEND_MAX_MB", "9")
+    monkeypatch.setenv("INNERNET_SEND_ALL_RULES", "1")       # the whole rule engine (paid capsules, not open yet)
     a = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0)
     return TestClient(a, base_url=ORIGIN), a, tmp_path
 
@@ -168,13 +170,14 @@ def test_limits_sizes_and_pages(app, monkeypatch):
     client, a, tmp = app
     owner = Device()
     lim = client.get(API + "/limits").json()
-    assert lim["max_bytes"] == 9 << 20 and lim["keeps"] == [86400, 7 * 86400] and lim["part"] == send.PART
+    assert lim["max_bytes"] == 9 << 20 and lim["free_keep"] == 7 * 86400 and lim["part"] == send.PART and lim["tier"] == "all"
     base = {"id": os.urandom(16).hex(), "parts": 3, "keep": 86400, "max_opens": 1, "auth_hash": "aa" * 32, "pin_tag": "aa" * 32,
             "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32), "preview": send.b64u(b"p"), "meta": send.b64u(b"m")}
     assert client.post(API + "/files", json={**base, "size": (10 << 20) + 3 * send.TAG}, headers=H).status_code == 413   # too large
     assert client.post(API + "/files", json={**base, "size": 100, "parts": 2}, headers=H).status_code == 422             # sizes disagree
-    assert client.post(API + "/files", json={**base, "size": 100, "parts": 1, "keep": 30 * 86400}, headers=H).status_code == 422
-    assert client.post(API + "/files", json={**base, "size": 100, "parts": 1, "max_opens": 2}, headers=H).status_code == 422
+    assert client.post(API + "/files", json={**base, "size": 100, "parts": 1, "keep": 400 * 86400}, headers=H).status_code == 422
+    assert client.post(API + "/files", json={**base, "size": 100, "parts": 1, "max_opens": 1001}, headers=H).status_code == 422
+    assert client.post(API + "/files", json={**base, "size": 20000, "parts": 1, "kind": "note"}, headers=H).status_code == 413
     assert client.post(API + "/files", json={**base, "size": 100, "parts": 1, "keeper_share": "AAAA"}, headers=H).status_code == 422
     r = client.post(API + "/files", json={**base, "size": 100, "parts": 1}, headers=H)
     assert r.status_code == 200
@@ -247,3 +250,107 @@ def test_the_operator_can_destroy_a_file_but_not_read_it(app, monkeypatch, capsy
     assert admin.main(["send-remove", fid, "again"]) == 1
     assert info(client, fid).json()["reason"] == "removed by the operator: abuse report 14"
     assert open_(client, fid, Device()).status_code == 410 and not (tmp / "send" / f"{fid}.bin").exists()
+
+
+def test_the_free_send_is_one_file_or_note_opened_once_with_no_settings(tmp_path, monkeypatch):
+    monkeypatch.delenv("INNERNET_SEND_ALL_RULES", raising=False)
+    monkeypatch.delenv("INNERNET_SEND_MAX_MB", raising=False)
+    a = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0)      # no receiving address on Base
+    client = TestClient(a, base_url=ORIGIN)
+    lim = client.get(API + "/limits").json()
+    assert lim["tier"] == "free" and lim["max_bytes"] == 10 << 20 and lim["free_keep"] == 7 * 86400 and not lim["paid"]["on"]
+    owner, rx, other = Device(), Device(), Device()
+    base = {"size": 100, "parts": 1, "auth_hash": hashlib.sha256(b"A" * 32).hexdigest(),
+            "pin_tag": "aa" * 32, "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32),
+            "preview": send.b64u(b"p"), "meta": send.b64u(b"m")}
+    new = lambda **kw: client.post(API + "/files", json={**base, "id": os.urandom(16).hex(), **kw}, headers=H)   # noqa: E731
+    for paid in ({"max_opens": 3}, {"max_opens": 0}, {"forward": True}, {"keep": 8 * 86400}, {"receipt": True},
+                 {"reply": True}, {"control": True}, {"open_after": int(time.time()) + 86400}):
+        r = new(**paid)
+        assert r.status_code == 402 and "not switched on" in r.text, (paid, r.text)
+    assert new(size=(11 << 20) + 3 * send.TAG, parts=3).status_code == 413            # over 10 MB
+    r = new(kind="note")
+    fid = r.json()["id"]
+    assert r.json()["pay"] is None and r.json()["lines"] == []
+    assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers={**H, "X-Send-Upload": r.json()["upload"]}).json()["live"]
+    assert client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H).status_code == 402   # no sender controls
+    first = open_(client, fid, rx).json()
+    assert first["last"] is True and first["kind"] == "note" and first["reply_on"] is False
+    assert open_(client, fid, rx).status_code == 410 and open_(client, fid, other).status_code == 410   # strictly once
+    st = client.post(API + f"/files/{fid}/status", json=owner.sign("status", fid), headers=H).json()      # the sender still sees it
+    assert st["state"] == "spent" and [(e["event"], bool(e["ts"])) for e in st["events"]] == [("sent", True), ("opened", False)]
+    stats = client.get(API + "/stats").json()
+    assert stats["sent"] == 1 and stats["opened"] == 1 and stats["bytes"] == 100 and stats["paid"] == 0
+
+
+class PayChain(FakeChain):
+    def __call__(self, url, method, params):
+        if method == "eth_getTransactionReceipt":
+            logs = [dict(x, address=USDC[SEPOLIA]) for x in self.logs if x["transactionHash"] == params[0]]
+            return {"status": "0x1", "logs": logs} if logs else None
+        return super().__call__(url, method, params)
+
+
+def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tmp_path, monkeypatch):
+    monkeypatch.delenv("INNERNET_SEND_ALL_RULES", raising=False)
+    monkeypatch.setenv("INNERNET_SEND_NETWORK", SEPOLIA)
+    chain = PayChain()
+    a = create_app(settings(tmp_path), rpc=chain, connect=lambda h, p, t: 3.0)
+    client = TestClient(a, base_url=ORIGIN)
+    lim = client.get(API + "/limits").json()
+    assert lim["tier"] == "paid" and lim["paid"]["on"] and lim["paid"]["to"] == FEE_WALLET
+    owner, rx = Device(), Device()
+    opts = {"keep": 30 * 86400, "max_opens": 3, "receipt": True, "reply": True, "control": True, "forward": True}
+    q = client.post(API + "/quote", json={"plain": 20 << 20, **opts}, headers=H).json()
+    # 100 MB tier 0.05 + 30 days 0.05 + 2 more openings 0.02 + passing on 0.05 + receipt 0.03 + reply 0.05 + take back 0.05
+    assert q["micro"] == 300_000 and q["total"] == "0.300000" and len(q["lines"]) == 7
+    assert client.post(API + "/quote", json={"plain": 100}, headers=H).json()["micro"] == 0
+    plain = 84
+    body = {"id": os.urandom(16).hex(), "size": plain + send.TAG, "parts": 1, "auth_hash": hashlib.sha256(b"A" * 32).hexdigest(),
+            "pin_tag": "aa" * 32, "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32),
+            "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), **opts}
+    r = client.post(API + "/files", json=body, headers=H).json()
+    fid, pay = r["id"], r["pay"]
+    assert 250_000 < pay["micro"] < 251_000 and pay["to"] == FEE_WALLET and pay["chain_id"] == 84532      # price + identifying digits
+    up = {**H, "X-Send-Upload": r["upload"]}
+    assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers=up).status_code == 402    # paid before upload
+    check = lambda **kw: client.post(API + f"/files/{fid}/pay", json={**owner.sign("pay", fid), **kw}, headers=H)   # noqa: E731
+    assert check().json()["paid"] is False
+    assert client.post(API + f"/files/{fid}/pay", json=rx.sign("pay", fid), headers=H).status_code == 403   # only the sender
+    chain.pay(FEE_WALLET, pay["micro"] - 1, 990)                     # a different amount is not this payment
+    assert check().json()["paid"] is False
+    chain.pay(FEE_WALLET, pay["micro"], 995)
+    paid = check().json()
+    assert paid["paid"] is True and paid["state"] == "uploading" and paid["tx"] == chain.logs[-1]["transactionHash"]
+    assert check().json()["paid"] is True
+    assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers=up).json()["live"] is True
+    # The paid rules work: opening time is shown, one sealed reply comes back, the sender can take it back.
+    rel = open_(client, fid, rx).json()
+    assert rel["last"] is False and rel["reply_on"] is True
+    tok = {**H, "X-Send-Token": rel["token"]}
+    assert client.post(API + f"/files/{fid}/reply", json={"sealed": send.b64u(b"thanks")}, headers=tok).status_code == 200
+    assert client.post(API + f"/files/{fid}/reply", json={"sealed": send.b64u(b"again")}, headers=tok).status_code == 409
+    st = client.post(API + f"/files/{fid}/status", json=owner.sign("status", fid), headers=H).json()
+    assert st["reply"] == send.b64u(b"thanks") and st["paid"] == pay["amount"] and all(e["ts"] for e in st["events"])
+    # Extending: priced, paid the same way (here named by its transaction), then the end moves.
+    ext = client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 30}, headers=H).json()
+    assert 50_000 < ext["pay"]["micro"] < 51_000 and check().json()["paid"] is False
+    chain.pay(FEE_WALLET, ext["pay"]["micro"], 998)
+    done = check(tx=chain.logs[-1]["transactionHash"]).json()
+    assert done["paid"] is True and done["expires_at"] == st["expires_at"] + 30 * 86400
+    chain.pay(FEE_WALLET, ext["pay"]["micro"], 999)                  # the same transaction is never counted twice
+    assert client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 400}, headers=H).status_code == 422
+    stats = client.get(API + "/stats").json()
+    assert stats["paid"] == 2 and stats["paid_usdc"] == send.usdc(pay["micro"] + ext["pay"]["micro"])
+    # Unextended, it is destroyed at its end; taking it back works because it was paid for.
+    a.state.send_sweep(done["expires_at"] - 10)
+    assert info(client, fid).json()["state"] == "live"
+    assert client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H).json()["state"] == "dead"
+    # An opening date holds the keeper part; an unpaid price lapses.
+    later = int(time.time()) + 3 * 86400
+    r2 = client.post(API + "/files", json={**body, "id": os.urandom(16).hex(), "open_after": later, "keep": 7 * 86400, "max_opens": 1,
+                                           "receipt": False, "reply": False, "control": False, "forward": False}, headers=H).json()
+    assert 50_000 < r2["pay"]["micro"] < 51_000
+    a.state.send_sweep(int(time.time()) + send.PAY_WINDOW + send.PAY_GRACE + 5)
+    gone = client.post(API + f"/files/{r2['id']}/status", json=owner.sign("status", r2["id"]), headers=H).json()
+    assert gone["state"] == "dead" and gone["reason"] == "not paid"

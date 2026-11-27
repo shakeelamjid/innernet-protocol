@@ -24,7 +24,16 @@ file key = HKDF-SHA-256( link secret || keeper share || PBKDF2-SHA-256(PIN, 200 
 
 The file is cut into 4 MiB parts, each sealed with AES-256-GCM. The part number and a last-part flag are bound into each part, so parts cannot be reordered, dropped or cut short unnoticed. The file's name, type and size are sealed with the file key; the sender's name and note are sealed with a key from the link secret alone, so a receiver can see who a file is from before entering the PIN.
 
-## Rules
+## Free, and paid additions
+
+- **Free:** one file up to 10 MB, or one note up to 500 words (shown on screen, not downloaded). Link and PIN, one opening on the first device that proves both, then destroyed; destroyed after 7 days if unopened. No settings. The sender sees that it was opened, not when.
+- **Paid additions**, each priced, the whole price paid before the upload, in USDC on Base, to the operator's public receiving address (`INNERNET_SEND_PAYTO`, default the registry's fee wallet on Base). Prices in USDC: up to 100 MB 0.05, up to 1 GB 0.25; each 30 days of life 0.05 per 100 MB; each opening after the first 0.01, any number 0.25; opening on more than one device 0.05; open only after a date 0.05; read receipt with time 0.03; one sealed reply 0.05; take it back 0.05.
+- **How the payment is found:** the price carries a few random last digits (under 0.001 USDC). The service reads USDC Transfer events to the receiving address and accepts exactly that amount once. It holds no wallet and no key. A price is held 30 minutes.
+- **Extend or destroyed:** before its end the sender can buy more days (same price as life, paid the same way). Unextended, a send is destroyed at its end.
+- **Planned, not built:** storage on N machines with a half-life (half the machines drop each half-life; any 4 shards restore the file, so lifetime = half-life x log2(N / 4)), joint opening, named recipients, pay to open, request links. These wait for several keepers and an audit.
+- `INNERNET_SEND_ALL_RULES=1` allows every rule without payment, for tests.
+
+## Rules (the engine)
 
 | Rule | Values | How the keeper enforces it |
 |---|---|---|
@@ -54,7 +63,7 @@ Browser requests carry the header `X-Innernet: 1`. Signed requests are ECDSA P-2
 
 ## Today and next
 
-- **Today (free tier):** the registry is the one keeper and stores the sealed bytes: up to 100 MB, up to 7 days (`INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY`, `INNERNET_SEND=0` switches it off). One keeper means the registry is trusted to follow the rules; it still cannot open a file.
+- **Today (free burner):** the registry is the one keeper and stores the sealed bytes: up to 10 MB, up to 7 days (`INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY`, `INNERNET_SEND=0` switches it off). One keeper means the registry is trusted to follow the rules; it still cannot open a file.
 - **Next:** the keeper share is split over several independent keeper machines and the sealed pieces go to storage providers (STO-1), paid in USDC, so no single operator can break a rule. The client and the link format do not change.
 - **Later:** sealing to a known receiver's key (contacts), and passing a file on with the sender's permission.
 

@@ -908,7 +908,7 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     x402_gateway.register(app, store=store, settings=settings, P=P, terms=terms,
                           **(x402 or {}))
     from . import send
-    send.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, limiter=limiter, page=page)
+    send.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, limiter=limiter, page=page, rpc=rpc)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):

@@ -5,9 +5,11 @@
 ### INNERNET Send: the first application on the protocol (SEND-1, draft)
 
 - `/registry/send`: send one sealed file to one person. The file is sealed in the browser (AES-256-GCM, 4 MiB parts) with a key made from a link secret (in the link's `#fragment`, never sent to a server), a 6-digit PIN told by another channel, and a keeper share. No account for sender or receiver; each browser makes a device key.
-- The keeper (today the registry) holds the sealed bytes and the keeper share and releases the share only while the sender's rules allow: lifetime (1 or 7 days), fading (half-life 1 day), opens (once, 3 times, any number), passing on (first device only, or allowed), 5 wrong PINs destroy the file, and the sender can take a file back at any time. When a rule ends a file, the share and the sealed bytes are deleted.
-- The sender's page lists what was sent from that browser, shows when each file was opened, and has Take it back.
-- Free tier: up to 100 MB and 7 days, stored on the registry (`INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY`; `INNERNET_SEND=0` switches it off). Splitting the keeper share over independent machines and storing the pieces with providers is next; the client does not change.
+- Free: one file up to 10 MB or one note up to 500 words, one opening on the first device that proves link and PIN, then destroyed; destroyed after 7 days if unopened; 5 wrong PINs destroy it.
+- Paid additions, charged upfront in USDC on Base to the operator's public address: size up to 1 GB, life up to 365 days, more openings, more than one device, open only after a date, read receipt with time, one sealed reply, take it back. The payment is recognised on the chain by its exact amount; the registry holds no wallet. A send can be extended before its end; otherwise it is destroyed.
+- Both pages show the six real steps live (keys, file key, deposit, cut, seal, store; and the reverse when opening) with a progress bar and commentary that follows the chosen rules. The sender's list shows state, receipt, reply, Extend and Take it back.
+- Public counters at `/send/api/stats`: sent, sealed bytes, openings, destroyed, payments.
+- Stored on the registry (`INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY`; `INNERNET_SEND=0` switches it off). Splitting the keeper share over independent machines and storing the pieces with providers is next; the client does not change.
 - Operator: `admin send-list` and `admin send-remove <id> <reason>`. The operator can destroy a file, not read it.
 - Specification: `docs/SEND1_SEALED_FILE_SEND.md`. Tests: `tests/test_send.py` (rules, limits, and the browser sealing code run in Node).
 

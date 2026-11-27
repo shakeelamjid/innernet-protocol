@@ -40,7 +40,58 @@
     }
     return r;
   }
-  function size(n) { return n < 1024 ? n + ' B' : n < 1 << 20 ? (n / 1024).toFixed(0) + ' KB' : (n / (1 << 20)).toFixed(1) + ' MB'; }
+  function size(n) { return n < 1024 ? n + ' B' : n < 1 << 20 ? (n / 1024).toFixed(0) + ' KB' : n < 1 << 30 ? (n / (1 << 20)).toFixed(1) + ' MB' : (n / (1 << 30)).toFixed(2) + ' GB'; }
+  /* Upload sealed bytes with progress (fetch cannot report upload progress). */
+  function put(path, bytes, headers, onProgress) {
+    return new Promise(function (ok, bad) {
+      const x = new XMLHttpRequest();
+      x.open('PUT', BASE + '/send/api' + path);
+      x.setRequestHeader('X-Innernet', '1');
+      Object.keys(headers || {}).forEach(function (k) { x.setRequestHeader(k, headers[k]); });
+      x.upload.onprogress = function (e) { if (e.lengthComputable && onProgress) onProgress(e.loaded / e.total); };
+      x.onload = function () {
+        if (x.status >= 200 && x.status < 300) return ok();
+        let why = 'The server answered ' + x.status + '.';
+        try { const j = JSON.parse(x.responseText); if (j && j.detail) why = String(j.detail); } catch (e) { /* not JSON */ }
+        const err = new Error(why); err.status = x.status; bad(err);
+      };
+      x.onerror = function () { bad(new Error('The connection dropped while storing.')); };
+      x.send(bytes);
+    });
+  }
+  function usdc(text) { return String(text).replace(/(\.\d\d\d*?)0+$/, '$1'); }
+  /* The six steps, shown live. el: an <ol>; defs: [{title, text}]. Returns set(i, state, text, fraction). */
+  function steps(el, bar, defs) {
+    el.textContent = '';
+    const rows = defs.map(function (d, i) {
+      const li = document.createElement('li'); li.className = 'wait';
+      const mk = document.createElement('span'); mk.className = 'six-n'; mk.textContent = String(i + 1);
+      const body = document.createElement('div');
+      const t = document.createElement('strong'); t.textContent = d.title;
+      const tx = document.createElement('span'); tx.className = 'six-t'; tx.textContent = d.text || '';
+      body.append(t, tx);
+      let cells = null;
+      if (d.cells) { cells = document.createElement('span'); cells.className = 'cells'; for (let c = 0; c < 24; c++) cells.append(document.createElement('i')); body.append(cells); }
+      li.append(mk, body); el.append(li);
+      return { li: li, tx: tx, cells: cells, frac: 0, state: 'wait' };
+    });
+    function paint() {
+      let sum = 0;
+      rows.forEach(function (r) { sum += r.state === 'done' ? 1 : r.state === 'run' ? r.frac : 0; });
+      const pct = Math.round(100 * sum / rows.length);
+      if (bar) { bar.style.setProperty('--p', pct + '%'); bar.setAttribute('aria-valuenow', pct); bar.dataset.pct = pct + '%'; }
+    }
+    return {
+      set: function (i, state, text, frac) {
+        const r = rows[i]; r.state = state; r.li.className = state;
+        if (text != null) r.tx.textContent = text;
+        r.frac = state === 'done' ? 1 : (frac || 0);
+        if (r.cells) { const on = Math.round(24 * r.frac); Array.prototype.forEach.call(r.cells.children, function (c, k) { c.className = k < on ? 'on' : ''; }); }
+        paint();
+      },
+      burn: function () { rows.forEach(function (r) { if (r.cells) Array.prototype.forEach.call(r.cells.children, function (c, k) { c.style.transitionDelay = (k * 40) + 'ms'; c.className = 'gone'; }); }); }
+    };
+  }
   function when(ts) { return new Date(ts * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
   function left(ts) {
     const s = ts - Date.now() / 1000;
@@ -56,7 +107,7 @@
     return bits.join('. ') + '.';
   }
   window.InnernetSendStore = {
-    BASE: BASE, api: api, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
+    BASE: BASE, api: api, put: put, usdc: usdc, steps: steps, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
     sent: function () { return run('sent', 'readonly', function (s) { return s.getAll(); }); },
     remember: function (rec) { return run('sent', 'readwrite', function (s) { return s.put(rec, rec.id); }); },
     forget: function (id) { return run('sent', 'readwrite', function (s) { return s.delete(id); }); }

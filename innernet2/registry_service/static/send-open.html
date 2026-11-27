@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="robots" content="noindex">
-  <title>Open a sealed file · INNERNET</title>
+  <title>Open a sealed file or note · INNERNET</title>
   <link rel="icon" href="../../static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="../../static/registry.css">
   <script src="../../static/send-core.js" defer></script>
@@ -22,7 +22,7 @@
   <main>
     <div class="wrap narrow">
       <div class="head"><div>
-        <h1 id="title">A sealed file for you</h1>
+        <h1 id="title">Something sealed for you</h1>
         <p id="lede">Checking the link…</p>
       </div></div>
 
@@ -30,6 +30,7 @@
         <h2 id="from"></h2>
         <p id="note" hidden></p>
         <p class="note" id="rules"></p>
+        <p class="notice" id="held" hidden></p>
         <form id="form" novalidate>
           <label class="label" for="pin">PIN from the sender</label>
           <input id="pin" class="field code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
@@ -38,11 +39,24 @@
         <p class="msg" id="msg" role="status"></p>
       </section>
 
+      <section class="card frame step" id="work" hidden>
+        <h2>Opening on this device</h2>
+        <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-pct="0%"></div>
+        <ol class="six" id="six"></ol>
+      </section>
+
       <section class="card frame step" id="got" hidden>
         <h2 id="name"></h2>
         <p id="facts"></p>
-        <div class="actions"><a class="btn" id="save" download>Save the file</a></div>
+        <div class="shown" id="shown" hidden></div>
+        <div class="actions"><a class="btn btn-light" id="save" download>Save the file</a></div>
         <p class="note" id="after"></p>
+        <form id="reply" hidden novalidate>
+          <label class="label" for="reply-text">Reply to the sender (one message, sealed here; only they can read it)</label>
+          <textarea id="reply-text" class="field area" rows="3" maxlength="500"></textarea>
+          <div class="actions"><button class="btn" id="reply-go" type="submit">Send the reply</button></div>
+          <p class="msg" id="reply-msg" role="status"></p>
+        </form>
       </section>
     </div>
   </main>

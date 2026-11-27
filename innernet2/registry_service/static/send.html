@@ -3,12 +3,13 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Send a sealed file · INNERNET</title>
-  <meta name="description" content="Send one file to one person. It is sealed on your device; you decide how long it lives, how often it opens, and you can take it back.">
+  <title>Send a sealed file or note · INNERNET</title>
+  <meta name="description" content="Send one file or one note to one person. It is sealed on your device, opens once with your link and PIN, and is then destroyed. No account.">
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/send-core.js" defer></script>
   <script src="static/send-store.js" defer></script>
+  <script src="static/wallet.js" defer></script>
   <script src="static/send.js" defer></script>
 </head>
 <body>
@@ -22,39 +23,64 @@
   <main>
     <div class="wrap narrow">
       <div class="head"><div>
-        <h1>Send a sealed file</h1>
-        <p>The file is sealed on this device before it leaves. Only the person with your link and your PIN can open it, and you decide how long it lives, how often it opens, and whether you take it back. No account.</p>
+        <h1>Send it sealed</h1>
+        <p>A file or a note, sealed on this device before it leaves. It opens once, for the person with your link and your PIN, and is then destroyed. No account.</p>
       </div></div>
 
       <p class="notice" id="off" hidden></p>
 
       <form id="form" novalidate>
         <section class="card frame step">
-          <h2>The file</h2>
-          <label class="label" for="file">File</label>
-          <input id="file" class="field file-field" type="file">
-          <p class="msg" id="file-msg"></p>
-          <label class="label" for="from">Your name, shown to the receiver</label>
+          <div class="seg" role="radiogroup" aria-label="What to send">
+            <label><input type="radio" name="kind" value="file" checked><span>A file</span></label>
+            <label><input type="radio" name="kind" value="note"><span>A note</span></label>
+          </div>
+          <div id="file-box">
+            <label class="drop" id="drop" for="file">
+              <strong id="drop-title">Choose a file, or drop it here</strong>
+              <span id="file-msg"></span>
+              <input id="file" type="file">
+            </label>
+          </div>
+          <div id="note-box" hidden>
+            <label class="label" for="text">Your note. It is shown on the receiver's screen, once.</label>
+            <textarea id="text" class="field area" rows="6" autocomplete="off" spellcheck="true"></textarea>
+            <p class="msg" id="text-msg"></p>
+          </div>
+          <label class="label" for="from">Your name, shown before opening</label>
           <input id="from" class="field" maxlength="60" autocomplete="name">
-          <label class="label" for="note">Note (optional)</label>
+          <label class="label" for="note">A line shown before opening (optional)</label>
           <input id="note" class="field" maxlength="200" autocomplete="off">
         </section>
 
         <section class="card frame step">
-          <h2>The rules</h2>
-          <div class="presets" role="group" aria-label="Ready-made rules">
-            <button class="btn btn-sm" type="button" data-preset="private" aria-pressed="true">Private</button>
-            <button class="btn btn-sm" type="button" data-preset="working" aria-pressed="false">Working copy</button>
-            <button class="btn btn-sm" type="button" data-preset="fading" aria-pressed="false">Fading</button>
+          <h2>Free, as it is</h2>
+          <ul class="plain">
+            <li>It opens <strong>once</strong>, on the first device that has both your link and your PIN.</li>
+            <li>Right after that opening it is destroyed.</li>
+            <li>If nobody opens it within <span id="keep-days">7 days</span>, it is destroyed.</li>
+          </ul>
+          <details class="more" id="more">
+            <summary>Add to it <span class="dim" id="more-hint">each addition has a price, paid once, before sending</span></summary>
+            <p class="notice" id="paid-off" hidden>Paid additions are not switched on on this registry yet. The free send works.</p>
+            <div class="opts" id="opts">
+              <label class="opt"><span>Keep it for <b class="price" data-p="life_30d_100mb" data-s=" per 30 days per 100 MB"></b></span>
+                <span class="inline"><input id="o-days" class="field num" type="number" min="1" max="365" value="7" inputmode="numeric"> days</span></label>
+              <div class="opt"><span>Openings <b class="price" data-p="opening" data-s=" each after the first"></b></span>
+                <span class="inline"><input id="o-opens" class="field num" type="number" min="1" max="1000" value="1" inputmode="numeric">
+                  <label class="check"><input id="o-any" type="checkbox"> any number <b class="price" data-p="unlimited"></b></label></span></div>
+              <label class="opt"><span>Open only after <b class="price" data-p="open_after"></b></span>
+                <input id="o-after" class="field" type="datetime-local"></label>
+              <label class="check"><input id="o-forward" type="checkbox"> It may be opened on more than one device <b class="price" data-p="forward"></b></label>
+              <label class="check"><input id="o-receipt" type="checkbox"> Read receipt: tell me when it was opened <b class="price" data-p="receipt"></b></label>
+              <label class="check"><input id="o-reply" type="checkbox"> The receiver can send one sealed reply <b class="price" data-p="reply"></b></label>
+              <label class="check"><input id="o-control" type="checkbox"> I can take it back before it is opened <b class="price" data-p="control"></b></label>
+            </div>
+          </details>
+          <div class="meter" id="meter" aria-live="polite">
+            <ul id="meter-lines"></ul>
+            <p class="meter-total"><span>Total, paid before sending</span><strong id="meter-total">Free</strong></p>
           </div>
-          <div class="fields">
-            <label>Keep it for<select id="keep" class="field"></select></label>
-            <label>Can be opened<select id="opens" class="field">
-              <option value="1">Once</option><option value="3">3 times</option><option value="0">Any number of times</option></select></label>
-            <label>Passing it on<select id="forward" class="field">
-              <option value="0">Not allowed: first device only</option><option value="1">Allowed</option></select></label>
-          </div>
-          <p class="note" id="rules-note"></p>
         </section>
 
         <section class="card frame step">
@@ -62,9 +88,31 @@
             <button class="btn btn-light" id="go" type="submit">Seal and send</button>
           </div>
           <p class="msg" id="msg" role="status"></p>
-          <p class="note">These rules control what the network releases. Once someone has opened a file, they can keep what they saw.</p>
+          <p class="note">These rules control what the network releases. Once someone has opened it, they can keep what they saw.</p>
         </section>
       </form>
+
+      <section class="card frame step" id="work" hidden>
+        <h2 id="work-title">Sealing on this device</h2>
+        <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-pct="0%"></div>
+        <ol class="six" id="six"></ol>
+
+        <div class="paybox" id="pay" hidden>
+          <h3>Pay <span id="pay-amount"></span> USDC on <span id="pay-net"></span></h3>
+          <p>Send exactly this amount. The last digits identify your payment, so it is found without an account.</p>
+          <label class="label">Amount</label>
+          <div class="copyable"><code id="pay-exact" class="big"></code><button class="btn btn-sm" type="button" data-copy="pay-exact">Copy</button></div>
+          <label class="label">To this address (USDC on <span id="pay-net2"></span> only)</label>
+          <div class="copyable"><code id="pay-to"></code><button class="btn btn-sm" type="button" data-copy="pay-to">Copy</button></div>
+          <div class="actions">
+            <button class="btn btn-light" id="pay-wallet" type="button">Pay with the wallet in this browser</button>
+            <button class="btn" id="pay-cancel" type="button">Cancel</button>
+          </div>
+          <p class="msg" id="pay-msg" role="status"></p>
+          <p class="note">Keep this page open. Nothing is uploaded until the payment is seen on the chain. The price is held until <span id="pay-by"></span>.</p>
+        </div>
+        <p class="msg" id="work-msg" role="status"></p>
+      </section>
 
       <section class="card frame step" id="done" hidden>
         <h2>Sealed and stored</h2>
@@ -73,14 +121,30 @@
         <div class="copyable"><code id="link"></code><button class="btn btn-sm" type="button" data-copy="link">Copy</button></div>
         <label class="label" for="pin">PIN</label>
         <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
-        <p class="note" id="done-rules"></p>
-        <div class="actions"><button class="btn" id="again" type="button">Send another file</button></div>
+        <div class="stored" id="stored">
+          <h3>What you set</h3>
+          <ul class="plain" id="set-lines"></ul>
+          <h3>The key is in three parts. All three are needed.</h3>
+          <ul class="keys">
+            <li><strong>Link secret</strong><span>inside your link, after the # sign. It never reached our server.</span></li>
+            <li><strong>PIN</strong><span>only you know it, until you tell the receiver.</span></li>
+            <li><strong>Keeper part</strong><span>with the keeper, which holds the sealed parts and cannot read them. Released only as your rules allow, then destroyed.</span></li>
+          </ul>
+        </div>
+        <div class="actions"><button class="btn" id="again" type="button">Send another</button></div>
       </section>
 
       <section class="card frame step" id="sent-card" hidden>
-        <h2>Files you sent from this browser</h2>
-        <p class="note">Kept only in this browser. Take a file back at any time: it is destroyed everywhere, and the link and PIN stop working.</p>
+        <h2>What you sent from this browser</h2>
+        <p class="note">This list is kept only in this browser.</p>
         <ul class="sent" id="sent"></ul>
+      </section>
+
+      <section class="tally" id="tally" hidden aria-label="INNERNET Send so far">
+        <div><strong id="t-sent">0</strong><span>sealed and sent</span></div>
+        <div><strong id="t-bytes">0</strong><span>sealed data carried</span></div>
+        <div><strong id="t-opened">0</strong><span>openings</span></div>
+        <div><strong id="t-destroyed">0</strong><span>destroyed on schedule</span></div>
       </section>
     </div>
   </main>
