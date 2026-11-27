@@ -114,7 +114,7 @@ Registry
   pause                stop taking new files (what you hold is still served and paid)
   resume               take new files again, or cancel leaving
   leave                clients move their files away, then you can stop
-  reinstate            after a suspension or a long absence: start a 24 h trial to be listed again
+  reinstate            after a suspension or a long absence: be checked and listed again
   apply [--dry-run]    send your signed provider form to the registry
   status [--watch]     one screen: listing, service, online, address, hours, uptime, earnings
   login                get a one-time link to the web dashboard (add a passkey there)
@@ -543,7 +543,7 @@ func renderStatus(c *Config, v statusView) {
 	case "leaving":
 		fmt.Println(dim("  Changed your mind: innernet-provider resume"))
 	case "suspended", "gone":
-		fmt.Println(dim("  Back to normal: innernet-provider reinstate (24 h trial)"))
+		fmt.Println(dim("  Back to normal: innernet-provider reinstate"))
 	}
 	fmt.Println(dim("  Usage, earnings and payments in detail: https://innernetcorp.com/dashboard"))
 	fmt.Println()

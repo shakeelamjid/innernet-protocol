@@ -2,6 +2,15 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### Machines come and go freely; storage and relay first
+
+- No machine is suspended or removed for being offline. The rule that suspended a listed machine below 95% reachability over 7 days is gone, and so is the 24-hour trial after it. The registry still records each check and publishes the share answered, as information for clients.
+- A new machine is listed by itself after the checking period once it has answered one check and has a valid payout contract. A machine is suspended only when its payout contract is missing or invalid, and is listed again by itself when that is fixed.
+- A machine unheard for 30 days (was 7) is marked `gone`; it is listed again by itself the moment it reports. `reinstate` no longer starts a trial.
+- Machines suspended under the old reachability rule are listed again automatically on the next check round.
+- Setup offers Storage and Relay, with VPN exit as an option of Relay (it needs Relay switched on). Compute (CPU and GPU) is no longer offered in setup; machines that already offer it keep working until their owner changes their offer. The x402 gateway and MCP server are unchanged.
+- Provider help text updated (`reinstate`); it ships with the next provider release. `provider/LATEST` stays `provider-v0.7.1`, so machines do not update for this.
+
 ### x402: listed and paid for real
 
 - First real payment through the gateway: 0.001 USDC on Base from an x402 buyer wallet to a provider's payout contract, collected after the job ran (transaction 0x9b823571b9853fcd7d8e8fe91fd3aa5ab02c97d54c49dba06e6801da753769ce).

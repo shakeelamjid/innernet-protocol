@@ -1,7 +1,8 @@
-"""Reachability probes and automatic suspension (IRM-1 section 3.4, first stage).
+"""Reachability probes (IRM-1 section 3.4).
 
-Until the provider daemon ships, the probe is a plain TCP connect to each endpoint.
-Storage challenges, relay tests and compute canaries are added with the daemon.
+The registry tries each machine about once a round and records whether it answered. The record is
+information for clients (shown as the share of checks answered); it is never held against a machine:
+no machine is suspended or removed for being offline. A machine can come and go as its owner likes.
 """
 from __future__ import annotations
 
@@ -15,8 +16,6 @@ from . import presence
 from .store import Store
 
 log = logging.getLogger("innernet.registry.probe")
-SUSPEND_BELOW = 0.95        # 7-day reachability (spec: unreachable > 5% of the time)
-MIN_PROBES = 24             # do not judge on too little data
 WEEK = 7 * 86400
 
 Connect = Callable[[str, int, float], float]
@@ -67,11 +66,5 @@ def probe_once(store: Store, connect: Connect = tcp_connect, now: int | None = N
         store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)",
                 (p["id"], now, int(ok), int(latency) if ok else None))
         store.x("UPDATE providers SET checked_at=? WHERE id=?", (now, p["id"]))
-        if p["state"] == "listed" and not p.get("admin_lock"):
-            ratio, n = uptime(store, p["id"], since=now - WEEK)
-            if n >= MIN_PROBES and ratio is not None and ratio < SUSPEND_BELOW:
-                reason = f"reachable {ratio:.1%} of its promised hours over 7 days (needs 95%); reinstate to start a 24 h trial"
-                store.x("UPDATE providers SET state='suspended', reason=?, updated_at=? WHERE id=?", (reason, now, p["id"]))
-                store.audit(p["id"], "suspended", reason)
     presence.advance_states(store, uptime, now, payout_ok)
     store.x("DELETE FROM probes WHERE ts<?", (now - 31 * 86400,))

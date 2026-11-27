@@ -3,7 +3,7 @@
 The registry is one small Python service (`innernet2.registry_service`). It:
 
 - accepts signed provider forms from `innernet-provider apply` (`POST /registry/v1/apply`);
-- checks each provider's reachability every 5 minutes and suspends listed providers that drop below 95% over 7 days;
+- checks each provider's reachability every 5 minutes and publishes the share of checks it answered; no provider is suspended or removed for being offline;
 - reads USDC payments to each provider's payout contract straight from the chain (Base Sepolia first);
 - publishes the signed REG-1 registry document (`GET /registry/v1/registry.json`) that clients verify against the pinned registry key;
 - serves the provider dashboard at `/registry/dashboard`, with passkey login, plus a public page per provider at `/registry/providers/<id>`.
@@ -38,7 +38,7 @@ Browser API calls need the `X-Innernet: 1` header and a same-origin `Origin`; se
 | State | Meaning | How it changes |
 |---|---|---|
 | `testing` | Applied; reachability is being checked | Operator approves after review (`admin approve`). Automatic approval follows when the provider service and storage challenges ship |
-| `listed` | In the signed registry document | Automatically `suspended` below 95% reachability over 7 days (after at least 24 checks) |
+| `listed` | In the signed registry document | Stays listed while online or offline. `suspended` only when its payout contract is missing or invalid. After 30 days unheard it is marked `gone` and is listed again by itself when it reports |
 | `suspended` | Hidden from clients | Operator approves again once fixed |
 | `removed` | Permanently out | A new application needs a new provider key |
 

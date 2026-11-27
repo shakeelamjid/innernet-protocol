@@ -6,13 +6,16 @@ provider's signed /sto/v1/info from it, keeps the latest record and gives it to 
 unchanged. Clients verify the signature, so the registry cannot invent an address.
 
 States (providers.state):
-  testing    applied or reinstated; checked before listing
+  testing    applied; listed by itself once it has answered a check and its payout contract is valid
   listed     in the signed registry document
   paused     by the provider: no new placements, keeps serving what it holds
   leaving    by the provider: clients move its shards away, then it stops
-  suspended  by the registry: reachable less than 95% of its promised hours
-  gone       nothing heard for 7 days
+  suspended  its payout contract is missing or invalid (never for being offline)
+  gone       nothing heard for 30 days; listed again by itself when it reports
   removed    by the operator only
+
+Being offline is never a reason to suspend or remove a machine. Clients see who is online right now
+and the share of checks each machine answered, and choose with that.
 """
 from __future__ import annotations
 
@@ -28,8 +31,7 @@ from .. import irm_registry as reg
 from .store import Store
 
 ONLINE_WINDOW = 180          # seconds since the last presence record to count as online
-GONE_AFTER = 7 * 86400
-TRIAL = 86400                # a reinstated provider must pass checks this long
+GONE_AFTER = 30 * 86400
 RESPONSE_DOMAIN = b"INNERnet/STO-1/response\x00"
 
 SCHEMA = """
@@ -144,9 +146,10 @@ def record_presence(store: Store, record: dict, source_ip: str, check=info_check
                    (pid, json.dumps(record), ep["host"], ep["port"], p["path"], p["seq"], now, v_host, v_port, v_at))
         db.execute("INSERT INTO presence_log(provider, ts, stats) VALUES (?,?,?)", (pid, now, json.dumps(p["stats"])))
         db.execute("UPDATE providers SET last_seen=? WHERE id=?", (now, pid))
-        if prov["state"] == "gone":       # back after a long absence: start a trial
-            db.execute("UPDATE providers SET state='testing', reason=?, trial_since=?, updated_at=? WHERE id=?",
-                       ("back online: trial before listing again", now, now, pid))
+        if prov["state"] == "gone":       # back after a long absence: listed again, no waiting
+            back = "listed" if prov["listed_at"] else "testing"
+            db.execute("UPDATE providers SET state=?, reason='', trial_since=NULL, updated_at=? WHERE id=?",
+                       (back, now, pid))
     if last is None or (last["host"], last["port"]) != (ep["host"], ep["port"]):
         store.audit(pid, "address", f"{ep['host']}:{ep['port']} via {p['path']}" + ("" if verified else " (not reachable yet)"),
                     source_ip)
@@ -195,11 +198,11 @@ def apply_intent(store: Store, pid: str, action: str, *, via: str, ip: str | Non
             raise reg.BulkError(f"nothing to resume while {state}")
         new, resume_to, reason = (resume_to or "testing"), None, ""
         if new == "suspended":
-            new, trial, reason = "testing", now, "trial: needs 24 h of passing checks"
+            new, trial, reason = "testing", None, "checked again before listing"
     elif action == "reinstate":
         if state not in ("suspended", "gone"):
             raise reg.BulkError(f"nothing to reinstate while {state}")
-        new, trial, reason = "testing", now, "trial: needs 24 h of passing checks"
+        new, trial, reason = "testing", None, "checked again before listing"
     else:
         raise reg.BulkError("unknown action")
     store.x("UPDATE providers SET state=?, resume_to=?, reason=?, trial_since=?, updated_at=? WHERE id=?",
@@ -232,11 +235,16 @@ def _payout_problem(p: dict, payout_ok) -> tuple[bool, str]:
 
 
 def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambda entry: (True, "")) -> None:
-    """Every state change is automatic, unless an admin set the state (admin_lock):
-    testing -> listed after the checking period at 95%+ reachability (and a valid payout contract);
-    listed -> suspended below 95% over 7 days (probe_once); suspended -> testing (24 h trial) once the
-    last 24 h are back at 95%+; trial -> listed; long silence -> gone."""
+    """Every state change is automatic, unless an admin set the state (admin_lock).
+    testing -> listed once the machine has answered at least one check and its payout contract is valid
+    (a new machine waits out the checking period first); listed -> suspended only for a bad payout
+    contract; 30 days of silence -> gone, and back to listed by itself when it reports again.
+    Being offline is never held against a machine."""
     now = int(time.time()) if now is None else now
+
+    def answered(pid: str, since: int) -> bool:
+        return bool(store.one("SELECT 1 AS x FROM probes WHERE provider=? AND ok=1 AND ts>=? LIMIT 1", (pid, since)))
+
     for p in store.providers():
         if p.get("admin_lock"):
             continue
@@ -244,9 +252,9 @@ def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambd
         if p["state"] in ("listed", "suspended", "paused") and now - seen > GONE_AFTER:
             good = store.one("SELECT MAX(ts) AS t FROM probes WHERE provider=? AND ok=1", (p["id"],))["t"] or 0
             if now - max(good, p.get("last_seen") or 0) > GONE_AFTER:
-                store.x("UPDATE providers SET state='gone', reason=?, updated_at=? WHERE id=?",
-                        ("nothing heard for 7 days; reinstate when it is back", now, p["id"]))
-                store.audit(p["id"], "gone", "nothing heard for 7 days")
+                why = "nothing heard for 30 days; listed again by itself when it is back"
+                store.x("UPDATE providers SET state='gone', reason=?, updated_at=? WHERE id=?", (why, now, p["id"]))
+                store.audit(p["id"], "gone", "nothing heard for 30 days")
                 continue
         # Every listed machine must be paid through a split contract from the factory. One that is not (or no
         # longer) is suspended until its owner sets a valid payout contract.
@@ -257,42 +265,35 @@ def advance_states(store: Store, uptime, now: int | None = None, payout_ok=lambd
                         (f"payout contract: {why}", now, p["id"]))
                 store.audit(p["id"], "suspended", f"payout contract: {why}")
             continue
-        # New machine: listed by itself after the checking period, if it was reachable and its payout is valid.
-        if p["state"] == "testing" and not p.get("trial_since") and not p["listed_at"]:
-            wait = auto_list_after()
-            if now - p["applied_at"] >= wait:
-                ratio, n = uptime(store, p["id"], since=p["applied_at"])
-                if n >= (12 if wait >= 3600 else 1) and ratio is not None and ratio >= 0.95:
-                    ok, why = True, ""
-                    for network, address in p["entry"].get("payto", {}).items():
-                        ok, why = payout_ok({"network": network, "payout": address})
-                        if not ok or why:
-                            break
-                    if ok and not why:
-                        store.x("UPDATE providers SET state='listed', reason='', listed_at=?, updated_at=? WHERE id=?",
-                                (now, now, p["id"]))
-                        store.audit(p["id"], "listed", f"checks passed automatically ({ratio:.0%} reachable)")
-                    elif not ok:
-                        store.x("UPDATE providers SET reason=?, updated_at=? WHERE id=?",
-                                (f"payout contract: {why}", now, p["id"]))
-            continue
-        # Suspended for reachability: back on trial once the last 24 hours are good again.
+        # Suspended for its payout contract and now valid, or suspended under the old reachability rule
+        # (that rule is gone): listed again by itself.
         if p["state"] == "suspended":
-            ratio, n = uptime(store, p["id"], since=now - 86400)
-            if n >= 12 and ratio is not None and ratio >= 0.95 and not _payout_problem(p, payout_ok)[0]:
-                store.x("UPDATE providers SET state='testing', reason=?, trial_since=?, updated_at=? WHERE id=?",
-                        ("reachable again: 24 h trial before listing", now, now, p["id"]))
-                store.audit(p["id"], "trial", f"reachable again ({ratio:.0%} in 24 h)")
+            reason = str(p["reason"] or "")
+            if reason.startswith(("reachable ", "payout contract:")) or not reason:
+                bad, why = _payout_problem(p, payout_ok)
+                if not bad and not why:
+                    back = "listed" if p["listed_at"] else "testing"
+                    store.x("UPDATE providers SET state=?, reason='', trial_since=NULL, updated_at=? WHERE id=?",
+                            (back, now, p["id"]))
+                    store.audit(p["id"], back, "payout contract valid" if reason.startswith("payout") else
+                                "no longer suspended for being offline")
             continue
-        # A reinstated provider that was listed before is listed again after a clean trial.
-        trial = p.get("trial_since")
-        if p["state"] == "testing" and trial and p["listed_at"] and now - trial >= TRIAL:
-            ratio, n = uptime(store, p["id"], since=trial)
-            bad, why = _payout_problem(p, payout_ok)
-            if n >= 12 and ratio is not None and ratio >= 0.95 and not bad and not why:
-                store.x("UPDATE providers SET state='listed', reason='', trial_since=NULL, updated_at=? WHERE id=?",
-                        (now, p["id"]))
-                store.audit(p["id"], "listed", f"trial passed ({ratio:.0%})")
+        if p["state"] != "testing":
+            continue
+        # A machine that was listed before (reinstated, or on an old trial) is listed again at once; a new
+        # one after the checking period. Both need one answered check and a valid payout contract.
+        since = p["applied_at"]
+        if not p["listed_at"] and now - p["applied_at"] < auto_list_after():
+            continue
+        if not answered(p["id"], since):
+            continue
+        bad, why = _payout_problem(p, payout_ok)
+        if not bad and not why:
+            store.x("UPDATE providers SET state='listed', reason='', trial_since=NULL, listed_at=COALESCE(listed_at, ?), "
+                    "updated_at=? WHERE id=?", (now, now, p["id"]))
+            store.audit(p["id"], "listed", "checks passed automatically")
+        elif bad:
+            store.x("UPDATE providers SET reason=?, updated_at=? WHERE id=?", (f"payout contract: {why}", now, p["id"]))
 
 
 # ---- usage and market ---------------------------------------------------------------

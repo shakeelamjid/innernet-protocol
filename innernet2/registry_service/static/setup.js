@@ -28,10 +28,12 @@
   }
 
   function say(id, t, err) { $(id).textContent = t; $(id).classList.toggle('error', !!err); }
-  let machineGiB = 0;
+  let machineGiB = 0, vpnBlocked = false;
   function sync() {
     $('sched-fields').hidden = !$('sched-custom').checked;
     $('sched-storage').hidden = !($('sched-custom').checked && $('sto-on').checked);
+    if (!$('rly-on').checked) $('vpn-on').checked = false;      // VPN exit is an option of Relay
+    $('vpn-on').disabled = vpnBlocked || !$('rly-on').checked;
     document.querySelectorAll('[data-for]').forEach(function (el) { el.hidden = !$(el.getAttribute('data-for')).checked; });
     $('bw-fields').hidden = !($('rly-on').checked || $('vpn-on').checked);
     const compute = $('cmp-on').checked || (!$('gpu-block').hidden && $('gpu-on').checked);
@@ -68,7 +70,7 @@
       : unreachable ? 'VPN exit is off until clients can reach this machine (see Your machine above).' : '';
     $('vpn-why').textContent = why; $('vpn-why').hidden = !why;
     if (why) $('vpn-on').checked = false;
-    $('vpn-on').disabled = !!why;
+    vpnBlocked = !!why; $('vpn-on').disabled = vpnBlocked || !$('rly-on').checked;
     $('send').disabled = unreachable;
     if (unreachable) say('send-msg', 'Make this machine reachable first (see Your machine above).', true);
     else if ($('send-msg').textContent.indexOf('reachable first') >= 0) say('send-msg', '');
@@ -257,7 +259,7 @@
     $('vpn-consent').checked = !!(draft && draft.vpn_consent);
     $('vpn-ports').value = (draft && draft.vpn_ports) || 'web';
     $('rly-gib').value = draft && draft.relay_gib ? draft.relay_gib : 500;
-    $('cmp-on').checked = !!(draft && draft.compute);
+    $('cmp-on').checked = false;   // new setups offer storage and relay; compute is not offered for now
     $('cmp-cpus').value = draft ? draft.cpus : Math.max(1, Math.min(4, (det.cpus || 2) - 1));
     $('cmp-mem').value = draft ? draft.memory_mib : 1024;
     const prices = Object.assign({}, d.defaults.prices, (draft && draft.prices) || {});
@@ -268,7 +270,7 @@
       $('gpu-name').textContent = gpuLine(g);
       $('gpu-count').max = same;
       $('gpu-count').value = draft && draft.gpu ? draft.gpus : same;
-      $('gpu-on').checked = !!(draft && draft.gpu);
+      $('gpu-on').checked = false;
       $('gpu-price').value = prices['GPU-1'];
       const m = d.market && d.market['GPU-1'];
       const mm = m && m.by_model && m.by_model[g.model];

@@ -77,7 +77,7 @@
     $('n-machines').textContent = '(' + s.machines + ')';
     $('n-owners').textContent = '(' + s.owners + ')';
     $('n-setups').textContent = s.setups ? '(' + s.setups + ')' : '';
-    $('waiting-note').textContent = 'Machines are listed automatically after ' + s.auto_list_hours + ' h of checks at 95% reachability with a valid payout contract. Approve to list one now.';
+    $('waiting-note').textContent = 'Machines are listed automatically after ' + s.auto_list_hours + ' h, once they have answered a check and have a valid payout contract. No machine is suspended for being offline. Approve to list one now.';
     const tb = $('waiting'); tb.textContent = '';
     if (!s.waiting.length) { const tr = el('tr'); td(tr, 'Nobody is waiting.', 'dim').colSpan = 8; tb.append(tr); }
     s.waiting.forEach(function (r) {

@@ -68,7 +68,7 @@
               <label>USDC per GiB per day<input id="sto-price" class="field" inputmode="decimal"></label>
             </div>
             <div class="group">
-              <h3>Bandwidth</h3>
+              <h3>Relay</h3>
               <p class="note">Your internet connection, by the GiB. Check that your internet plan allows it.</p>
               <div class="fields" id="bw-fields" hidden>
                 <label>GiB per month, relay and VPN together<input id="rly-gib" class="field" type="number" min="1"></label>
@@ -78,14 +78,14 @@
                 <label>USDC per GiB<input id="rly-price" class="field" inputmode="decimal"></label>
               </div>
               <p class="notice" id="vpn-why" hidden></p>
-              <label class="toggle"><input type="checkbox" id="vpn-on"> <span><strong>VPN exit</strong> Clients' traffic reaches the internet from your connection, and is seen as coming from your address.</span></label>
+              <label class="toggle"><input type="checkbox" id="vpn-on"> <span><strong>VPN exit (optional, needs Relay)</strong> Clients' traffic reaches the internet from your connection, and is seen as coming from your address.</span></label>
               <div class="fields" data-for="vpn-on">
                 <label>USDC per GiB<input id="vpn-price" class="field" inputmode="decimal"></label>
                 <label>Ports<select id="vpn-ports" class="field"><option value="web">Web only (80, 443)</option><option value="all">All ports except 25</option></select></label>
               </div>
               <label class="toggle" data-for="vpn-on"><input type="checkbox" id="vpn-consent"> <span><strong>I confirm I am allowed to offer internet exit where I operate, and I accept the <a href="terms#provider" target="_blank" rel="noopener">abuse policy</a>.</strong> Clients can never reach your own network or router through the exit.</span></label>
             </div>
-            <div class="group">
+            <div class="group" id="compute-group" hidden>
               <h3>Compute</h3>
               <p class="note">Clients bring their own programs and models; you rent out the machine's power, by the hour.</p>
               <label class="toggle"><input type="checkbox" id="cmp-on"> <span><strong>CPU</strong> Clients' jobs run sealed off from your files and network (WebAssembly).</span></label>

@@ -81,7 +81,7 @@ On Linux a normal user gets a user unit plus lingering (so it keeps running afte
 | `pause` | No new files; what you hold is still served and paid |
 | `resume` | Take new files again, or cancel leaving |
 | `leave` | Clients move their files away; then the machine can stop |
-| `reinstate` | After a suspension (below 95% of promised hours) or 7 days unheard: a 24 hour trial, then listed again |
+| `reinstate` | After a suspension (payout contract) or 30 days unheard: checked and listed again. Being offline never suspends a machine |
 
 The same buttons are on the dashboard. Only the operator can reinstate a provider removed for abuse.
 

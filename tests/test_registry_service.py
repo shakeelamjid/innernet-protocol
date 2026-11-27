@@ -328,7 +328,7 @@ def test_payments_earnings_and_splits(env):
     assert d["earnings"]["30d"]["net"] == chain.usdc(e["net"])
 
 
-def test_probe_suspends_unreachable_provider(env, tmp_path):
+def test_an_unreachable_machine_is_never_suspended(env, tmp_path):
     client, store, fake, _ = env
     key = Ed25519PrivateKey.generate()
     pid = client.post(P + "/v1/apply", json=provider_record(key)).json()["provider"]
@@ -342,10 +342,16 @@ def test_probe_suspends_unreachable_provider(env, tmp_path):
 
     def down(host, port, timeout):
         raise OSError("refused")
-    for i in range(probe.MIN_PROBES):
+    for i in range(48):
         probe.probe_once(store, down, now=now - i)
     p = store.provider(pid)
-    assert p["state"] == "suspended" and "95%" in p["reason"]
+    assert p["state"] == "listed" and not p["reason"]          # offline for every check: still listed
+    assert probe.uptime(store, pid, since=now - 3600) == (0.0, 48)   # the record is kept, as information
+    # A machine suspended under the old 95% rule is listed again by itself.
+    store.x("UPDATE providers SET state='suspended', reason='reachable 40.0% of its promised hours over 7 days (needs 95%)' "
+            "WHERE id=?", (pid,))
+    probe.probe_once(store, down, now=now + 1)
+    assert store.provider(pid)["state"] == "listed"
 
 
 def test_signed_registry_document(env, tmp_path):
@@ -1023,19 +1029,24 @@ def test_go_serve_presence_intents_status_and_states(tmp_path):
         store.x("UPDATE providers SET state='listed', listed_at=? WHERE id=?", (int(time.time()), pid))
         m = api.get("/market").json()["services"]["STO-1"]
         assert m["providers"] == 1 and m["median"] == entry["prices"]["STO-1"]["amount"].rstrip("0").rstrip(".")
-        # time passes: nothing heard for 8 days -> gone; reinstate -> trial; a clean trial lists it again
+        # time passes: 8 days of silence change nothing; 31 days -> gone; reinstate and one answered
+        # check list it again, with no trial
         procs[0].kill()
         procs[0].wait()
-        later = int(time.time()) + 8 * 86400
-        store.x("UPDATE providers SET last_seen=?, checked_at=? WHERE id=?", (later - 8 * 86400, later - 8 * 86400, pid))
+        t0 = int(time.time())
         store.x("DELETE FROM probes WHERE provider=?", (pid,))
+        store.x("UPDATE providers SET last_seen=?, checked_at=? WHERE id=?", (t0, t0, pid))
+        presence.advance_states(store, probe_mod.uptime, t0 + 8 * 86400)
+        assert store.provider(pid)["state"] == "listed"
+        later = t0 + 31 * 86400
         presence.advance_states(store, probe_mod.uptime, later)
         assert store.provider(pid)["state"] == "gone"
         assert run("reinstate").returncode == 0 and store.provider(pid)["state"] == "testing"
-        trial = store.provider(pid)["trial_since"]
-        for i in range(24):
-            store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)", (pid, trial + 3600 * i + 1, 1, 5))
-        presence.advance_states(store, probe_mod.uptime, trial + 86400 + 10)
+        assert store.provider(pid)["trial_since"] is None
+        presence.advance_states(store, probe_mod.uptime, later)
+        assert store.provider(pid)["state"] == "testing"                 # has not answered a check yet
+        store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,?,?)", (pid, later, 1, 5))
+        presence.advance_states(store, probe_mod.uptime, later + 1)
         assert store.provider(pid)["state"] == "listed"
         audit = [r["event"] for r in store.q("SELECT event FROM audit WHERE provider=? ORDER BY id", (pid,))]
         for ev in ("pause", "resume", "leave", "gone", "reinstate", "listed"):
@@ -1550,10 +1561,16 @@ def test_states_change_automatically_unless_an_admin_holds_them(env, monkeypatch
     assert store.provider(pid)["state"] == "testing"                            # waits for the payout check
     presence.advance_states(store, probe_mod.uptime, now)
     assert store.provider(pid)["state"] == "listed"                             # listed by itself
-    # Suspended for bad reachability, then reachable again: back on trial by itself.
-    store.x("UPDATE providers SET state='suspended' WHERE id=?", (pid,))
+    # Offline for a whole week of checks: nothing happens to it.
+    store.x("DELETE FROM probes WHERE provider=?", (pid,))
+    for i in range(200):
+        store.x("INSERT INTO probes(provider, ts, ok, latency_ms) VALUES (?,?,0,NULL)", (pid, now - i * 300))
     presence.advance_states(store, probe_mod.uptime, now)
-    assert store.provider(pid)["state"] == "testing" and store.provider(pid)["trial_since"] == now
+    assert store.provider(pid)["state"] == "listed"
+    # Suspended under the old reachability rule: listed again by itself, with no trial.
+    store.x("UPDATE providers SET state='suspended', reason='reachable 80.0% of its promised hours' WHERE id=?", (pid,))
+    presence.advance_states(store, probe_mod.uptime, now)
+    assert store.provider(pid)["state"] == "listed" and store.provider(pid)["trial_since"] is None
     # An admin hold stops the automation until the admin gives it back.
     link = new_login_link(store, ORIGIN, P)
     admin = SoftAuthenticator()
@@ -1648,7 +1665,7 @@ def test_every_listed_machine_needs_a_payout_contract(env):
     presence.advance_states(store, probe_mod.uptime, now, payout_ok=lambda e: (False, "still a wallet"))
     assert store.provider(pid)["state"] == "suspended"
     presence.advance_states(store, probe_mod.uptime, now)
-    assert store.provider(pid)["state"] == "testing"                   # fixed: back on trial
+    assert store.provider(pid)["state"] == "listed"                    # fixed: listed again, no trial
 
 
 def test_config_offers_phone_wallets_when_configured(tmp_path):
