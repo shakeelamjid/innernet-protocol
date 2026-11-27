@@ -2,6 +2,12 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### x402: listed and paid for real
+
+- First real payment through the gateway: 0.001 USDC on Base from an x402 buyer wallet to a provider's payout contract, collected after the job ran (transaction 0x9b823571b9853fcd7d8e8fe91fd3aa5ab02c97d54c49dba06e6801da753769ce).
+- `/x402/cpu` answers bare probes (GET, or POST without a job) with the x402 price for a 10-second job instead of an error, so directories such as x402scan and crawlers see the payment terms.
+- `tools/x402_pay.py`: pay for one job from the terminal like an agent does. The key stays on the computer (wallet JSON, encrypted keystore, a project's .env, or typed in hidden); only the EIP-3009 signature is sent.
+
 ### x402: pay only after success, MCP server, try it with your wallet
 
 - The gateway now verifies the payment, runs the job, and asks the facilitator to settle only when the provider ran it and signed a receipt with a cost. A job that cannot run is never charged, so nothing has to be refunded; if settlement fails after the job ran, the output is withheld (x402 rule). No prepaid credit is used.

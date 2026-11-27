@@ -385,16 +385,31 @@ def register(app, *, store, settings, P: str, terms, facilitator: Facilitator | 
             "resource": http_url, "method": "POST", "description": DESCRIPTION, "example_body": EXAMPLE_JOB,
             "mcp": {"url": mcp_url, "tool": "run_cpu_job"}, **info}]}
 
+    def bare_quote(error: str):
+        """Directories and crawlers probe with no body (or GET): show them the price for a 10-second job
+        instead of an error, so they see the x402 terms."""
+        cands = candidates()
+        if not cands:
+            return JSONResponse({"error": "no compute provider is online right now"}, status_code=503, headers=CORS)
+        body = required(cheapest(cands), 10, error, False)
+        return JSONResponse(body, status_code=402, headers={"PAYMENT-REQUIRED": b64json(body), **CORS})
+
+    @app.get(P + "/x402/cpu")
+    def x402_cpu_get():
+        return bare_quote("POST a JSON job to this address: " + json.dumps(EXAMPLE_JOB) + ". Price shown for max_seconds 10.")
+
     @app.post(P + "/x402/cpu")
     async def x402_cpu(request: Request):
         raw = await request.body()
         if len(raw) > MAX_BODY:
             raise HTTPException(413, "job too large (module up to 1.5 MiB; larger: wasm_url + wasm_sha256)")
+        sig = request.headers.get("payment-signature", "")
         try:
             job = parse_job(json.loads(raw or b"{}"))
         except ValueError as exc:
+            if not sig:
+                return await run_in_threadpool(bare_quote, f"{exc}. Price shown for max_seconds 10.")
             raise HTTPException(400, str(exc))
-        sig = request.headers.get("payment-signature", "")
         payload = None
         if sig:
             try:

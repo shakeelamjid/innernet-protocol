@@ -1806,6 +1806,9 @@ def test_x402_gateway_prices_jobs_and_collects_only_after_the_job_ran(tmp_path):
     assert r.status_code == 402 and "output" not in r.json()
     assert json.loads(b64.b64decode(r.headers["payment-response"]))["errorReason"] == "insufficient_funds"
     assert client.get(P + "/x402").json()["services"][0]["price_10s_usdc"] == "0.001"
+    # Directories probe with no body, or with GET: they get the x402 terms, not an error.
+    for bare in (client.post(P + "/x402/cpu"), client.get(P + "/x402/cpu")):
+        assert bare.status_code == 402 and json.loads(b64.b64decode(bare.headers["payment-required"]))["accepts"][0]["payTo"] == split
 
 
 def test_mcp_server_lists_tools_and_charges_run_cpu_job_with_x402(tmp_path):
