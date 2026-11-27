@@ -340,7 +340,7 @@ func (s *server) computeRoute(w http.ResponseWriter, r *http.Request, body []byt
 	case p == "/cmp/v1/balance" && r.Method == "GET":
 		s.reply(w, 200, map[string]any{"balance": usdc(s.credits.balance(client)), "asset": "USDC"})
 	case p == "/cmp/v1/jobs" && r.Method == "POST":
-		s.cpuJob(w, client, body)
+		s.cpuJob(w, client, body, s.x402Amount(r, client))
 	case p == "/gpu/v1/jobs" && r.Method == "POST":
 		s.gpuJobHandler(w, client, body)
 	default:

@@ -65,11 +65,16 @@ needs_deno = pytest.mark.skipif(not DENO, reason="deno not installed")
 DOUBLE = (ROOT / "provider/testdata/gpujob/double.js").read_bytes()
 
 
+REG_FILES: dict = {}          # what the provider sees as its registry (only /v1/config is used here)
+
+
 @pytest.fixture
 def compute(built, tmp_path):
     chain = FakeChain()
     home, port = tmp_path / "p", free_port()
+    reg = Files(REG_FILES)
     env = {**os.environ, "INNERNET_HOME": str(home), "INNERNET_RPC": chain.url, "INNERNET_TEST_HTTP": "1",
+           "INNERNET_REGISTRY": reg.url + "/v1",
            "INNERNET_CLIENT_TERMS": CLIENT_TERMS,
            "INNERNET_DENO": DENO or "/nonexistent/deno", "INNERNET_NO_PRESENCE": "1",
            "INNERNET_TEST_GPUS": json.dumps([{"vendor": "NVIDIA", "model": "NVIDIA L4", "vram_mib": 23034, "api": "cuda"}])}
@@ -193,9 +198,10 @@ def test_gpu_job_by_url_hash_checked_and_one_at_a_time(compute):
     files.server.shutdown()
 
 
-def test_x402_gateway_pays_the_real_provider_and_runs_the_job(compute, tmp_path):
-    """The gateway's own path with the real Go provider: settle (here: a fake facilitator whose settlement
-    is a real USDC transfer on the test chain to the provider's payout contract), credit, run, receipt."""
+def test_x402_gateway_runs_the_real_provider_job_then_collects(compute, tmp_path):
+    """The gateway's own path with the real Go provider: verify, an x402 job from the gateway's published
+    key (no prepaid credit), the provider's signed receipt, then settle. A job from any other key with
+    the same header is refused for lack of credit."""
     import base64 as b64
     from fastapi.testclient import TestClient
     from innernet2.registry_service import x402_gateway as gw
@@ -205,25 +211,38 @@ def test_x402_gateway_pays_the_real_provider_and_runs_the_job(compute, tmp_path)
     split = entry["payto"][SEPOLIA]
     gw_entry = dict(entry, payto={gw.BASE: split})          # routed as Base; the test chain is Sepolia
     route = {"path": "direct", "host": p.endpoint["host"], "port": p.endpoint["port"]}
+    steps = []
 
     class Fac:
         def verify(self, payload, req):
+            steps.append("verify")
             return {"isValid": True, "payer": "0x" + "11" * 20}
 
         def settle(self, payload, req):
+            steps.append("settle")
             return {"success": True, "transaction": chain.pay(SEPOLIA, split, int(req["amount"])),
                     "network": gw.BASE, "payer": "0x" + "11" * 20}
 
     app = create_app(settings(tmp_path), rpc=RegChain(), connect=lambda h, pt, t: 3.0,
                      x402={"facilitator": Fac(), "candidates": lambda: [{"entry": gw_entry, "route": route}]})
     client = TestClient(app, base_url=ORIGIN)
-    wasm = (ROOT / "provider/testdata/echo.wasm").read_bytes()
-    job = {"wasm": b64.b64encode(wasm).decode(), "input": b64.b64encode(b"paid by x402").decode(), "max_seconds": 10}
-    acc = json.loads(b64.b64decode(client.post(P + "/x402/cpu", json=job).headers["payment-required"]))["accepts"][0]
-    assert acc["payTo"] == split and acc["amount"] == "1000"
-    pay = {"x402Version": 2, "accepted": acc, "payload": {"signature": "0x", "authorization": {}}}
-    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
-    assert r.status_code == 200, r.text
-    out = r.json()
-    assert b64.b64decode(out["output"]) == b"paid by x402" and out["exit_code"] == 0
-    assert out["receipt"]["service"] == "CMP-1" and out["provider"]["id"] == entry["id"]
+    gwkey = app.state.x402_gateway_client
+    # The provider reads the gateway key from its registry's config.
+    REG_FILES["v1/config"] = json.dumps({"x402": {"gateway_client": gwkey}}).encode()
+    try:
+        wasm = (ROOT / "provider/testdata/echo.wasm").read_bytes()
+        job = {"wasm": b64.b64encode(wasm).decode(), "input": b64.b64encode(b"paid by x402").decode(), "max_seconds": 10}
+        acc = json.loads(b64.b64decode(client.post(P + "/x402/cpu", json=job).headers["payment-required"]))["accepts"][0]
+        assert acc["payTo"] == split and acc["amount"] == "1000"
+        pay = {"x402Version": 2, "accepted": acc, "payload": {"signature": "0x", "authorization": {}}}
+        r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
+        assert r.status_code == 200, r.text
+        out = r.json()
+        assert steps == ["verify", "settle"]
+        assert b64.b64decode(out["output"]) == b"paid by x402" and out["exit_code"] == 0
+        assert out["receipt"]["paid_by"] == "x402" and out["receipt"]["cost"] == "0.001"
+        # Anyone else sending the header gets no free job.
+        with pytest.raises(ProviderError, match="balance"):
+            p.run_job(wasm, stdin=b"x", max_seconds=10, x402_amount=1000)
+    finally:
+        REG_FILES.clear()

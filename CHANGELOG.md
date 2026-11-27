@@ -2,6 +2,14 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### x402: pay only after success, MCP server, try it with your wallet
+
+- The gateway now verifies the payment, runs the job, and asks the facilitator to settle only when the provider ran it and signed a receipt with a cost. A job that cannot run is never charged, so nothing has to be refunded; if settlement fails after the job ran, the output is withheld (x402 rule). No prepaid credit is used.
+- Provider 0.7.1: runs x402 jobs without prepaid credit when they come from the gateway's client key, which the registry publishes in `/v1/config` (`x402.gateway_client`), and only if the authorized amount covers its own price for the time limit. The receipt says `paid_by: x402`. The gateway uses providers on 0.7.1 or newer.
+- MCP server at `/registry/mcp` (Streamable HTTP, JSON responses): `run_cpu_job` (x402 over MCP: price in `structuredContent`, payment in `_meta["x402/payment"]`, settlement in `_meta["x402/payment-response"]`) and `innernet_prices` (free). The x402 answer carries the Bazaar description of the MCP tool.
+- `/registry/try-x402`: pay a tiny job from your own wallet (browser wallet or phone via WalletConnect, one EIP-3009 signature, no gas) and see the output, the receipt and the transaction.
+- `provider/LATEST` is `provider-v0.7.1`.
+
 ### x402 gateway: one listing, paid straight to providers
 
 - `POST /registry/x402/cpu`: one INNERNET x402 v2 endpoint for CPU jobs (WebAssembly, WASI). Without payment it answers 402 with `PAYMENT-REQUIRED`: scheme `exact`, USDC on Base, `payTo` = the payout contract of the cheapest listed, online compute provider, price = the chosen time limit at that provider's signed CPU-hour price (at least 0.001 USDC), with the Bazaar discovery extension so x402 directories can list it. With `PAYMENT-SIGNATURE` the gateway checks the recipient and amount, has the facilitator (Coinbase CDP by default, EdDSA JWT) verify and settle, gives the settlement transaction to the provider as credit (the provider confirms the USDC transfer itself), runs the job there and returns the output, the provider's signed receipt and `PAYMENT-RESPONSE`. INNERNET never receives or holds the payment; the payout contract splits it on chain.

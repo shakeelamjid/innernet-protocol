@@ -1741,31 +1741,38 @@ def test_admin_asks_machines_to_check_now_through_their_next_presence(tmp_path, 
     assert "check" not in ping(2).json()                                  # told once
 
 
-def test_x402_gateway_prices_jobs_and_pays_the_provider_contract_directly(tmp_path):
+def test_x402_gateway_prices_jobs_and_collects_only_after_the_job_ran(tmp_path):
     import base64 as b64
     from innernet2.registry_service import x402_gateway as gw
     split = "0x" + "5c" * 20
-    entry = {"id": "ab" * 32, "name": "box", "services": ["CMP-1"], "prices": {"CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.36"}},
+    entry = {"id": "ab" * 32, "name": "box", "services": ["CMP-1"],
+             "prices": {"CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.36"}},
              "payto": {"eip155:8453": split}}
-    calls = []
+    calls, fail = [], {"run": False, "settle": False}
 
     class Fac:
         def verify(self, payload, req):
-            calls.append(("verify", req))
+            calls.append("verify")
             return {"isValid": True, "payer": "0x" + "11" * 20}
 
         def settle(self, payload, req):
-            calls.append(("settle", req))
+            calls.append("settle")
+            if fail["settle"]:
+                return {"success": False, "errorReason": "insufficient_funds", "transaction": "", "network": gw.BASE}
             return {"success": True, "transaction": "0x" + "ee" * 32, "network": "eip155:8453", "payer": "0x" + "11" * 20}
 
-    def run(e, route, tx, job):
-        calls.append(("run", tx, job["max_seconds"]))
-        return {"output": b64.b64encode(b"hello").decode(), "exit_code": 0, "stderr": "", "seconds": 0.01,
-                "error": None, "receipt": {"payload": {}, "signature": ""}}
+    def run(e, route, job, amount):
+        calls.append(("run", amount, job["max_seconds"]))
+        if fail["run"]:
+            raise RuntimeError("provider offline")
+        return {"output": b64.b64encode(b"hello").decode(), "exit_code": 0, "stderr": "", "seconds": "0.010",
+                "error": None, "receipt": {"payload": {"cost": "0.001"}, "signature": ""}}
 
     app = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0,
                      x402={"facilitator": Fac(), "run": run, "candidates": lambda: [{"entry": entry, "route": {}}]})
     client = TestClient(app, base_url=ORIGIN)
+    gwkey = client.get(P + "/v1/config").json()["x402"]["gateway_client"]
+    assert len(gwkey) == 64                                   # providers trust x402 jobs only from this key
     job = {"wasm": b64.b64encode(b"\0asm\1\0\0\0").decode(), "input": b64.b64encode(b"hi").decode(), "max_seconds": 10}
     r = client.post(P + "/x402/cpu", json=job)
     assert r.status_code == 402
@@ -1774,22 +1781,75 @@ def test_x402_gateway_prices_jobs_and_pays_the_provider_contract_directly(tmp_pa
     # 0.36 USDC per CPU-hour x 10 s = 0.001 USDC; paid straight to the provider's payout contract
     assert acc["payTo"] == split and acc["amount"] == "1000" and acc["network"] == "eip155:8453"
     assert acc["asset"] == gw.USDC_BASE and acc["extra"] == {"name": "USD Coin", "version": "2"}
-    assert pr["resource"]["url"].endswith("/registry/x402/cpu") and "bazaar" in pr["extensions"]
+    assert pr["resource"]["url"].endswith("/registry/x402/cpu") and pr["extensions"]["bazaar"]["info"]["input"]["type"] == "http"
     assert gw.price_for("0.36", 60) == 6000 and gw.price_for("0.0200", 10) == gw.MIN_PRICE
-    # Underpaying is refused before anything reaches the facilitator.
     low = {"x402Version": 2, "accepted": dict(acc, amount="999"), "payload": {}}
-    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(low)})
-    assert r.status_code == 402 and not calls
-    # A wrong recipient is refused too.
+    assert client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(low)}).status_code == 402
     other = {"x402Version": 2, "accepted": dict(acc, payTo="0x" + "99" * 20), "payload": {}}
     assert client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(other)}).status_code == 402
+    assert not calls                                          # refused before anything reached the facilitator
     pay = {"x402Version": 2, "resource": pr["resource"], "accepted": acc, "payload": {"signature": "0x", "authorization": {}}}
+    # The provider cannot run it: verified, never settled, nothing charged.
+    fail["run"] = True
+    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
+    assert r.status_code == 502 and "nothing was charged" in r.json()["error"] and "settle" not in calls
+    calls.clear(); fail["run"] = False
+    # Runs, then the payment is collected.
     r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
     assert r.status_code == 200, r.text
-    assert [c[0] for c in calls] == ["verify", "settle", "run"] and calls[2][1] == "0x" + "ee" * 32
+    assert [c if isinstance(c, str) else c[0] for c in calls] == ["verify", "run", "settle"] and calls[1][1] == 1000
     assert b64.b64decode(r.json()["output"]) == b"hello" and r.json()["paid"]["pay_to"] == split
     assert json.loads(b64.b64decode(r.headers["payment-response"]))["success"] is True
+    # Settlement fails after the job ran: the output is not handed over.
+    fail["settle"] = True
+    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
+    assert r.status_code == 402 and "output" not in r.json()
+    assert json.loads(b64.b64decode(r.headers["payment-response"]))["errorReason"] == "insufficient_funds"
     assert client.get(P + "/x402").json()["services"][0]["price_10s_usdc"] == "0.001"
+
+
+def test_mcp_server_lists_tools_and_charges_run_cpu_job_with_x402(tmp_path):
+    import base64 as b64
+    split = "0x" + "5c" * 20
+    entry = {"id": "ab" * 32, "name": "box", "services": ["CMP-1"],
+             "prices": {"CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.36"}},
+             "payto": {"eip155:8453": split}}
+
+    class Fac:
+        def verify(self, payload, req):
+            return {"isValid": True}
+
+        def settle(self, payload, req):
+            return {"success": True, "transaction": "0x" + "ee" * 32, "network": "eip155:8453"}
+
+    def run(e, route, job, amount):
+        assert b64.b64decode(job["input"]) == b"hello mcp"
+        return {"output": b64.b64encode(b"HELLO MCP").decode(), "exit_code": 0, "stderr": "", "seconds": "0.010",
+                "error": None, "receipt": {"payload": {"cost": "0.001"}, "signature": ""}}
+
+    app = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0,
+                     x402={"facilitator": Fac(), "run": run, "candidates": lambda: [{"entry": entry, "route": {}}]})
+    client = TestClient(app, base_url=ORIGIN)
+    rpc = lambda m, params=None, i=1: client.post(P + "/mcp", json={"jsonrpc": "2.0", "id": i, "method": m,  # noqa: E731
+                                                                    "params": params or {}}).json()
+    init = rpc("initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "t"}})
+    assert init["result"]["serverInfo"]["name"] == "innernet" and "tools" in init["result"]["capabilities"]
+    assert client.post(P + "/mcp", json={"jsonrpc": "2.0", "method": "notifications/initialized"}).status_code == 202
+    names = [t["name"] for t in rpc("tools/list")["result"]["tools"]]
+    assert names == ["run_cpu_job", "innernet_prices"]
+    assert rpc("tools/call", {"name": "innernet_prices"})["result"]["structuredContent"]["price_10s_usdc"] == "0.001"
+    args = {"wasm": b64.b64encode(b"\0asm\1\0\0\0").decode(), "input_text": "hello mcp", "max_seconds": 10}
+    res = rpc("tools/call", {"name": "run_cpu_job", "arguments": args})["result"]
+    assert res["isError"] is True and res["structuredContent"]["accepts"][0]["payTo"] == split
+    assert json.loads(res["content"][0]["text"]) == res["structuredContent"]
+    assert res["structuredContent"]["extensions"]["bazaar"]["info"]["input"]["toolName"] == "run_cpu_job"
+    pay = {"x402Version": 2, "accepted": res["structuredContent"]["accepts"][0], "payload": {}}
+    done = rpc("tools/call", {"name": "run_cpu_job", "arguments": args, "_meta": {"x402/payment": pay}})["result"]
+    assert "isError" not in done and "HELLO MCP" in done["content"][0]["text"]
+    assert done["_meta"]["x402/payment-response"]["success"] is True
+    assert rpc("nope")["error"]["code"] == -32601
+    page = client.get(P + "/try-x402")
+    assert page.status_code == 200 and "Try a paid job" in page.text
 
 
 def test_cdp_token_is_an_eddsa_jwt_over_the_key_seed():

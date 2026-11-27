@@ -249,7 +249,9 @@ func (b *limitedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 
-func (s *server) cpuJob(w http.ResponseWriter, client string, body []byte) {
+// cpuJob runs a CPU job. paid > 0: an x402 job from the INNERNET gateway, authorized for that many
+// USDC base units and collected by the gateway after the receipt; no prepaid credit is used.
+func (s *server) cpuJob(w http.ResponseWriter, client string, body []byte, paid int64) {
 	if !s.cfg.Compute {
 		s.fail(w, 404, "this provider does not offer CPU jobs")
 		return
@@ -288,9 +290,20 @@ func (s *server) cpuJob(w http.ResponseWriter, client string, body []byte) {
 	}
 	price := s.cfg.Prices["CMP-1"]
 	held := micro(fmt.Sprintf("%d/3600", j.MaxSeconds), price)
-	if err := s.credits.hold(client, held); err != nil {
+	if paid > 0 {
+		if paid < held {
+			s.fail(w, 402, x402Short(paid, held))
+			return
+		}
+	} else if err := s.credits.hold(client, held); err != nil {
 		s.fail(w, 402, err.Error())
 		return
+	}
+	settle := func(cost int64) int64 {
+		if paid > 0 {
+			return 0
+		}
+		return s.credits.settle(client, held, cost)
 	}
 	wait := 30 * time.Second
 	if j.QueueSecs != nil {
@@ -298,7 +311,7 @@ func (s *server) cpuJob(w http.ResponseWriter, client string, body []byte) {
 	}
 	release, err := s.sched.acquire(context.Background(), demand{Client: client, CPU: 1, MemMiB: j.MaxMemMiB + 32}, wait)
 	if err != nil {
-		s.credits.settle(client, held, 0)
+		settle(0)
 		if errors.Is(err, errBusy) {
 			w.Header().Set("Retry-After", "10")
 			s.fail(w, 503, "busy ("+err.Error()+"); try again or use another provider")
@@ -312,17 +325,21 @@ func (s *server) cpuJob(w http.ResponseWriter, client string, body []byte) {
 	ms := int64(max(res.Seconds, 0.001)*1000 + 0.999)
 	secs := fmt.Sprintf("%d.%03d", ms/1000, ms%1000)
 	cost := micro(fmt.Sprintf("%d/3600000", ms), price)
-	if res.Err != "" && len(res.Output) == 0 && res.Seconds < 0.05 {
+	ran := !(res.Err != "" && len(res.Output) == 0 && res.Seconds < 0.05)
+	if !ran {
 		cost = 0 // refused before it ran: no charge
+	} else if paid > 0 {
+		cost = paid // x402: the agent pays the price of the time limit it chose
 	}
-	bal := s.credits.settle(client, held, cost)
+	bal := settle(cost)
 	wh, ih, oh := sha256.Sum256(wasm), sha256.Sum256(input), sha256.Sum256(res.Output)
 	s.stats.add("jobs", 1)
 	out := map[string]any{"output": base64.StdEncoding.EncodeToString(res.Output), "exit_code": res.ExitCode,
 		"stderr": string(res.Stderr), "seconds": secs,
 		"receipt": s.receipt(client, "CMP-1", secs, "CPU-second", cost, bal, map[string]any{
 			"wasm_sha256": hex.EncodeToString(wh[:]), "input_sha256": hex.EncodeToString(ih[:]),
-			"output_sha256": hex.EncodeToString(oh[:]), "seed": j.Seed, "exit_code": res.ExitCode})}
+			"output_sha256": hex.EncodeToString(oh[:]), "seed": j.Seed, "exit_code": res.ExitCode,
+			"paid_by": map[bool]string{true: "x402", false: "credit"}[paid > 0]})}
 	if res.Err != "" {
 		out["error"] = res.Err
 	}

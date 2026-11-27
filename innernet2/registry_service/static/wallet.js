@@ -76,6 +76,7 @@
     if (err && err.code === 4001) return 'You cancelled in the wallet.';
     return (err && (err.message || err.reason)) || 'Something went wrong. Try again.';
   }
-  window.InnernetWallet = { SEL: SEL, connect: connect, connectPhone: connectPhone, ensureChain: ensureChain, splitOf: splitOf, findOrCreate: findOrCreate,
+  function request(method, params) { return eth().request({ method: method, params: params }); }
+  window.InnernetWallet = { SEL: SEL, connect: connect, connectPhone: connectPhone, request: request, ensureChain: ensureChain, splitOf: splitOf, findOrCreate: findOrCreate,
     waitReceipt: waitReceipt, call: call, pad: pad, friendly: friendly };
 })();

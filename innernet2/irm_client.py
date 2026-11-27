@@ -151,11 +151,12 @@ class Provider:
             return {"host": self.route["host"], "port": self.route["port"]}
         return self.entry["endpoints"][0]
 
-    def _request(self, method: str, path: str, body: bytes = b"", timeout: float | None = None) -> httpx.Response:
+    def _request(self, method: str, path: str, body: bytes = b"", timeout: float | None = None,
+                 extra: dict | None = None) -> httpx.Response:
         ts, nonce = str(int(time.time())), secrets.token_hex(16)
         msg = REQUEST_DOMAIN + f"{method}\n{path}\n{hashlib.sha256(body).hexdigest()}\n{ts}\n{nonce}".encode()
         headers = {"X-Innernet-Client": self.key.public_key().public_bytes_raw().hex(), "X-Innernet-Time": ts,
-                   "X-Innernet-Nonce": nonce, "X-Innernet-Signature": self.key.sign(msg).hex()}
+                   "X-Innernet-Nonce": nonce, "X-Innernet-Signature": self.key.sign(msg).hex(), **(extra or {})}
         mode = transport_mode()
         if self.route and self.route["path"] == "tunnel":
             mode = "http"                      # HTTPS tunnel: the HTTP binding is the only way in
@@ -288,16 +289,19 @@ class Provider:
 
     def run_job(self, wasm: bytes | None = None, stdin: bytes = b"", args: tuple = (), seed: int = 0,
                 max_seconds: int = 60, wasm_url: str | None = None, wasm_sha256: str | None = None,
-                queue_seconds: int = 30) -> dict:
-        """CMP-1: run a WebAssembly (WASI) program; same program, input and seed give the same output anywhere."""
+                queue_seconds: int = 30, x402_amount: int | None = None) -> dict:
+        """CMP-1: run a WebAssembly (WASI) program; same program, input and seed give the same output anywhere.
+        x402_amount: only for the INNERNET x402 gateway (the provider checks its key): the job is paid by an
+        x402 payment of that many USDC base units, collected after the receipt, instead of prepaid credit."""
         job = {"input": base64.b64encode(stdin).decode(), "args": list(args), "seed": seed, "max_seconds": max_seconds,
                "queue_seconds": queue_seconds}
         if wasm is not None:
             job["wasm"] = base64.b64encode(wasm).decode()
         else:
             job["wasm_url"], job["wasm_sha256"] = wasm_url, wasm_sha256
+        extra = {"X-Innernet-X402": str(int(x402_amount))} if x402_amount else None
         out = self._json(self._request("POST", "/cmp/v1/jobs", json.dumps(job).encode(),
-                                        timeout=max_seconds + queue_seconds + 60))
+                                        timeout=max_seconds + queue_seconds + 60, extra=extra))
         receipt = self._receipt(out["receipt"])
         output = base64.b64decode(out["output"])
         if receipt["output_sha256"] != hashlib.sha256(output).hexdigest():

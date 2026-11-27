@@ -798,6 +798,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         host = settings.origin.split("://", 1)[-1].split("/")[0]
         return {"fee_bps": settings.fee_bps, "networks": nets, "relays": settings.relays, "terms": terms.summary(),
                 "walletconnect": {"project_id": settings.walletconnect_project_id} if settings.walletconnect_project_id else None,
+                # Providers run x402 jobs (collected after the receipt) only from this gateway client key.
+                "x402": ({"gateway_client": app.state.x402_gateway_client, "url": settings.origin + P + "/x402"}
+                         if getattr(app.state, "x402_gateway_client", None) else None),
                 "rpc": {n: u for n, u in settings.rpc.items() if n in settings.fee_payto and u.startswith("https://")
                         and u.split("/")[2] in ("mainnet.base.org", "sepolia.base.org")},
                 "tunnel": {"url": f"{settings.origin}{P}/v1/tunnel", "endpoint": {"host": host, "port": 443},
@@ -1453,6 +1456,10 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     @app.get(P + "/recover")
     def recover_page():
         return page("recover.html")
+
+    @app.get(P + "/try-x402")
+    def try_x402_page():
+        return page("try-x402.html")
 
     @app.post(P + "/api/me/lost-key")
     async def lost_key(request: Request):

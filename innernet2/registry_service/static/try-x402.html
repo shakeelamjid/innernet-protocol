@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Try a paid job (x402) · INNERNET</title>
+  <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/passkey.js" defer></script>
+  <script src="static/wallet.js" defer></script>
+  <script src="static/try-x402.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>x402</span></a>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="/build/">Build</a>
+    </div>
+  </header>
+  <main>
+    <div class="wrap narrow">
+      <div class="head"><div>
+        <h1>Try a paid job</h1>
+        <p>This page does what an AI agent does with INNERNET over x402: it sends a small program to the compute endpoint, gets the price, pays it from your wallet and gets the result with the provider's signed receipt. The payment goes straight to the provider's payout contract, and it is only collected if the job ran.</p>
+      </div></div>
+
+      <section class="card frame step">
+        <h2>1. The job</h2>
+        <p>A tiny program (252 bytes) that returns what you send it.</p>
+        <label class="label" for="input">Text to send</label>
+        <input id="input" class="field" value="hello from x402" maxlength="200" autocomplete="off">
+        <p class="msg" id="quote" role="status">Getting the price…</p>
+      </section>
+
+      <section class="card frame step">
+        <h2>2. Pay and run</h2>
+        <p>You sign one USDC payment on Base for the price above; you pay no network fee for it. Your wallet needs that much USDC on Base.</p>
+        <div class="actions">
+          <button class="btn" id="phone" type="button">Pay with the wallet app on my phone</button>
+          <button class="btn btn-light" id="browser" type="button">Pay with a browser wallet</button>
+        </div>
+        <div id="wc-box" class="wc-box" hidden>
+          <p>Scan this with your wallet app (Trust Wallet, MetaMask, Coinbase Wallet and others), approve the connection, then approve the signature. On this phone? <a id="wc-link" href="#">Open your wallet app</a>.</p>
+          <div id="wc-qr" class="qr"></div>
+        </div>
+        <p class="msg" id="msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="result" hidden>
+        <h2>3. Result</h2>
+        <pre class="terminal" id="out"></pre>
+        <dl class="kv" id="facts"></dl>
+      </section>
+    </div>
+  </main>
+</body>
+</html>
