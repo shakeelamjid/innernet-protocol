@@ -2,6 +2,12 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### x402 gateway: one listing, paid straight to providers
+
+- `POST /registry/x402/cpu`: one INNERNET x402 v2 endpoint for CPU jobs (WebAssembly, WASI). Without payment it answers 402 with `PAYMENT-REQUIRED`: scheme `exact`, USDC on Base, `payTo` = the payout contract of the cheapest listed, online compute provider, price = the chosen time limit at that provider's signed CPU-hour price (at least 0.001 USDC), with the Bazaar discovery extension so x402 directories can list it. With `PAYMENT-SIGNATURE` the gateway checks the recipient and amount, has the facilitator (Coinbase CDP by default, EdDSA JWT) verify and settle, gives the settlement transaction to the provider as credit (the provider confirms the USDC transfer itself), runs the job there and returns the output, the provider's signed receipt and `PAYMENT-RESPONSE`. INNERNET never receives or holds the payment; the payout contract splits it on chain.
+- `GET /registry/x402`: what the gateway sells and the current price. Documented on the build page, in llms.txt and openapi.json.
+- The gateway talks to providers with its own Ed25519 client key (identity only), kept next to the registry database.
+
 ### "Check now" from the admin page
 
 - The admin can ask one machine ("Ask machine to check now" in its details) or every machine ("Ask all machines to update now") to check right away for a new release and for its payout contract. The registry passes the request in its reply to the machine's next presence (about once a minute); the machine updates and restarts, or switches to its payout contract, without waiting for its 6-hour or 10-minute rounds. After the admin pays for a machine's payout contract, that machine is asked automatically.

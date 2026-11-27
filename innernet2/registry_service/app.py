@@ -135,7 +135,7 @@ def nonce_check(host: str, port: int, nonce: str, timeout: float = 5.0) -> bool:
 
 
 def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http_rpc,
-               connect=probe.tcp_connect, reach=nonce_check, info=None) -> FastAPI:
+               connect=probe.tcp_connect, reach=nonce_check, info=None, x402: dict | None = None) -> FastAPI:
     info = info or presence.info_check
     tunnels = tunnel.Tunnels()
     store = store or Store(settings.db_path)
@@ -900,6 +900,9 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     admin_web.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, body_json=body_json,
                        new_flow=new_flow, take_flow=take_flow, limiter=limiter, cookie_secure=settings.cookie_secure,
                        page=page, payout_ok=payout_ok, rpc=rpc)
+    from . import x402_gateway
+    x402_gateway.register(app, store=store, settings=settings, P=P, terms=terms,
+                          **(x402 or {}))
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):

@@ -1739,3 +1739,71 @@ def test_admin_asks_machines_to_check_now_through_their_next_presence(tmp_path, 
     assert first.status_code == 200, first.text
     assert first.json()["check"] == "payout,update"
     assert "check" not in ping(2).json()                                  # told once
+
+
+def test_x402_gateway_prices_jobs_and_pays_the_provider_contract_directly(tmp_path):
+    import base64 as b64
+    from innernet2.registry_service import x402_gateway as gw
+    split = "0x" + "5c" * 20
+    entry = {"id": "ab" * 32, "name": "box", "services": ["CMP-1"], "prices": {"CMP-1": {"asset": "USDC", "unit": "CPU-hour", "amount": "0.36"}},
+             "payto": {"eip155:8453": split}}
+    calls = []
+
+    class Fac:
+        def verify(self, payload, req):
+            calls.append(("verify", req))
+            return {"isValid": True, "payer": "0x" + "11" * 20}
+
+        def settle(self, payload, req):
+            calls.append(("settle", req))
+            return {"success": True, "transaction": "0x" + "ee" * 32, "network": "eip155:8453", "payer": "0x" + "11" * 20}
+
+    def run(e, route, tx, job):
+        calls.append(("run", tx, job["max_seconds"]))
+        return {"output": b64.b64encode(b"hello").decode(), "exit_code": 0, "stderr": "", "seconds": 0.01,
+                "error": None, "receipt": {"payload": {}, "signature": ""}}
+
+    app = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0,
+                     x402={"facilitator": Fac(), "run": run, "candidates": lambda: [{"entry": entry, "route": {}}]})
+    client = TestClient(app, base_url=ORIGIN)
+    job = {"wasm": b64.b64encode(b"\0asm\1\0\0\0").decode(), "input": b64.b64encode(b"hi").decode(), "max_seconds": 10}
+    r = client.post(P + "/x402/cpu", json=job)
+    assert r.status_code == 402
+    pr = json.loads(b64.b64decode(r.headers["payment-required"]))
+    acc = pr["accepts"][0]
+    # 0.36 USDC per CPU-hour x 10 s = 0.001 USDC; paid straight to the provider's payout contract
+    assert acc["payTo"] == split and acc["amount"] == "1000" and acc["network"] == "eip155:8453"
+    assert acc["asset"] == gw.USDC_BASE and acc["extra"] == {"name": "USD Coin", "version": "2"}
+    assert pr["resource"]["url"].endswith("/registry/x402/cpu") and "bazaar" in pr["extensions"]
+    assert gw.price_for("0.36", 60) == 6000 and gw.price_for("0.0200", 10) == gw.MIN_PRICE
+    # Underpaying is refused before anything reaches the facilitator.
+    low = {"x402Version": 2, "accepted": dict(acc, amount="999"), "payload": {}}
+    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(low)})
+    assert r.status_code == 402 and not calls
+    # A wrong recipient is refused too.
+    other = {"x402Version": 2, "accepted": dict(acc, payTo="0x" + "99" * 20), "payload": {}}
+    assert client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(other)}).status_code == 402
+    pay = {"x402Version": 2, "resource": pr["resource"], "accepted": acc, "payload": {"signature": "0x", "authorization": {}}}
+    r = client.post(P + "/x402/cpu", json=job, headers={"PAYMENT-SIGNATURE": gw.b64json(pay)})
+    assert r.status_code == 200, r.text
+    assert [c[0] for c in calls] == ["verify", "settle", "run"] and calls[2][1] == "0x" + "ee" * 32
+    assert b64.b64decode(r.json()["output"]) == b"hello" and r.json()["paid"]["pay_to"] == split
+    assert json.loads(b64.b64decode(r.headers["payment-response"]))["success"] is True
+    assert client.get(P + "/x402").json()["services"][0]["price_10s_usdc"] == "0.001"
+
+
+def test_cdp_token_is_an_eddsa_jwt_over_the_key_seed():
+    import base64 as b64
+    from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey as K
+    from innernet2.registry_service.x402_gateway import cdp_jwt
+    k = K.generate()
+    seed = k.private_bytes_raw()
+    secret = b64.b64encode(seed + k.public_key().public_bytes_raw()).decode()
+    tok = cdp_jwt("key-1", secret, "post", "https://api.cdp.coinbase.com/platform/v2/x402/verify", now=1000)
+    h, c, s = tok.split(".")
+    dec = lambda x: b64.urlsafe_b64decode(x + "=" * (-len(x) % 4))  # noqa: E731
+    head, claims = json.loads(dec(h)), json.loads(dec(c))
+    assert head["alg"] == "EdDSA" and head["kid"] == "key-1" and len(head["nonce"]) == 32
+    assert claims == {"sub": "key-1", "iss": "cdp", "aud": ["cdp_service"], "nbf": 1000, "exp": 1120,
+                      "uri": "POST api.cdp.coinbase.com/platform/v2/x402/verify"}
+    k.public_key().verify(dec(s), (h + "." + c).encode())
