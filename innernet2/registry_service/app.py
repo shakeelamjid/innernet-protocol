@@ -175,7 +175,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
         if settings.workers:
             for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached, payout_ok=payout_ok),
                             settings.probe_interval),
-                           (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval)):
+                           (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval),
+                           (lambda: app.state.send_sweep(), 300)):     # end expired, faded and opened files
                 t = threading.Thread(target=worker, args=(fn, iv), daemon=True)
                 t.start()
                 threads.append(t)
@@ -906,6 +907,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     from . import x402_gateway
     x402_gateway.register(app, store=store, settings=settings, P=P, terms=terms,
                           **(x402 or {}))
+    from . import send
+    send.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, limiter=limiter, page=page)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):

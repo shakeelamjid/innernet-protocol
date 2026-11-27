@@ -35,6 +35,10 @@ def main(argv: list[str] | None = None) -> int:
             s.add_argument("reason")
         else:
             s.add_argument("--force", action="store_true", help="approve even if the payout check fails")
+    sk = sub.add_parser("send-remove", help="destroy a file sent with INNERNET Send (abuse report, legal request)")
+    sk.add_argument("file", help="the 32 hex characters after /send/o/ in its link")
+    sk.add_argument("reason")
+    sub.add_parser("send-list", help="files held by INNERNET Send: id, state, size, opens, end (never contents)")
     args = ap.parse_args(argv)
 
     if args.cmd == "keygen":
@@ -54,6 +58,18 @@ def main(argv: list[str] | None = None) -> int:
         s = Settings.from_env()
         print("Open within 10 minutes to add your admin passkey:")
         print("  " + new_login_link(store, s.origin, "/registry"))
+        return 0
+    if args.cmd == "send-remove":
+        from . import send
+        done = send.take_down(store, Settings.from_env().db_path, args.file, args.reason)
+        print(args.file, "-> destroyed" if done else "-> no such live file")
+        return 0 if done else 1
+    if args.cmd == "send-list":
+        from . import send
+        send.migrate(store)
+        for r in store.q("SELECT id, state, reason, size, opens, max_opens, expires_at, ip FROM send_files ORDER BY created_at DESC"):
+            print(f"{r['id']}  {r['state']:9}  {r['size']:>10} B  opens {r['opens']}/{r['max_opens'] or 'any'}  "
+                  f"ends {time.strftime('%Y-%m-%d %H:%M', time.gmtime(r['expires_at']))}Z  from {r['ip']}  {r['reason']}")
         return 0
     if args.cmd == "list":
         now = int(time.time())

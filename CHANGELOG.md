@@ -2,6 +2,15 @@
 
 ## Unreleased: IRM-1 resource market, draft M1a (after v1.0.0)
 
+### INNERNET Send: the first application on the protocol (SEND-1, draft)
+
+- `/registry/send`: send one sealed file to one person. The file is sealed in the browser (AES-256-GCM, 4 MiB parts) with a key made from a link secret (in the link's `#fragment`, never sent to a server), a 6-digit PIN told by another channel, and a keeper share. No account for sender or receiver; each browser makes a device key.
+- The keeper (today the registry) holds the sealed bytes and the keeper share and releases the share only while the sender's rules allow: lifetime (1 or 7 days), fading (half-life 1 day), opens (once, 3 times, any number), passing on (first device only, or allowed), 5 wrong PINs destroy the file, and the sender can take a file back at any time. When a rule ends a file, the share and the sealed bytes are deleted.
+- The sender's page lists what was sent from that browser, shows when each file was opened, and has Take it back.
+- Free tier: up to 100 MB and 7 days, stored on the registry (`INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY`; `INNERNET_SEND=0` switches it off). Splitting the keeper share over independent machines and storing the pieces with providers is next; the client does not change.
+- Operator: `admin send-list` and `admin send-remove <id> <reason>`. The operator can destroy a file, not read it.
+- Specification: `docs/SEND1_SEALED_FILE_SEND.md`. Tests: `tests/test_send.py` (rules, limits, and the browser sealing code run in Node).
+
 ### Machines come and go freely; storage and relay first
 
 - No machine is suspended or removed for being offline. The rule that suspended a listed machine below 95% reachability over 7 days is gone, and so is the 24-hour trial after it. The registry still records each check and publishes the share answered, as information for clients.

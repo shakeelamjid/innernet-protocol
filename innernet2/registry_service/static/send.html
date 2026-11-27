@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Send a sealed file · INNERNET</title>
+  <meta name="description" content="Send one file to one person. It is sealed on your device; you decide how long it lives, how often it opens, and you can take it back.">
+  <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
+  <link rel="stylesheet" href="static/registry.css">
+  <script src="static/send-core.js" defer></script>
+  <script src="static/send-store.js" defer></script>
+  <script src="static/send.js" defer></script>
+</head>
+<body>
+  <header class="top">
+    <div class="wrap">
+      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Send</span></a>
+      <span class="spacer"></span>
+      <a class="btn btn-sm" href="/">About INNERNET</a>
+    </div>
+  </header>
+  <main>
+    <div class="wrap narrow">
+      <div class="head"><div>
+        <h1>Send a sealed file</h1>
+        <p>The file is sealed on this device before it leaves. Only the person with your link and your PIN can open it, and you decide how long it lives, how often it opens, and whether you take it back. No account.</p>
+      </div></div>
+
+      <p class="notice" id="off" hidden></p>
+
+      <form id="form" novalidate>
+        <section class="card frame step">
+          <h2>The file</h2>
+          <label class="label" for="file">File</label>
+          <input id="file" class="field file-field" type="file">
+          <p class="msg" id="file-msg"></p>
+          <label class="label" for="from">Your name, shown to the receiver</label>
+          <input id="from" class="field" maxlength="60" autocomplete="name">
+          <label class="label" for="note">Note (optional)</label>
+          <input id="note" class="field" maxlength="200" autocomplete="off">
+        </section>
+
+        <section class="card frame step">
+          <h2>The rules</h2>
+          <div class="presets" role="group" aria-label="Ready-made rules">
+            <button class="btn btn-sm" type="button" data-preset="private" aria-pressed="true">Private</button>
+            <button class="btn btn-sm" type="button" data-preset="working" aria-pressed="false">Working copy</button>
+            <button class="btn btn-sm" type="button" data-preset="fading" aria-pressed="false">Fading</button>
+          </div>
+          <div class="fields">
+            <label>Keep it for<select id="keep" class="field"></select></label>
+            <label>Can be opened<select id="opens" class="field">
+              <option value="1">Once</option><option value="3">3 times</option><option value="0">Any number of times</option></select></label>
+            <label>Passing it on<select id="forward" class="field">
+              <option value="0">Not allowed: first device only</option><option value="1">Allowed</option></select></label>
+          </div>
+          <p class="note" id="rules-note"></p>
+        </section>
+
+        <section class="card frame step">
+          <div class="actions">
+            <button class="btn btn-light" id="go" type="submit">Seal and send</button>
+          </div>
+          <p class="msg" id="msg" role="status"></p>
+          <p class="note">These rules control what the network releases. Once someone has opened a file, they can keep what they saw.</p>
+        </section>
+      </form>
+
+      <section class="card frame step" id="done" hidden>
+        <h2>Sealed and stored</h2>
+        <p>Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.</p>
+        <label class="label" for="link">Link</label>
+        <div class="copyable"><code id="link"></code><button class="btn btn-sm" type="button" data-copy="link">Copy</button></div>
+        <label class="label" for="pin">PIN</label>
+        <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
+        <p class="note" id="done-rules"></p>
+        <div class="actions"><button class="btn" id="again" type="button">Send another file</button></div>
+      </section>
+
+      <section class="card frame step" id="sent-card" hidden>
+        <h2>Files you sent from this browser</h2>
+        <p class="note">Kept only in this browser. Take a file back at any time: it is destroyed everywhere, and the link and PIN stop working.</p>
+        <ul class="sent" id="sent"></ul>
+      </section>
+    </div>
+  </main>
+</body>
+</html>

@@ -62,6 +62,7 @@ Re-applying with the same address and payout contract keeps a listed provider li
 | `INNERNET_REGISTRY_RP_ID` | `innernetcorp.com` | Passkeys are bound to this domain |
 | `INNERNET_SPLIT_FACTORY_BASE_SEPOLIA` | the factory address, once deployed | Deploy it once from your own wallet at `/registry/payout#operator`. Until set, payout contracts are accepted without the split check |
 | `INNERNET_WALLETCONNECT_PROJECT_ID` | unset | Public WalletConnect (Reown) project id. When set, the setup and payout pages offer "Use the wallet app on my phone" (QR code), so no browser extension is needed |
+| `INNERNET_SEND`, `INNERNET_SEND_MAX_MB`, `INNERNET_SEND_MAX_DAYS`, `INNERNET_SEND_TOTAL_GB`, `INNERNET_SEND_PER_IP_DAY` | `1`, `100`, `7`, `10`, `30` | INNERNET Send (`/registry/send`, see `docs/SEND1_SEALED_FILE_SEND.md`): on or off, largest file, longest lifetime, total sealed bytes kept beside the database (in `send/`), and files one address may send a day |
 | `CDP_API_KEY_ID`, `CDP_API_KEY_SECRET` | unset | Coinbase Developer Platform API key (not a wallet key) for the x402 gateway's facilitator calls. Unset: `/x402/cpu` still answers with prices (402) but refuses payments |
 | `INNERNET_X402_FACILITATOR` | `https://api.cdp.coinbase.com/platform/v2/x402` | Another x402 v2 facilitator, if wanted |
 | `INNERNET_ADMIN_USER`, `INNERNET_ADMIN_PASSWORD` | your choice; the password needs 16+ characters | Sign-in for `/registry/admin`. Use a long random password (a password manager). Unset or shorter: password sign-in is off |
