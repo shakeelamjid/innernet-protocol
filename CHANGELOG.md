@@ -4,6 +4,7 @@
 
 ### INNERNET Send: the first application on the protocol (SEND-1, draft)
 
+- Short links (`/s/<8 characters>#<22-character secret>`), copy and share buttons for the link and, separately, the PIN; the sender key is folded away, and opening one on a new device asks first.
 - Prices: set on the admin dashboard (tab "Send prices"), kept in the database, audit-logged; the `INNERNET_SEND_PRICES` variable is gone.
 - Selling: no listing fee. Readers pay the seller's own `INNERnetSplit` from the existing payout factory (97.5% seller, 2.5% INNERNET, enforced on the chain, any way of paying including a pasted hash); a payment to the raw wallet does not count. "Collect sales" creates the split if needed and releases it.
 - Notes can be HTML, shown safely (allowlist, closed shadow root, clipped box, no scripts or outside requests); `.html` files can be shown the same way.

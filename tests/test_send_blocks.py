@@ -422,3 +422,18 @@ def test_the_sender_sets_how_many_wrong_pins_it_takes(app):
         body = {"id": os.urandom(16).hex(), "size": 10 + send.TAG, "parts": 1, "keep": 86400, "auth_hash": "ab" * 32, "pin_tag": "aa" * 32,
                 "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32), "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), "extras": {"pin_tries": bad}}
         assert client.post(API + "/files", json=body, headers=H).status_code == 422
+
+
+def test_a_short_link_names_the_send_and_nothing_else(app):
+    client, a, tmp = app
+    owner = Device()
+    body = {"id": os.urandom(16).hex(), "size": 10 + send.TAG, "parts": 1, "keep": 86400, "auth_hash": "ab" * 32, "pin_tag": "aa" * 32,
+            "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32), "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), "short": "Ab3dEf7h"}
+    assert client.post(API + "/files", json=body, headers=H).status_code == 200
+    assert client.get(API + "/short/Ab3dEf7h").json() == {"id": body["id"]}
+    assert client.get("/registry/send/s/Ab3dEf7h").status_code == 200
+    assert client.get(API + "/short/Zz9zZz9z").status_code == 404 and client.get(API + "/short/bad").status_code == 404
+    again = {**body, "id": os.urandom(16).hex()}
+    assert client.post(API + "/files", json=again, headers=H).status_code == 409             # taken
+    for bad in ("short", "has space", "toolongcode1", "ab-cd-ef"):
+        assert client.post(API + "/files", json={**body, "id": os.urandom(16).hex(), "short": bad}, headers=H).status_code == 422

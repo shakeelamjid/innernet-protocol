@@ -321,6 +321,30 @@
       await St.api('POST', '/files/' + rec.id + '/pack', { code: rec.code, pack: await C.sealSmall(key, rec.id, 'pack', { rec: rec, box: await St.boxExport(rec.id) }) });
     } catch (e) { /* the send still works from this browser */ }
   }
+  /* Copy and share buttons on the done screen. The link and the PIN are shared separately, on purpose. */
+  function shareBars(link, pin, from) {
+    const who = from ? from + ' sent you ' : 'You have been sent ';
+    const texts = { link: who + 'something sealed with INNERNET Send. Open it here (I will give you the PIN separately): ' + link, pin: 'The PIN for what I sent you: ' + pin };
+    document.querySelectorAll('[data-share]').forEach(function (bar) {
+      const text = texts[bar.dataset.share], nat = bar.querySelector('[data-native]');
+      if (nat && navigator.share) {
+        nat.hidden = false;
+        nat.onclick = function () { navigator.share(bar.dataset.share === 'link' ? { title: 'Sealed with INNERNET Send', text: text } : { text: text }).catch(function () {}); };
+      }
+      bar.querySelectorAll('[data-to]').forEach(function (a) {
+        const t = encodeURIComponent(text);
+        a.href = { whatsapp: 'https://wa.me/?text=' + t, telegram: 'https://t.me/share/url?url=' + encodeURIComponent(link) + '&text=' + encodeURIComponent(texts.link.split(': ')[0]),
+          email: 'mailto:?subject=' + encodeURIComponent('Sealed with INNERNET Send') + '&body=' + t, sms: 'sms:?&body=' + t }[a.dataset.to];
+      });
+    });
+  }
+
+  function shortCode() {                     // 8 letters and digits for the short link (it names the send, not its key)
+    const A = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789'; let out = '';
+    C.random(8).forEach(function (b) { out += A[b % A.length]; });
+    return out;
+  }
+
   async function loadPack(id, code) {
     codes[id] = code;
     const got = await (await St.api('POST', '/files/' + id + '/pack', { code: code })).json();
@@ -438,7 +462,7 @@
     film.plain(tiles ? { tiles: tiles } : { chars: first.chars });
     film.beat('content', c.kind === 'note' ? 'Your note, on this device' : tiles ? 'Your picture, on this device' : c.name + (first.hex ? ': its first bytes, in hex' : ': its first characters'));
     steps.set(0, 'run');
-    const id = C.newId(), secret = C.random(32), share = C.random(32), who = names();
+    const id = C.newId(), secret = C.random(16), share = C.random(32), who = names(), shortId = shortCode();
     const strong = $('o-strong').checked && !o.holders, pin = o.holders ? await C.jointPin(secret) : C.newPin(strong);
     const device = await St.deviceKey();
     await pause(350);
@@ -464,7 +488,7 @@
       o = Object.assign({}, o, { room_hash: rm.authHash, seat_hashes: hashes });
     }
     const now0 = Math.floor(Date.now() / 1000), from = $('from').value.trim(), art = {}, ex = o.extras || {};
-    const base = location.origin + St.BASE + (ex.name ? '/send/n/' + ex.name : '/send/o/' + id) + '#';
+    const base = (ex.name ? location.origin + St.BASE + '/send/n/' + ex.name : (lim.short_base || location.origin + St.BASE + '/send/s/') + shortId) + '#';
     let contentKey = key, decoy = null;
     o = Object.assign({}, o);
     if (o.recipients) {                                    // one sealed content, a wrapped key for each person's own PIN
@@ -503,7 +527,7 @@
       o.collect = Object.assign({}, o.collect, { pub: pub, form: await C.sealSmall(keys.preview, id, 'form',
         { fields: formRows(), files: Number($('o-files').value) || 0, sign: $('o-sign').checked, anon: o.collect.anon, pub: pub }) });
     }
-    const made = await (await St.api('POST', '/files', Object.assign({
+    const made = await (await St.api('POST', '/files', Object.assign({ short: shortId,
       id: id, kind: c.kind, size: c.size + parts * C.TAG, parts: parts, auth_hash: keys.authHash, pin_tag: await C.pinTag(keys, pin),
       owner_pub: await C.publicRaw(device), keeper_share: C.b64u(share),
       preview: await C.sealSmall(keys.preview, id, 'preview', { from: from, note: $('note').value.trim() }),
@@ -561,6 +585,7 @@
   function showDone(r) {
     $('done-film').textContent = ''; if (r.film) $('done-film').append(r.film.el);
     $('link').textContent = r.rec.shared || r.rec.link; $('pin').textContent = C.showPin(r.rec.pin);
+    shareBars(r.rec.shared || r.rec.link, C.showPin(r.rec.pin), r.rec.from);
     $('many-links').hidden = !r.rec.links; $('pin-box').hidden = !!r.rec.links;
     $('links').textContent = '';
     (r.rec.links || []).forEach(function (l) {
@@ -572,6 +597,9 @@
       : 'Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.';
     const A = r.rec.art || {}, box = $('artifacts'); box.textContent = '';
     $('manage').textContent = r.rec.manage || '';
+    $('manage-save').onclick = function () {
+      St.download(new Blob(['INNERNET Send: your private sender key. Do not send it to anyone.\nIt pauses, changes, renews or deletes one send. It cannot open the file.\n\n' + (r.rec.manage || '') + '\n'], { type: 'text/plain' }), 'innernet-sender-key-' + r.rec.id.slice(0, 8) + '.txt');
+    };
     function item(label, value, note) {
       const l = el('label', label, 'label'), row = el('div', null, 'copyable'), b = el('button', 'Copy', 'btn btn-sm'); b.type = 'button';
       b.addEventListener('click', function () { navigator.clipboard.writeText(value).then(function () { b.textContent = 'Copied'; }); });
@@ -868,8 +896,15 @@
       document.querySelectorAll('.paid input, .paid textarea').forEach(function (i) { i.disabled = true; });
 
     }
+    function copyOut(text) {                   // the clipboard, or a fallback for browsers that refuse it
+      if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+      const t = document.createElement('textarea'); t.value = text; t.setAttribute('readonly', ''); t.style.position = 'fixed'; t.style.opacity = '0';
+      document.body.append(t); t.select(); try { document.execCommand('copy'); } finally { t.remove(); }
+      return Promise.resolve();
+    }
     document.querySelectorAll('[data-copy]').forEach(function (b) {
-      b.addEventListener('click', function () { navigator.clipboard.writeText($(b.dataset.copy).textContent).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = 'Copy'; }, 1500); }); });
+      const label = b.textContent;
+      b.addEventListener('click', function () { copyOut($(b.dataset.copy).textContent).then(function () { b.textContent = 'Copied'; setTimeout(function () { b.textContent = label; }, 1500); }); });
     });
     document.querySelectorAll('input[name=kind]').forEach(function (r) {
       r.addEventListener('change', function () { $('file-box').hidden = kind() !== 'file'; $('note-box').hidden = kind() !== 'note'; requote(); });
@@ -946,9 +981,21 @@
     pick(null);
     const mk = new URLSearchParams(location.search).get('m');
     if (mk && /^[0-9a-f]{32}$/.test(mk) && location.hash.length > 20) {
-      if (busy) return;
-      try { await loadPack(mk, location.hash.slice(1)); history.replaceState(null, '', location.pathname + '#sends'); say('key-msg', 'Your sender key worked. That send is listed here, with its controls.'); }
-      catch (e) { history.replaceState(null, '', location.pathname + '#sends'); say('key-msg', e.status === 403 || e.status === 404 ? 'That sender key does not match a send that is still on record.' : e.message, true); }
+      const code = location.hash.slice(1);
+      history.replaceState(null, '', location.pathname + '#sends');
+      const take = async function () {
+        $('mk-ask').hidden = true;
+        try { await loadPack(mk, code); say('key-msg', 'Your sender key worked. That send is listed here, with its controls.'); }
+        catch (e) { say('key-msg', e.status === 403 || e.status === 404 ? 'That sender key does not match a send that is still on record.' : e.message, true); }
+        renderSent();
+      };
+      const mine = (await St.sent()).some(function (r) { return r.id === mk; });
+      if (mine) await take();
+      else {                                   // a sender key on a new device: it may have been sent here by mistake
+        $('mk-ask').hidden = false;
+        $('mk-take').onclick = function () { take(); };
+        $('mk-no').onclick = function () { $('mk-ask').hidden = true; say('key-msg', 'Nothing was added. Ask the sender for the link to open the file.'); };
+      }
     }
     route();
     renderSent();

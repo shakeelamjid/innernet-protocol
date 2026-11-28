@@ -5,7 +5,7 @@
   'use strict';
   const C = window.InnernetSend, St = window.InnernetSendStore, W = window.InnernetWallet;
   const $ = function (id) { return document.getElementById(id); };
-  const path = location.pathname.match(/\/send\/(?:o\/([0-9a-f]{32})|n\/([a-z0-9-]+))\/?$/);
+  const path = location.pathname.match(/\/send\/(?:o\/([0-9a-f]{32})|n\/([a-z0-9-]+)|s\/([A-Za-z0-9]{8}))\/?$/);
   let id = path && path[1], secret = null, keys = null, busy = false, steps = null, isNote = false, token = null;
   let afterOpen = null;
   let joint = false, held = false, due = 0, jointNames = null, autoPin = null, info = null, roomCall = null, roomNeed = 0, opened = null;
@@ -19,6 +19,9 @@
 
   async function start() {
     if (!window.crypto || !crypto.subtle || !window.indexedDB) return end('This browser cannot open sealed files', 'Use a current browser on a secure (https) page.');
+    if (!id && path && path[3]) {
+      try { id = (await (await St.api('GET', '/short/' + path[3])).json()).id; } catch (e) { return end('This link does not exist', 'No send has that link. It may have ended, or a letter is missing.'); }
+    }
     if (!id && path && path[2]) {
       try { id = (await (await St.api('GET', '/names/' + path[2])).json()).id; } catch (e) { return end('This link does not exist', 'No send has that name. It may have ended.'); }
     }
@@ -30,9 +33,9 @@
     if (!secret) {
       const bits = hash.split('.');
       try { secret = C.unb64u(bits[0]); } catch (e) { secret = null; }
-      if (bits[1] && /^[0-9]{6}$/.test(bits[1])) autoPin = bits[1];
+      if (bits[1] && /^([0-9]{6}|[0-9A-Z]{10})$/.test(bits[1])) autoPin = bits[1];
     }
-    if (!id || !secret || secret.length !== 32) return end('This link is not complete', 'Ask the sender for the whole link, including the part after the # sign.');
+    if (!id || !secret || (secret.length !== 32 && secret.length !== 16)) return end('This link is not complete', 'Ask the sender for the whole link, including the part after the # sign.');
     keys = await C.linkKeys(secret, id);
     try { info = await (await St.api('POST', '/files/' + id + '/info', { auth: C.b64u(keys.auth), device_pub: (await who()).pub })).json(); }
     catch (e) {

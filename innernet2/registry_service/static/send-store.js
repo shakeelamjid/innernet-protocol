@@ -27,7 +27,7 @@
     }
     return pair;
   }
-  const BASE = location.pathname.replace(/\/send(\/(o|n)\/[a-z0-9-]+)?\/?$/, '');
+  const BASE = location.pathname.replace(/\/send(\/(o|n|s)\/[A-Za-z0-9-]+)?\/?$/, '');
   async function api(method, path, body, headers) {
     const h = Object.assign({ 'X-Innernet': '1' }, headers || {});
     let payload = body;

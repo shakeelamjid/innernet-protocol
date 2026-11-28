@@ -354,9 +354,16 @@
       <section class="card frame step" id="done" hidden>
         <h2>Sealed and stored</h2>
         <p id="done-lede">Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.</p>
-        <div id="one-link">
-          <label class="label" for="link">Link</label>
-          <div class="copyable"><code id="link"></code><button class="btn btn-sm" type="button" data-copy="link">Copy</button></div>
+        <div id="one-link" class="share-box">
+          <label class="label" for="link">Send this link to the receiver</label>
+          <div class="copyable"><code id="link"></code></div>
+          <div class="share-bar" data-share="link">
+            <button class="btn btn-light" type="button" data-copy="link">Copy link</button>
+            <button class="btn" type="button" data-native hidden>Share…</button>
+            <a class="btn" data-to="whatsapp" target="_blank" rel="noopener noreferrer">WhatsApp</a>
+            <a class="btn" data-to="telegram" target="_blank" rel="noopener noreferrer">Telegram</a>
+            <a class="btn" data-to="email">Email</a>
+          </div>
         </div>
         <div id="many-links" hidden>
           <label class="label">A key for each person. Give each one only their own key.</label>
@@ -364,14 +371,21 @@
         </div>
         <div id="pin-box">
         <label class="label" for="pin">PIN</label>
-        <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
+        <div class="copyable"><code id="pin" class="big"></code></div>
+        <div class="share-bar" data-share="pin">
+          <button class="btn btn-sm" type="button" data-copy="pin">Copy PIN</button>
+          <button class="btn btn-sm" type="button" data-native hidden>Share PIN…</button>
+          <a class="btn btn-sm" data-to="sms">Text message</a>
+        </div>
+        <p class="note">Send the PIN another way than the link: a call, a text, or in person. Anyone with both can open it.</p>
         </div>
         <div id="done-film"></div>
-        <div class="senderkey">
-          <label class="label" for="manage">Your sender key. Keep it; do not send it to anyone.</label>
-          <div class="copyable"><code id="manage"></code><button class="btn btn-sm" type="button" data-copy="manage">Copy</button></div>
-          <p class="note">Open this link on any device to control this send: check in, renew, pause, change its dates, or delete it. It is also listed under "Your sends" below.</p>
-        </div>
+        <details class="senderkey private">
+          <summary><strong>Your private sender key</strong> <span>For you only. Never send it: it can pause, change or delete this send.</span></summary>
+          <p class="note">It is already saved in this browser under "Your sends". Keep a copy to control this send from another device. It cannot open the file.</p>
+          <div class="copyable"><code id="manage"></code></div>
+          <div class="actions"><button class="btn btn-sm" type="button" id="manage-save">Save as a file</button><button class="btn btn-sm" type="button" data-copy="manage">Copy for myself</button></div>
+        </details>
         <div id="artifacts"></div>
         <div class="stored" id="stored">
           <h3>What you set</h3>
@@ -392,6 +406,12 @@
           <h1>Your sends</h1>
           <p>Everything you sent from this browser, and anything you opened here with a sender key. Check in, renew, pause, change or delete each one.</p>
         </div></div>
+        <div class="mk-ask" id="mk-ask" hidden role="alertdialog" aria-labelledby="mk-h">
+          <h3 id="mk-h">This is a sender key, not a file</h3>
+          <p>You opened a sender's private control link. It cannot open a file. It lets whoever holds it pause, change or delete one send.</p>
+          <p><strong>Someone sent you this to open a file?</strong> Then they sent the wrong link. Ask them for the link to share, and tell them their sender key is now known to others.</p>
+          <div class="actions"><button class="btn btn-light" type="button" id="mk-no">I was sent this by mistake</button><button class="btn" type="button" id="mk-take">This is my send: add its controls here</button></div>
+        </div>
         <p class="msg" id="key-msg" role="status"></p>
         <p class="notice" id="sent-empty">Nothing here yet. Sends appear here after you make them, or when you open a sender key link.</p>
       <section class="card frame step" id="sent-card" hidden>

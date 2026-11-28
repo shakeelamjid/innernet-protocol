@@ -124,7 +124,8 @@ CREATE TABLE IF NOT EXISTS send_access (file TEXT NOT NULL, device TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS send_quotes (amount INTEGER PRIMARY KEY, file TEXT NOT NULL, device TEXT NOT NULL, pay_by INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS send_room_seen (file TEXT NOT NULL, device TEXT NOT NULL, seen_at INTEGER NOT NULL, PRIMARY KEY (file, device))
 """
-ADDED = {"kind": "TEXT NOT NULL DEFAULT 'file'", "open_after": "INTEGER NOT NULL DEFAULT 0", "receipt": "INTEGER NOT NULL DEFAULT 0",
+SHORT = re.compile(r"^[A-Za-z0-9]{8}$")
+ADDED = {"short": "TEXT", "kind": "TEXT NOT NULL DEFAULT 'file'", "open_after": "INTEGER NOT NULL DEFAULT 0", "receipt": "INTEGER NOT NULL DEFAULT 0",
          "reply_on": "INTEGER NOT NULL DEFAULT 0", "reply": "TEXT", "control": "INTEGER NOT NULL DEFAULT 0",
          "price": "INTEGER NOT NULL DEFAULT 0", "pay_by": "INTEGER NOT NULL DEFAULT 0", "paid_at": "INTEGER NOT NULL DEFAULT 0",
          "open_until": "INTEGER NOT NULL DEFAULT 0", "holders": "INTEGER NOT NULL DEFAULT 0", "need": "INTEGER NOT NULL DEFAULT 0",
@@ -146,6 +147,7 @@ def migrate(store) -> None:
     for name, kind in ADDED.items():
         if name not in have:
             store.x(f"ALTER TABLE send_files ADD COLUMN {name} {kind}")
+    store.x("CREATE UNIQUE INDEX IF NOT EXISTS send_short ON send_files(short) WHERE short IS NOT NULL")
     if "kind" not in {r["name"] for r in store.q("PRAGMA table_info(send_tokens)")}:
         store.x("ALTER TABLE send_tokens ADD COLUMN kind TEXT NOT NULL DEFAULT 'real'")
     if store.one("SELECT COUNT(*) AS n FROM send_totals")["n"] == 0:      # first run: count what is on record
@@ -984,7 +986,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         return {"on": lim["on"], "max_bytes": lim["max_bytes"], "note_bytes": NOTE_BYTES, "part": PART, "free_keep": lim["max_keep"],
                 "tier": "all" if lim["all_rules"] else "paid" if payto else "free", "pin_tries": PIN_TRIES,
                 "paid": {"on": bool(payto) and not lim["all_rules"], "max_bytes": lim["paid_max_bytes"], "max_keep": lim["paid_max_keep"],
-                         "to": payto, "network": NETWORK_NAMES.get(network, network), "sale": sale_public(), "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
+                         "to": payto, "network": NETWORK_NAMES.get(network, network), "short_base": os.environ.get("INNERNET_SEND_SHORT_BASE", "").strip() or None, "sale": sale_public(), "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
                          "grace": GRACE, "spread": {"k": SPREAD_K, "min": SPREAD_MIN, "max": SPREAD_MAX, "machines": machine_count()}, "plan": [[usdc(prices()[f"plan_{r}_{t}"]) for t in TERMS] for r in range(3)],
                          "prices": {k: usdc(v) for k, v in prices().items()}}}
 
@@ -1012,6 +1014,13 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         fid = str(d.get("id", ""))
         if not ID.match(fid):
             raise HTTPException(422, "id must be 32 hex characters")
+        short = d.get("short")
+        if short is not None:
+            short = str(short)
+            if not SHORT.match(short):
+                raise HTTPException(422, "a short code is 8 letters and digits")
+            if store.one("SELECT 1 FROM send_files WHERE short=?", (short,)):
+                raise HTTPException(409, "that short code is taken; make another")
         try:
             size, parts = int(d["size"]), int(d["parts"])
         except (KeyError, TypeError, ValueError):
@@ -1066,6 +1075,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             store.x("INSERT INTO send_approvals(file, idx, token_hash) VALUES (?,?,?)", (fid, i, h))
         if x["extras"].get("name"):
             store.x("INSERT INTO send_names(name, file) VALUES (?,?)", (x["extras"]["name"], fid))
+        if short:
+            store.x("UPDATE send_files SET short=? WHERE id=?", (short, fid))
         open(path(fid), "wb").close()
         os.chmod(path(fid), 0o600)
         P0 = prices()
@@ -1579,6 +1590,19 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
     @app.get(P + "/send/n/{name}")
     def named_page(name: str):
         return page("send-open.html")
+
+    # Short links: innernetcorp.com/s/<8 letters and digits>#<secret>. The website sends /s/<code> here;
+    # the part after # never reaches any server, so the short code names the send, never its key.
+    @app.get(P + "/send/s/{code}")
+    def short_page(code: str):
+        return page("send-open.html")
+
+    @app.get(api + "/short/{code}")
+    def short_link(code: str):
+        r = store.one("SELECT id FROM send_files WHERE short=?", (code,)) if SHORT.match(code) else None
+        if r is None:
+            raise HTTPException(404, "no send has that link")
+        return {"id": r["id"]}
 
     @app.get(api + "/names/{name}")
     def named(name: str):
