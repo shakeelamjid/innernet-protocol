@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/send-core.js" defer></script>
   <script src="static/send-store.js" defer></script>
+  <script src="static/send-qr.js" defer></script>
   <script src="static/wallet.js" defer></script>
   <script src="static/send.js" defer></script>
 </head>
@@ -24,13 +25,17 @@
     <div class="wrap narrow">
       <div class="head"><div>
         <h1>Send it sealed</h1>
-        <p>A file or a note, sealed on this device before it leaves. It opens once, for the person with your link and your PIN, and is then destroyed. No account.</p>
+        <p>A file or a note, sealed on this device before it leaves. As it is, it opens once for the person with your link and your PIN, and is then destroyed. No account. Everything else is yours to set.</p>
+        <p class="note">Early release, not yet audited. Do not rely on it for anything you cannot afford to lose.</p>
       </div></div>
 
       <p class="notice" id="off" hidden></p>
 
       <form id="form" novalidate>
-        <section class="card frame step">
+        <nav class="wz-nav" id="wz-nav" aria-label="Steps"></nav>
+
+        <section class="card frame step wz" data-title="What">
+          <h2>What are you sending?</h2>
           <div class="seg" role="radiogroup" aria-label="What to send">
             <label><input type="radio" name="kind" value="file" checked><span>A file</span></label>
             <label><input type="radio" name="kind" value="note"><span>A note</span></label>
@@ -51,45 +56,225 @@
           <input id="from" class="field" maxlength="60" autocomplete="name">
           <label class="label" for="note">A line shown before opening (optional)</label>
           <input id="note" class="field" maxlength="200" autocomplete="off">
+          <div class="addons one paid">
+              <div class="addon">
+                <label class="check"><input id="o-summary" type="checkbox"><span><strong>A summary anyone with the link can read</strong><b class="price" data-p="summary"></b></span></label>
+                <p>Shown before opening, sealed like the rest. Use it to say what is inside without giving it away.</p>
+                <div class="sub" data-for="o-summary"><textarea id="o-summary-text" class="field area" rows="2" maxlength="1500" aria-label="Summary"></textarea></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-card" type="checkbox"><span><strong>Show it as a card</strong><b class="price" data-p="card"></b></span></label>
+                <p>The note appears as a designed card: a gift, an invitation, a voucher or a letter.</p>
+                <div class="sub" data-for="o-card"><select id="o-card-kind" class="field" aria-label="Card"><option value="gift">Gift</option><option value="invite">Invitation</option><option value="voucher">Voucher</option><option value="letter">Letter</option></select></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-collect" type="checkbox"><span><strong>Let others add to it</strong><b class="price" data-p="seat" data-s=" per person"></b></span></label>
+                <p>People with the link fill in your form and attach a file, sealed on their device. They can replace what they added until it opens. Tenders, quotations, client documents, exchanges, votes.</p>
+                <div class="sub" data-for="o-collect">
+                  <label class="label" for="o-fields">What should they fill in? One question per line.</label>
+                  <textarea id="o-fields" class="field area" rows="3" placeholder="Price&#10;Delivery in days&#10;Remarks"></textarea>
+                  <div class="inline"><input id="o-seats" class="field num" type="number" min="1" max="200" value="5"> people can add</div>
+                  <label class="check"><input id="o-attach" type="checkbox" checked> they may attach one file (up to 4 MB)</label>
+                  <label class="label" for="o-audience">Who reads what was added?</label>
+                  <select id="o-audience" class="field"><option value="owner">Only me</option><option value="all">Everyone with the link</option></select>
+                  <label class="check"><input id="o-anon" type="checkbox"> do not ask for names (for votes and surveys)</label>
+                  <div class="inline">Open them only when <input id="o-reveal" class="field num" type="number" min="0" max="200" value="0"> have added (0: no such rule)</div>
+                  <p class="note">If you set a "not before" time in step 3, everything added stays closed until then, to you as well, and nothing can be added after it.</p></div>
+              </div>
+          </div>
+          <label class="label">Or start from a ready-made use. You can change everything in the next steps.</label>
+          <div class="uses" id="recipes"></div>
+        </section>
+        <section class="card frame step wz" data-title="Lock">
+          <h2>How is it locked?</h2>
+          <div class="addons one">
+            <label class="addon lock"><span class="check"><input type="radio" name="lock" value="pin" checked><span><strong>One person, with a PIN</strong><b class="price">included</b></span></span>
+              <p>You send the link and tell the PIN. It opens on the first device that has both.</p></label>
+            <label class="addon lock paid"><span class="check"><input type="radio" name="lock" value="named"><span><strong>Several people, each with their own PIN</strong><b class="price" data-p="recipient" data-s=" per person"></b></span></span>
+              <p>The same link for all, a different PIN for each person you name. You see who opened it. It can also pass from one person to the next if it is not claimed in time.</p></label>
+            <label class="addon lock paid"><span class="check"><input type="radio" name="lock" value="keys"><span><strong>Several people together, each with a key</strong><b class="price" data-p="holder" data-s=" per person"></b></span></span>
+              <p>One link for everyone and a separate key for each person you name. It opens only when the keys are added together: each from their own device while all have the link open, or all on one screen.</p></label>
+            <label class="addon lock"><span class="check"><input type="radio" name="lock" value="open"><span><strong>Anyone with the link</strong><b class="price">included</b></span></span>
+              <p>The PIN travels inside the link. For documents many people must read, things others add to, sales, and printed seals. First to open wins if you allow one opening.</p></label>
+          </div>
+          <div class="paid" id="named-box" hidden>
+            <label class="label" for="o-rnames">Who gets a PIN? One name per line, up to 20.</label>
+            <textarea id="o-rnames" class="field area" rows="3" placeholder="First person&#10;Second person"></textarea>
+            <label class="check"><input id="o-succ" type="checkbox"> pass it on: each person has <input id="o-succ-days" class="field num" type="number" min="1" max="365" value="7"> days, then it goes to the next <b class="price" data-p="succession"></b></label>
+          </div>
+          <input id="o-split" type="checkbox" hidden>
+          <div class="paid">
+                <div class="sub" data-for="o-split" id="keys-box">
+                  <label class="label" for="o-names">Who holds a key? One name per line, any number from 2 to 20.</label>
+                  <textarea id="o-names" class="field area" rows="4" placeholder="Kamran&#10;Sara&#10;Ali&#10;Mona"></textarea>
+                  <div class="inline"><label class="check"><input id="o-all" type="checkbox" checked> all of the keys are needed</label>
+                    <span id="o-need-box" hidden>any <input id="o-need" class="field num" type="number" min="2" max="10" value="2"> of the keys are enough</span></div>
+                </div>
+          </div>
+          <div class="addons one paid" id="pin-extras">
+              <div class="addon">
+                <label class="check"><input id="o-forward" type="checkbox"><span><strong>More than one device</strong><b class="price" data-p="forward"></b></span></label>
+                <p>By default only the first device that opens it can open it again. This lets any device with link and PIN open it.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-approve" type="checkbox"><span><strong>Approvers must release it first</strong><b class="price" data-p="approver" data-s=" per approver"></b></span></label>
+                <p>People you name approve the release from their own link. Approving shows them nothing. Until enough approve, it does not open.</p>
+                <div class="sub" data-for="o-approve">
+                  <label class="label" for="o-anames">Approvers, one name per line (up to 10)</label>
+                  <textarea id="o-anames" class="field area" rows="2"></textarea>
+                  <div class="inline"><input id="o-aneed" class="field num" type="number" min="1" max="10" value="1"> of them must approve</div></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-pay" type="checkbox"><span><strong>It opens after payment</strong></span></label>
+                <p>The reader pays you directly, in USDC on Base, to your own address. Nothing passes through us. You pay a listing fee of 5% of what the lock can take in.</p>
+                <div class="sub" data-for="o-pay">
+                  <label class="label" for="o-pay-mode">How</label>
+                  <select id="o-pay-mode" class="field"><option value="each">Each reader pays once</option><option value="crowd">It opens for everyone when a target is reached</option><option value="period">Each reader pays per period (you post new versions)</option></select>
+                  <div class="inline"><input id="o-pay-price" class="field num" type="number" min="0.01" step="0.01" value="5"> USDC <span id="o-pay-price-l">per reader</span></div>
+                  <div class="inline" id="o-pay-target-box" hidden>target <input id="o-pay-target" class="field num" type="number" min="1" step="1" value="100"> USDC</div>
+                  <div class="inline" id="o-pay-period-box" hidden>every <input id="o-pay-period" class="field num" type="number" min="1" max="365" value="30"> days</div>
+                  <div class="inline">at most <input id="o-pay-buyers" class="field num" type="number" min="1" max="1000" value="10"> readers</div>
+                  <label class="label" for="o-pay-to">Your receiving address on Base (public address only)</label>
+                  <input id="o-pay-to" class="field" placeholder="0x…" autocomplete="off" spellcheck="false"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-duress" type="checkbox"><span><strong>Duress PIN</strong><b class="price" data-p="duress"></b></span></label>
+                <p>A second PIN you can give up under pressure. It opens a harmless decoy you write here, and tells you it was used.</p>
+                <div class="sub" data-for="o-duress"><textarea id="o-decoy" class="field area" rows="2" maxlength="2000" placeholder="What the decoy says" aria-label="Decoy text"></textarea></div>
+              </div>
+          </div>
+        </section>
+        <section class="card frame step wz" data-title="When">
+          <h2>When can it be opened?</h2>
+          <p>As it is: as soon as it is sent.</p>
+          <div class="addons one paid">
+              <div class="addon">
+                <label class="check"><input id="o-win-a" type="checkbox"><span><strong>Not before</strong><b class="price" data-p="open_after"></b></span></label>
+                <p>The keeper holds its part until a date and time. Before that, link and PIN open nothing.</p>
+                <div class="sub" data-for="o-win-a"><input id="o-after" class="field" type="datetime-local" aria-label="Opens after"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-win-b" type="checkbox"><span><strong>Not after</strong><b class="price" data-p="open_until"></b></span></label>
+                <p>The window closes at a date and time. Unopened by then, it is destroyed.</p>
+                <div class="sub" data-for="o-win-b"><input id="o-until" class="field" type="datetime-local" aria-label="Closes at"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-checkin" type="checkbox"><span><strong>Release if I stop checking in</strong><b class="price" data-p="checkin"></b></span></label>
+                <p>The keeper holds its part while you check in from this browser. If you go silent, whoever holds the link and the PIN can open it.</p>
+                <div class="inline sub" data-for="o-checkin">I will check in every <input id="o-every" class="field num" type="number" min="1" max="90" value="30"> days</div>
+              </div>
+          </div>
+        </section>
+        <section class="card frame step wz" data-title="Life">
+          <h2>How long is it kept, and how often can it be opened?</h2>
+          <p>One price covers the size and the time. To keep it longer later, you renew at the same plan price.</p>
+          <div class="plan paid" id="plan" role="radiogroup" aria-label="Storage plan"></div>
+          <p class="note">The row is set by the size of what you send. Seven days up to 10 MB is free. A paid send that is not renewed is locked for 3 days, then destroyed.</p>
+          <div class="addons one paid">
+              <div class="addon">
+                <label class="check"><input id="o-many" type="checkbox"><span><strong>More than one opening</strong><b class="price" data-p="opening" data-s=" each extra"></b></span></label>
+                <p>Set exactly how many times it opens, or let it open any number of times until it ends.</p>
+                <div class="inline sub" data-for="o-many"><input id="o-opens" class="field num" type="number" min="2" max="1000" value="3"> openings <label class="check"><input id="o-any" type="checkbox"> any number <b class="price" data-p="unlimited"></b></label></div>
+              </div>
+          </div>
+          <div class="addons one paid">
+              <div class="addon">
+                <label class="check"><input id="o-versions" type="checkbox"><span><strong>New versions on the same link</strong><b class="price" data-p="version" data-s=" each"></b></span></label>
+                <p>Replace what is behind the link later, without sending a new link.</p>
+                <div class="sub" data-for="o-versions"><div class="inline"><input id="o-versions-n" class="field num" type="number" min="1" max="50" value="3"> new versions</div></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-viewonly" type="checkbox"><span><strong>Shown on screen only</strong><b class="price" data-p="view_only"></b></span></label>
+                <p>Pictures and text are shown, not saved, with your name across them. A reader can still photograph the screen.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-timer" type="checkbox"><span><strong>Leaves the screen after a set time</strong><b class="price" data-p="view_timer"></b></span></label>
+                <p>Once opened, it is visible for this long, then it is cleared from the page.</p>
+                <div class="sub" data-for="o-timer"><div class="inline"><input id="o-timer-min" class="field num" type="number" min="1" max="1440" value="5"> minutes</div></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-presence" type="checkbox"><span><strong>Visible only while all are present</strong><b class="price" data-p="presence"></b></span></label>
+                <p>With a key for each person: the content stays on screen only while enough holders still have the link open.</p>
+              </div>
+          </div>
+          <p class="note">It is destroyed after its last opening or at the end of its storage time, whichever comes first.</p>
+        </section>
+        <section class="card frame step wz" data-title="Extras">
+          <h2>What comes back to you?</h2>
+          <p>As it is: you see that it was opened, not when.</p>
+          <div class="addons one paid">
+              <div class="addon">
+                <label class="check"><input id="o-receipt" type="checkbox"><span><strong>Read receipt</strong><b class="price" data-p="receipt"></b></span></label>
+                <p>See the date and time of every opening.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-reply" type="checkbox"><span><strong>Sealed reply</strong><b class="price" data-p="reply"></b></span></label>
+                <p>The receiver can answer with one message only you can read.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-control" type="checkbox"><span><strong>Take it back</strong><b class="price" data-p="control"></b></span></label>
+                <p>Destroy it yourself at any moment before it ends.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-record" type="checkbox"><span><strong>Signed record</strong><b class="price" data-p="record"></b></span></label>
+                <p>A statement signed by the registry: when it was sealed, each opening, or that it ended unopened. Anyone can check the signature. Link holders can download it too.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-witness" type="checkbox"><span><strong>Witness link</strong><b class="price" data-p="witness"></b></span></label>
+                <p>A link for someone who should see what happens to this send, and get the signed record, without being able to open it.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-alarm" type="checkbox"><span><strong>Alarm when it is opened</strong><b class="price" data-p="alarm"></b></span></label>
+                <p>A message goes out the moment it is opened, approved, released or a duress PIN is used.</p>
+                <div class="sub" data-for="o-alarm">
+                  <label class="label" for="o-alarm-url">Send it to this web address (webhook, https)</label>
+                  <input id="o-alarm-url" class="field" placeholder="https://…" autocomplete="off" spellcheck="false"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-recovery" type="checkbox"><span><strong>Recovery code</strong><b class="price" data-p="recovery"></b></span></label>
+                <p>A code that moves your control of this send to another browser if you lose this one. Needed for check-in over long periods.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-origin" type="checkbox"><span><strong>Signed origin</strong><b class="price" data-p="origin"></b></span></label>
+                <p>Receivers see that it comes from your domain. You prove the domain by publishing a short text file on it.</p>
+                <div class="sub" data-for="o-origin"><input id="o-origin-dom" class="field" placeholder="example.com" autocomplete="off" spellcheck="false" aria-label="Your domain"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-name" type="checkbox"><span><strong>Your own link name</strong><b class="price" data-p="name"></b></span></label>
+                <p>A readable link instead of a long code.</p>
+                <div class="sub" data-for="o-name"><input id="o-name-v" class="field" placeholder="acme-tender-2027" autocomplete="off" spellcheck="false" aria-label="Link name"></div>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-chain" type="checkbox"><span><strong>May be handed on, with a recorded chain</strong><b class="price" data-p="chain"></b></span></label>
+                <p>Whoever opens it can seal it on to the next person. Each hand is recorded and shown.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-qr" type="checkbox"><span><strong>Printed seal</strong><b class="price" data-p="qr"></b></span></label>
+                <p>A QR code of the link to print on paper or a product. Anyone who scans it sees the original and that it was not changed.</p>
+              </div>
+          </div>
         </section>
 
-        <section class="card frame step">
-          <h2>Free, as it is</h2>
-          <ul class="plain">
-            <li>It opens <strong>once</strong>, on the first device that has both your link and your PIN.</li>
-            <li>Right after that opening it is destroyed.</li>
-            <li>If nobody opens it within <span id="keep-days">7 days</span>, it is destroyed.</li>
-          </ul>
-          <details class="more" id="more">
-            <summary>Add to it <span class="dim" id="more-hint">each addition has a price, paid once, before sending</span></summary>
-            <p class="notice" id="paid-off" hidden>Paid additions are not switched on on this registry yet. The free send works.</p>
-            <div class="opts" id="opts">
-              <label class="opt"><span>Keep it for <b class="price" data-p="life_30d_100mb" data-s=" per 30 days per 100 MB"></b></span>
-                <span class="inline"><input id="o-days" class="field num" type="number" min="1" max="365" value="7" inputmode="numeric"> days</span></label>
-              <div class="opt"><span>Openings <b class="price" data-p="opening" data-s=" each after the first"></b></span>
-                <span class="inline"><input id="o-opens" class="field num" type="number" min="1" max="1000" value="1" inputmode="numeric">
-                  <label class="check"><input id="o-any" type="checkbox"> any number <b class="price" data-p="unlimited"></b></label></span></div>
-              <label class="opt"><span>Open only after <b class="price" data-p="open_after"></b></span>
-                <input id="o-after" class="field" type="datetime-local"></label>
-              <label class="check"><input id="o-forward" type="checkbox"> It may be opened on more than one device <b class="price" data-p="forward"></b></label>
-              <label class="check"><input id="o-receipt" type="checkbox"> Read receipt: tell me when it was opened <b class="price" data-p="receipt"></b></label>
-              <label class="check"><input id="o-reply" type="checkbox"> The receiver can send one sealed reply <b class="price" data-p="reply"></b></label>
-              <label class="check"><input id="o-control" type="checkbox"> I can take it back before it is opened <b class="price" data-p="control"></b></label>
-            </div>
-          </details>
+        <section class="card frame step wz" data-title="Review">
+          <h2>Review</h2>
+          <ul class="plain" id="review"></ul>
           <div class="meter" id="meter" aria-live="polite">
             <ul id="meter-lines"></ul>
-            <p class="meter-total"><span>Total, paid before sending</span><strong id="meter-total">Free</strong></p>
+            <p class="meter-total"><span>Today, paid before sending</span><strong id="meter-total">Free</strong></p>
+            <p class="meter-renew" id="meter-renew"></p>
           </div>
-        </section>
-
-        <section class="card frame step">
-          <div class="actions">
-            <button class="btn btn-light" id="go" type="submit">Seal and send</button>
-          </div>
-          <p class="msg" id="msg" role="status"></p>
           <p class="note">These rules control what the network releases. Once someone has opened it, they can keep what they saw.</p>
         </section>
+
+        <p class="notice" id="paid-off" hidden>Paid additions are not switched on on this registry yet. The free send works.</p>
+        <div class="wz-foot">
+          <button class="btn" id="wz-back" type="button">Back</button>
+          <span class="wz-sum" id="wz-sum"></span>
+          <button class="btn" id="wz-free" type="button">Send it free now</button>
+          <button class="btn btn-light" id="wz-next" type="button">Next</button>
+          <button class="btn btn-light" id="go" type="submit">Seal and send</button>
+        </div>
+        <p class="msg" id="msg" role="status"></p>
       </form>
 
       <section class="card frame step" id="work" hidden>
@@ -116,11 +301,20 @@
 
       <section class="card frame step" id="done" hidden>
         <h2>Sealed and stored</h2>
-        <p>Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.</p>
-        <label class="label" for="link">Link</label>
-        <div class="copyable"><code id="link"></code><button class="btn btn-sm" type="button" data-copy="link">Copy</button></div>
+        <p id="done-lede">Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.</p>
+        <div id="one-link">
+          <label class="label" for="link">Link</label>
+          <div class="copyable"><code id="link"></code><button class="btn btn-sm" type="button" data-copy="link">Copy</button></div>
+        </div>
+        <div id="many-links" hidden>
+          <label class="label">A key for each person. Give each one only their own key.</label>
+          <ul class="holders" id="links"></ul>
+        </div>
+        <div id="pin-box">
         <label class="label" for="pin">PIN</label>
         <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
+        </div>
+        <div id="artifacts"></div>
         <div class="stored" id="stored">
           <h3>What you set</h3>
           <ul class="plain" id="set-lines"></ul>
@@ -136,7 +330,7 @@
 
       <section class="card frame step" id="sent-card" hidden>
         <h2>What you sent from this browser</h2>
-        <p class="note">This list is kept only in this browser.</p>
+        <p class="note">This list is kept only in this browser. <button class="btn btn-sm" id="exp" type="button">Save a backup file</button> <label class="btn btn-sm" for="imp">Load a backup file</label><input id="imp" type="file" accept="application/json" hidden></p>
         <ul class="sent" id="sent"></ul>
       </section>
 

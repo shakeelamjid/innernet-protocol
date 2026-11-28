@@ -91,7 +91,100 @@
     return { ts: ts, sig: b64u(sig) };
   }
 
-  return { PART: PART, TAG: TAG, b64u: b64u, unb64u: unb64u, hex: hex, random: random, newPin: newPin, linkKeys: linkKeys, pinTag: pinTag,
+  /* Split custody (Shamir, GF(2^8)): a secret cut into n parts, any k of which rebuild it; fewer than k
+     reveal nothing. Done here, on the sender's device; no server ever sees a part. */
+  const EXP = new Uint8Array(510), LOG = new Uint8Array(256);
+  (function () { let x = 1; for (let i = 0; i < 255; i++) { EXP[i] = EXP[i + 255] = x; LOG[x] = i; x ^= (x << 1) ^ (x & 0x80 ? 0x11b : 0); x &= 0xff; } })();
+  function mul(a, b) { return a && b ? EXP[LOG[a] + LOG[b]] : 0; }
+  function div(a, b) { return a ? EXP[LOG[a] + 255 - LOG[b]] : 0; }
+  function split(secret, n, k) {
+    if (!(k >= 2 && n >= k && n <= 255)) throw new Error('split: 2 <= k <= n <= 255');
+    const shares = []; for (let i = 1; i <= n; i++) shares.push({ x: i, y: new Uint8Array(secret.length) });
+    for (let b = 0; b < secret.length; b++) {
+      const c = random(k - 1);                               // the polynomial's random coefficients
+      for (let i = 0; i < n; i++) { let y = 0; for (let j = k - 2; j >= 0; j--) y = mul(y, shares[i].x) ^ c[j]; shares[i].y[b] = mul(y, shares[i].x) ^ secret[b]; }
+    }
+    return shares.map(function (sh) { return 'k' + k + '.' + sh.x + '.' + b64u(sh.y); });
+  }
+  function parsePart(text) {
+    const m = String(text).trim().match(/(?:#|^)k(\d+)\.(\d+)\.([A-Za-z0-9_-]+)$/);
+    return m ? { k: Number(m[1]), x: Number(m[2]), y: unb64u(m[3]) } : null;
+  }
+  function combine(parts) {
+    const len = parts[0].y.length, out = new Uint8Array(len);
+    for (let b = 0; b < len; b++) {
+      let v = 0;
+      for (let i = 0; i < parts.length; i++) {
+        let num = 1, den = 1;
+        for (let j = 0; j < parts.length; j++) if (j !== i) { num = mul(num, parts[j].x); den = mul(den, parts[i].x ^ parts[j].x); }
+        v ^= mul(parts[i].y[b], div(num, den));
+      }
+      out[b] = v;
+    }
+    return out;
+  }
+
+  /* With split custody the holders' keys replace the PIN: the PIN the key schedule needs is made from the secret. */
+  async function jointPin(secret) {
+    const d = new Uint8Array(await S.digest('SHA-256', concat(enc.encode(DOMAIN + '/joint-pin'), secret)));
+    return String(((d[0] << 24 | d[1] << 16 | d[2] << 8 | d[3]) >>> 0) % 1000000).padStart(6, '0');
+  }
+  function jointLink(k, names, room) { return 'j' + b64u(enc.encode(JSON.stringify({ k: k, names: names, r: b64u(room) }))); }
+  /* The opening room. Everyone with the link holds the room secret; the keeper does not. A holder's key is
+     sent to the keeper sealed under the room secret (key XOR a pad made for that seat). The keeper knows
+     the hash of each sealed key from the start, so it can check a key is the right person's without being
+     able to read it, and it hands the sealed keys out only when enough are in. */
+  async function room(roomSecret, id) {
+    const salt = unhex(id), auth = await hkdf(roomSecret, salt, 'room-auth', 32);
+    return { auth: b64u(auth), authHash: hex(await S.digest('SHA-256', auth)),
+      seal: async function (part) { const pad = await hkdf(roomSecret, salt, 'room-seat-' + part.x, part.y.length), out = new Uint8Array(pad.length); for (let i = 0; i < pad.length; i++) out[i] = pad[i] ^ part.y[i]; return out; },
+      open: async function (x, k, sealed) { const pad = await hkdf(roomSecret, salt, 'room-seat-' + x, sealed.length), y = new Uint8Array(pad.length); for (let i = 0; i < pad.length; i++) y[i] = pad[i] ^ sealed[i]; return { k: k, x: x, y: y }; } };
+  }
+  async function sha256hex(bytes) { return hex(await S.digest('SHA-256', bytes)); }
+  function parseJoint(hash) {
+    const m = String(hash).match(/^#?j([A-Za-z0-9_-]+)$/);
+    if (!m) return null;
+    try { const o = JSON.parse(dec.decode(unb64u(m[1]))); if (!(o && o.k >= 2 && Array.isArray(o.names) && o.names.length >= o.k && o.r)) return null; o.room = unb64u(o.r); return o; } catch (e) { return null; }
+  }
+
+  /* Named recipients: the content is sealed once with a random content key; each recipient's own PIN
+     opens a wrapped copy of that key. */
+  async function wrapKey(pinKey, id, raw) { return sealSmall(pinKey, id, 'wrap', { k: b64u(raw) }); }
+  async function unwrapKey(pinKey, id, wrapped) { return aes(unb64u((await openSmall(pinKey, id, 'wrap', wrapped)).k)); }
+  async function subKey(secret, id, label) { return aes(await hkdf(secret, unhex(id), label, 32)); }
+  /* Contributions by others. sealWith: under a key everyone with the link has. sealTo: to the sender's
+     public key (ECDH P-256 with a fresh key, then AES-256-GCM), so only the sender can read it. */
+  async function sealWith(key, id, bytes) {
+    const iv = random(12);
+    return concat(iv, new Uint8Array(await S.encrypt({ name: 'AES-GCM', iv: iv, additionalData: aad(id, 'add', 0, true) }, key, bytes)));
+  }
+  async function openWith(key, id, blob) {
+    return new Uint8Array(await S.decrypt({ name: 'AES-GCM', iv: blob.subarray(0, 12), additionalData: aad(id, 'add', 0, true) }, key, blob.subarray(12)));
+  }
+  async function newBoxKey(extractable) { return S.generateKey({ name: 'ECDH', namedCurve: 'P-256' }, !!extractable, ['deriveBits']); }
+  async function boxKey(mine, theirRaw, id) {
+    const pub = await S.importKey('raw', theirRaw, { name: 'ECDH', namedCurve: 'P-256' }, false, []);
+    return aes(await hkdf(new Uint8Array(await S.deriveBits({ name: 'ECDH', public: pub }, mine, 256)), unhex(id), 'box', 32));
+  }
+  async function sealTo(pubRaw, id, bytes) {
+    const eph = await newBoxKey(true), ephPub = new Uint8Array(await S.exportKey('raw', eph.publicKey));
+    return concat(ephPub, await sealWith(await boxKey(eph.privateKey, pubRaw, id), id, bytes));
+  }
+  async function openFrom(pair, id, blob) { return openWith(await boxKey(pair.privateKey, blob.subarray(0, 65), id), id, blob.subarray(65)); }
+  /* One contribution: the answers (JSON) and at most one attached file, in one byte string. */
+  function pack(obj, fileBytes) {
+    const head = enc.encode(JSON.stringify(obj)), out = new Uint8Array(4 + head.length + (fileBytes ? fileBytes.length : 0));
+    new DataView(out.buffer).setUint32(0, head.length); out.set(head, 4); if (fileBytes) out.set(fileBytes, 4 + head.length);
+    return out;
+  }
+  function unpack(bytes) {
+    const n = new DataView(bytes.buffer, bytes.byteOffset).getUint32(0);
+    return { obj: JSON.parse(dec.decode(bytes.subarray(4, 4 + n))), file: bytes.subarray(4 + n) };
+  }
+
+  return { aesKey: aes, wrapKey: wrapKey, unwrapKey: unwrapKey, subKey: subKey, sealWith: sealWith, openWith: openWith, newBoxKey: newBoxKey,
+    sealTo: sealTo, openFrom: openFrom, pack: pack, unpack: unpack, concat: concat,
+    room: room, sha256hex: sha256hex, jointPin: jointPin, jointLink: jointLink, parseJoint: parseJoint, split: split, combine: combine, parsePart: parsePart, PART: PART, TAG: TAG, b64u: b64u, unb64u: unb64u, hex: hex, random: random, newPin: newPin, linkKeys: linkKeys, pinTag: pinTag,
     fileKey: fileKey, sealSmall: sealSmall, openSmall: openSmall, partCount: partCount, sealPart: sealPart, openPart: openPart,
     newDeviceKey: newDeviceKey, publicRaw: publicRaw, signRequest: signRequest, newId: function () { return hex(random(16)); } };
 });

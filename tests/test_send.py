@@ -222,6 +222,11 @@ const C = require(process.argv[1]);
   const keys = await C.linkKeys(secret, id);
   out.preview = (await C.openSmall(keys.preview, id, 'preview', await C.sealSmall(keys.preview, id, 'preview', { from: 'Asma' }))).from;
   out.authHash = keys.authHash; out.auth = C.b64u(keys.auth); out.tag = await C.pinTag(keys, pin);
+  const keys4 = C.split(secret, 5, 3).map(C.parsePart);
+  out.joint = C.hex(C.combine([keys4[4], keys4[1], keys4[2]])) === C.hex(secret) && C.hex(C.combine([keys4[0], keys4[3]])) !== C.hex(secret)
+    && C.parseJoint('#' + C.jointLink(3, ['Kamran', 'Sara', 'Ali', 'Mona', 'Zed'], C.random(16))).names[4] === 'Zed' && /^[0-9]{6}$/.test(await C.jointPin(secret));
+  const rm = await C.room(C.random(16), id), sealedKey = await rm.seal(keys4[1]);
+  out.room = C.hex((await rm.open(2, 3, sealedKey)).y) === C.hex(keys4[1].y) && C.hex(sealedKey) !== C.hex(keys4[1].y) && rm.authHash.length === 64;
   const d = await C.newDeviceKey(true);
   out.pub = await C.publicRaw(d); out.id = id; out.signed = await C.signRequest(d, 'open', id);
   console.log(JSON.stringify(out));
@@ -231,6 +236,8 @@ const C = require(process.argv[1]);
     res = subprocess.run(["node", "-e", script, str(core)], capture_output=True, text=True, timeout=120)
     assert res.returncode == 0, res.stderr
     out = json.loads(res.stdout)
+    assert out["room"]                                    # a key sealed for the opening room opens with the room secret
+    assert out["joint"]                                   # 3 of 5 keys rebuild the secret, 2 do not
     assert out["pin"] and out["same"] and out["sizes"] == [send.PART + send.TAG, 77 + send.TAG]
     assert out["wrongPin"] and out["wrongShare"] and out["wrongLink"] and out["swapped"] and out["cutShort"]
     assert out["preview"] == "Asma" and len(out["tag"]) == 64
@@ -302,8 +309,14 @@ def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tm
     owner, rx = Device(), Device()
     opts = {"keep": 30 * 86400, "max_opens": 3, "receipt": True, "reply": True, "control": True, "forward": True}
     q = client.post(API + "/quote", json={"plain": 20 << 20, **opts}, headers=H).json()
-    # 100 MB tier 0.05 + 30 days 0.05 + 2 more openings 0.02 + passing on 0.05 + receipt 0.03 + reply 0.05 + take back 0.05
-    assert q["micro"] == 300_000 and q["total"] == "0.300000" and len(q["lines"]) == 7
+    # plan (up to 100 MB, 30 days) 1.50 + 2 more openings 0.10 + devices 0.10 + receipt 0.05 + reply 0.10 + take back 0.10
+    assert q["micro"] == 1_950_000 and q["total"] == "1.950000" and len(q["lines"]) == 6
+    wide = client.post(API + "/quote", json={"plain": 100, "keep": 100 * 86400, "holders": 3, "need": 2, "checkin_days": 30,
+                                             "open_until": int(time.time()) + 50 * 86400}, headers=H).json()
+    assert wide["micro"] == 4_000_000 + 750_000 + 1_000_000 + 100_000              # 1-year plan (covers 100 days), 3 keys, check-in, closing date
+    for bad in ({"holders": 1, "need": 1}, {"holders": 3, "need": 4}, {"checkin_days": 30}, {"open_until": int(time.time()) + 60},
+                {"checkin_days": 5, "keep": 30 * 86400, "open_after": int(time.time()) + 86400}):
+        assert client.post(API + "/quote", json={"plain": 100, **bad}, headers=H).status_code == 422, bad
     assert client.post(API + "/quote", json={"plain": 100}, headers=H).json()["micro"] == 0
     plain = 84
     body = {"id": os.urandom(16).hex(), "size": plain + send.TAG, "parts": 1, "auth_hash": hashlib.sha256(b"A" * 32).hexdigest(),
@@ -311,7 +324,7 @@ def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tm
             "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), **opts}
     r = client.post(API + "/files", json=body, headers=H).json()
     fid, pay = r["id"], r["pay"]
-    assert 250_000 < pay["micro"] < 251_000 and pay["to"] == FEE_WALLET and pay["chain_id"] == 84532      # price + identifying digits
+    assert 950_000 < pay["micro"] < 951_000 and [x["usdc"] for x in r["renew"]] == ["0.500000", "1.250000", "4.000000"] and pay["to"] == FEE_WALLET and pay["chain_id"] == 84532      # price + identifying digits
     up = {**H, "X-Send-Upload": r["upload"]}
     assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers=up).status_code == 402    # paid before upload
     check = lambda **kw: client.post(API + f"/files/{fid}/pay", json={**owner.sign("pay", fid), **kw}, headers=H)   # noqa: E731
@@ -334,23 +347,95 @@ def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tm
     assert st["reply"] == send.b64u(b"thanks") and st["paid"] == pay["amount"] and all(e["ts"] for e in st["events"])
     # Extending: priced, paid the same way (here named by its transaction), then the end moves.
     ext = client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 30}, headers=H).json()
-    assert 50_000 < ext["pay"]["micro"] < 51_000 and check().json()["paid"] is False
+    assert 500_000 < ext["pay"]["micro"] < 501_000 and check().json()["paid"] is False
     chain.pay(FEE_WALLET, ext["pay"]["micro"], 998)
     done = check(tx=chain.logs[-1]["transactionHash"]).json()
     assert done["paid"] is True and done["expires_at"] == st["expires_at"] + 30 * 86400
     chain.pay(FEE_WALLET, ext["pay"]["micro"], 999)                  # the same transaction is never counted twice
-    assert client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 400}, headers=H).status_code == 422
+    assert client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 0}, headers=H).status_code == 422
     stats = client.get(API + "/stats").json()
     assert stats["paid"] == 2 and stats["paid_usdc"] == send.usdc(pay["micro"] + ext["pay"]["micro"])
     # Unextended, it is destroyed at its end; taking it back works because it was paid for.
-    a.state.send_sweep(done["expires_at"] - 10)
+    a.state.send_sweep(done["expires_at"] + 10)                     # its time ended: locked, renewable, not yet destroyed
+    locked = info(client, fid).json()
+    assert locked["state"] == "live" and locked["locked"] is False          # (the clock itself has not moved in this test)
+    assert client.post(API + f"/files/{fid}/extend", json={**owner.sign("extend", fid), "days": 45}, headers=H).status_code == 422
+    a.state.send_sweep(done["expires_at"] + send.GRACE - 10)
     assert info(client, fid).json()["state"] == "live"
     assert client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H).json()["state"] == "dead"
     # An opening date holds the keeper part; an unpaid price lapses.
     later = int(time.time()) + 3 * 86400
     r2 = client.post(API + "/files", json={**body, "id": os.urandom(16).hex(), "open_after": later, "keep": 7 * 86400, "max_opens": 1,
                                            "receipt": False, "reply": False, "control": False, "forward": False}, headers=H).json()
-    assert 50_000 < r2["pay"]["micro"] < 51_000
+    assert 100_000 < r2["pay"]["micro"] < 101_000
     a.state.send_sweep(int(time.time()) + send.PAY_WINDOW + send.PAY_GRACE + 5)
     gone = client.post(API + f"/files/{r2['id']}/status", json=owner.sign("status", r2["id"]), headers=H).json()
     assert gone["state"] == "dead" and gone["reason"] == "not paid"
+
+
+def test_a_window_closes_and_a_held_send_is_released_when_the_sender_stops_checking_in(app):
+    client, a, tmp = app                                   # every rule allowed without payment
+    owner, rx = Device(), Device()
+    now = int(time.time())
+    fid, _ = make(client, owner, keep=30 * 86400, checkin_days=7)
+    assert info(client, fid).json()["held"] is True
+    assert open_(client, fid, rx).status_code == 403 and "checking in" in open_(client, fid, rx).text
+    assert client.post(API + f"/files/{fid}/checkin", json=rx.sign("checkin", fid), headers=H).status_code == 403    # only the sender
+    due = client.post(API + f"/files/{fid}/checkin", json=owner.sign("checkin", fid), headers=H).json()["checkin_due"]
+    assert now + 7 * 86400 - 5 <= due <= now + 7 * 86400 + 5
+    a.state.send_sweep(due + send.RELEASE_DELAY - 60)      # a missed check-in can be made good for a day
+    assert open_(client, fid, rx).status_code == 403
+    a.state.send_sweep(due + send.RELEASE_DELAY + 1)                            # the sender went silent: released to whoever holds link and PIN
+    assert info(client, fid).json()["held"] is False
+    assert client.post(API + f"/files/{fid}/checkin", json=owner.sign("checkin", fid), headers=H).status_code == 409
+    assert open_(client, fid, rx).status_code == 200
+    st = client.post(API + f"/files/{fid}/status", json=owner.sign("status", fid), headers=H).json()
+    assert "released: the sender did not check in" in [e["event"] for e in st["events"]]
+    # A window: not before, not after.
+    fid2, _ = make(client, owner, keep=30 * 86400, open_after=now + 86400, open_until=now + 3 * 86400, holders=3, need=2,
+                   room_hash="ab" * 32, seat_hashes=["cd" * 32] * 3)
+    i = info(client, fid2).json()
+    assert i["open_until"] == now + 3 * 86400 and i["holders"] == 3 and i["need"] == 2
+    assert open_(client, fid2, rx).status_code == 403
+    a.state.send_sweep(now + 3 * 86400 + 1)
+    assert info(client, fid2).json()["reason"] == "its opening window closed"
+
+
+def test_key_holders_open_together_from_their_own_places_within_one_window(app):
+    client, a, tmp = app
+    owner, holders, stranger = Device(), [Device() for _ in range(4)], Device()
+    room_auth, cts = b"R" * 32, [bytes([i]) * 32 for i in range(1, 5)]
+    fid, _ = make(client, owner, keep=30 * 86400, holders=4, need=3, room_hash=hashlib.sha256(room_auth).hexdigest(),
+                  seat_hashes=[hashlib.sha256(c).hexdigest() for c in cts])
+    st = client.post(API + f"/files/{fid}/status", json=owner.sign("status", fid), headers=H).json()
+    assert st["max_opens"] == 4 and st["forward"] is True              # one opening: each holder's place releases once
+    call = lambda dev, path="", **kw: client.post(API + f"/files/{fid}/room{path}", headers=H, json={   # noqa: E731
+        "room_auth": send.b64u(room_auth), "device_pub": dev.pub, **dev.sign("room", fid), **kw})
+    assert client.post(API + f"/files/{fid}/room", headers=H, json={"room_auth": send.b64u(b"x" * 32), "device_pub": stranger.pub,
+                                                                   **stranger.sign("room", fid)}).status_code == 403
+    s0 = call(holders[0]).json()
+    assert s0["here"] == 1 and s0["added"] == [] and s0["keys"] is None and s0["need"] == 3
+    assert call(holders[0], "/key", seat=1, ct=send.b64u(cts[1])).status_code == 403          # another person's key
+    assert call(holders[0], "/key", seat=1, ct=send.b64u(cts[0])).json()["added"] == [1]
+    s1 = call(holders[1], "/key", seat=2, ct=send.b64u(cts[1])).json()
+    assert s1["added"] == [1, 2] and s1["released"] is False and s1["keys"] is None            # nobody gets keys early
+    for d in holders[2:]:
+        call(d)
+    assert call(stranger).status_code == 429                                                   # four places at most
+    done = call(holders[2], "/key", seat=3, ct=send.b64u(cts[2])).json()
+    assert done["released"] is True and done["keys"] == {str(i + 1): send.b64u(cts[i]) for i in range(3)}
+    assert call(holders[0]).json()["keys"] is not None and call(holders[3]).json()["keys"] is None   # only to those who added a key
+    a.state.send_store.x("UPDATE send_files SET room_until=1 WHERE id=?", (fid,))                   # that opening is over
+    assert call(holders[0]).json()["added"] == []
+    # The window: keys that are not completed in time are cleared.
+    fid2, _ = make(client, owner, keep=30 * 86400, holders=2, need=2, room_hash=hashlib.sha256(room_auth).hexdigest(),
+                   seat_hashes=[hashlib.sha256(c).hexdigest() for c in cts[:2]])
+    call2 = lambda dev, path="", **kw: client.post(API + f"/files/{fid2}/room{path}", headers=H, json={   # noqa: E731
+        "room_auth": send.b64u(room_auth), "device_pub": dev.pub, **dev.sign("room", fid2), **kw})
+    assert call2(holders[0], "/key", seat=1, ct=send.b64u(cts[0])).json()["added"] == [1]
+    a.state.send_store.x("UPDATE send_room SET added_at=added_at-? WHERE file=?", (send.ROOM_WINDOW + 5, fid2))
+    assert call2(holders[1]).json()["added"] == []
+    # A key counts only while its place is live.
+    assert call2(holders[0], "/key", seat=1, ct=send.b64u(cts[0])).json()["added"] == [1]
+    a.state.send_store.x("UPDATE send_room_seen SET seen_at=seen_at-? WHERE file=? AND device=?", (send.ROOM_SEEN + 5, fid2, holders[0].pub))
+    assert call2(holders[1]).json()["added"] == []

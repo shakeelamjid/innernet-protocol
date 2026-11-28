@@ -27,7 +27,7 @@
     }
     return pair;
   }
-  const BASE = location.pathname.replace(/\/send(\/o\/[0-9a-f]+)?\/?$/, '');
+  const BASE = location.pathname.replace(/\/send(\/(o|n)\/[a-z0-9-]+)?\/?$/, '');
   async function api(method, path, body, headers) {
     const h = Object.assign({ 'X-Innernet': '1' }, headers || {});
     let payload = body;
@@ -92,7 +92,11 @@
       burn: function () { rows.forEach(function (r) { if (r.cells) Array.prototype.forEach.call(r.cells.children, function (c, k) { c.style.transitionDelay = (k * 40) + 'ms'; c.className = 'gone'; }); }); }
     };
   }
-  function when(ts) { return new Date(ts * 1000).toLocaleString(undefined, { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' }); }
+  function when(ts) {
+    const d = new Date(ts * 1000), o = { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' };
+    if (d.getFullYear() !== new Date().getFullYear()) o.year = 'numeric';
+    return d.toLocaleString(undefined, o);
+  }
   function left(ts) {
     const s = ts - Date.now() / 1000;
     if (s <= 0) return 'now';
@@ -106,7 +110,18 @@
     bits.push(r.forward ? 'May be passed on' : 'Not for passing on');
     return bits.join('. ') + '.';
   }
-  window.InnernetSendStore = {
+  /* The sender's own box key for a send others add to: only this browser can open what they add. */
+  async function boxKey(id, make) {
+    let pair = await run('keys', 'readonly', function (s) { return s.get('box-' + id); });
+    if (!pair && make) { pair = await C.newBoxKey(false); await run('keys', 'readwrite', function (s) { return s.put(pair, 'box-' + id); }); }
+    return pair;
+  }
+  function download(name, blob) {
+    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove();
+    setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
+  }
+  async function bytes(method, path, body, headers) { return new Uint8Array(await (await api(method, path, body, headers)).arrayBuffer()); }
+  window.InnernetSendStore = { boxKey: boxKey, download: download, bytes: bytes,
     BASE: BASE, api: api, put: put, usdc: usdc, steps: steps, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
     sent: function () { return run('sent', 'readonly', function (s) { return s.getAll(); }); },
     remember: function (rec) { return run('sent', 'readwrite', function (s) { return s.put(rec, rec.id); }); },

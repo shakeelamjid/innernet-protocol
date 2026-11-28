@@ -38,7 +38,7 @@ FLOW_TTL = 300
 MAX_BODY = 64 << 10
 DAY = 86400
 # connect-src: Base RPC (read-only calls from the payout page) and the WalletConnect relay (phone wallets).
-HTML_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; "
+HTML_CSP = ("default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data: blob:; font-src 'self'; "
             "connect-src 'self' https://mainnet.base.org https://sepolia.base.org wss://relay.walletconnect.org "
             "wss://relay.walletconnect.com https://*.walletconnect.org https://*.walletconnect.com https://*.reown.com; "
             "base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
@@ -908,7 +908,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
     x402_gateway.register(app, store=store, settings=settings, P=P, terms=terms,
                           **(x402 or {}))
     from . import send
-    send.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, limiter=limiter, page=page, rpc=rpc)
+    send.register(app, store=store, settings=settings, P=P, guard=guard, client_ip=client_ip, limiter=limiter, page=page, rpc=rpc,
+                  signer=registry_key)
 
     @app.post(P + "/api/enroll/options")
     async def enroll_options(request: Request):

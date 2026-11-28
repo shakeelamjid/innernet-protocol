@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="../../static/registry.css">
   <script src="../../static/send-core.js" defer></script>
   <script src="../../static/send-store.js" defer></script>
+  <script src="../../static/wallet.js" defer></script>
   <script src="../../static/send-open.js" defer></script>
 </head>
 <body>
@@ -16,7 +17,7 @@
     <div class="wrap">
       <a class="logo" href="/"><img src="../../static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Send</span></a>
       <span class="spacer"></span>
-      <a class="btn btn-sm" href="../../send">Send a file</a>
+      <a class="btn btn-sm" href="../../send">Send something</a>
     </div>
   </header>
   <main>
@@ -26,11 +27,47 @@
         <p id="lede">Checking the link…</p>
       </div></div>
 
+      <section class="card frame step" id="side" hidden>
+        <h2 id="side-title"></h2>
+        <p id="side-text"></p>
+        <div id="side-body"></div>
+        <p class="msg" id="side-msg" role="status"></p>
+      </section>
+
+      <section class="card frame step" id="custody" hidden>
+        <h2 id="cu-title"></h2>
+        <p id="cu-text"></p>
+        <form id="cu-form" novalidate>
+          <div id="cu-fields"></div>
+        </form>
+        <p class="msg" id="cu-msg" role="status"></p>
+        <p class="note">Your key leaves this device sealed. The keeper passes sealed keys on only when enough are in, and cannot read a key or a name.</p>
+      </section>
+
       <section class="card frame step" id="ask" hidden>
         <h2 id="from"></h2>
         <p id="note" hidden></p>
+        <p class="badges" id="badges"></p>
+        <div class="shown" id="summary" hidden></div>
         <p class="note" id="rules"></p>
         <p class="notice" id="held" hidden></p>
+
+        <div class="paybox" id="buy" hidden>
+          <h3 id="buy-title"></h3>
+          <p id="buy-text"></p>
+          <div class="inline" id="buy-own" hidden><input id="buy-amount" class="field num" type="number" min="0.01" step="0.01"> USDC</div>
+          <div class="actions"><button class="btn btn-light" id="buy-go" type="button">Get the amount to pay</button></div>
+          <div id="buy-how" hidden>
+            <label class="label">Send exactly this amount of USDC on <span id="buy-net"></span></label>
+            <div class="copyable"><code id="buy-exact" class="big"></code><button class="btn btn-sm" type="button" data-copy="buy-exact">Copy</button></div>
+            <label class="label">To the sender's address</label>
+            <div class="copyable"><code id="buy-to"></code><button class="btn btn-sm" type="button" data-copy="buy-to">Copy</button></div>
+            <div class="actions"><button class="btn btn-light" id="buy-wallet" type="button">Pay with the wallet in this browser</button></div>
+          </div>
+          <p class="msg" id="buy-msg" role="status"></p>
+          <p class="note">The payment goes straight to the sender. Keep this page open until it is seen on the chain.</p>
+        </div>
+
         <form id="form" novalidate>
           <label class="label" for="pin">PIN from the sender</label>
           <input id="pin" class="field code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
@@ -48,8 +85,9 @@
       <section class="card frame step" id="got" hidden>
         <h2 id="name"></h2>
         <p id="facts"></p>
-        <div class="shown" id="shown" hidden></div>
-        <div class="actions"><a class="btn btn-light" id="save" download>Save the file</a></div>
+        <div class="view" id="view" hidden><div class="shown" id="shown" hidden></div><img id="pic" alt="" hidden><span class="mark" id="mark" hidden></span></div>
+        <p class="msg warn" id="timer" hidden></p>
+        <div class="actions"><a class="btn btn-light" id="save" download>Save the file</a><button class="btn" id="rec" type="button" hidden>Signed record</button></div>
         <p class="note" id="after"></p>
         <form id="reply" hidden novalidate>
           <label class="label" for="reply-text">Reply to the sender (one message, sealed here; only they can read it)</label>
@@ -57,6 +95,26 @@
           <div class="actions"><button class="btn" id="reply-go" type="submit">Send the reply</button></div>
           <p class="msg" id="reply-msg" role="status"></p>
         </form>
+        <form id="handon" hidden novalidate>
+          <label class="label" for="handon-from">Hand it on to the next person. Your name, shown to them:</label>
+          <input id="handon-from" class="field" maxlength="60">
+          <div class="actions"><button class="btn" id="handon-go" type="submit">Seal it on</button></div>
+          <p class="msg" id="handon-msg" role="status"></p>
+          <div id="handon-out"></div>
+        </form>
+      </section>
+
+      <section class="card frame step" id="collect" hidden>
+        <h2 id="co-title">Add yours</h2>
+        <p id="co-text"></p>
+        <form id="co-form" novalidate>
+          <div id="co-fields"></div>
+          <div id="co-file-box" hidden><label class="label" for="co-file">Attach one file (up to 4 MB)</label><input id="co-file" class="field file-field" type="file"></div>
+          <div class="actions"><button class="btn btn-light" id="co-go" type="submit">Seal and add</button></div>
+        </form>
+        <p class="msg" id="co-msg" role="status"></p>
+        <div id="co-mine"></div>
+        <div id="co-all"></div>
       </section>
     </div>
   </main>
