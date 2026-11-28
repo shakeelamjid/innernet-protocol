@@ -53,6 +53,20 @@
         <p class="note" id="rules"></p>
         <p class="notice" id="held" hidden></p>
 
+        <div class="paybox" id="claim" hidden>
+          <h3>The sender approves the device that opens this</h3>
+          <div id="claim-ask">
+            <label class="label" for="claim-name">Your name, so the sender knows who is asking</label>
+            <input id="claim-name" class="field" maxlength="60" autocomplete="name">
+            <div class="actions"><button class="btn btn-light" id="claim-go" type="button">Ask to open it on this device</button></div>
+          </div>
+          <div id="claim-wait" hidden>
+            <p>Tell the sender this code. They see the same one and approve this device.</p>
+            <p class="big" id="claim-code"></p>
+          </div>
+          <p class="msg" id="claim-msg" role="status"></p>
+        </div>
+
         <div class="paybox" id="buy" hidden>
           <h3 id="buy-title"></h3>
           <p id="buy-text"></p>

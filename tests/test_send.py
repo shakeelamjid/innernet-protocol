@@ -272,7 +272,7 @@ def test_the_free_send_is_one_file_or_note_opened_once_with_no_settings(tmp_path
             "preview": send.b64u(b"p"), "meta": send.b64u(b"m")}
     new = lambda **kw: client.post(API + "/files", json={**base, "id": os.urandom(16).hex(), **kw}, headers=H)   # noqa: E731
     for paid in ({"max_opens": 3}, {"max_opens": 0}, {"forward": True}, {"keep": 8 * 86400}, {"receipt": True},
-                 {"reply": True}, {"control": True}, {"open_after": int(time.time()) + 86400}):
+                 {"reply": True}, {"open_after": int(time.time()) + 86400}):
         r = new(**paid)
         assert r.status_code == 402 and "not switched on" in r.text, (paid, r.text)
     assert new(size=(11 << 20) + 3 * send.TAG, parts=3).status_code == 413            # over 10 MB
@@ -280,7 +280,6 @@ def test_the_free_send_is_one_file_or_note_opened_once_with_no_settings(tmp_path
     fid = r.json()["id"]
     assert r.json()["pay"] is None and r.json()["lines"] == []
     assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers={**H, "X-Send-Upload": r.json()["upload"]}).json()["live"]
-    assert client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H).status_code == 402   # no sender controls
     first = open_(client, fid, rx).json()
     assert first["last"] is True and first["kind"] == "note" and first["reply_on"] is False
     assert open_(client, fid, rx).status_code == 410 and open_(client, fid, other).status_code == 410   # strictly once
@@ -309,8 +308,8 @@ def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tm
     owner, rx = Device(), Device()
     opts = {"keep": 30 * 86400, "max_opens": 3, "receipt": True, "reply": True, "control": True, "forward": True}
     q = client.post(API + "/quote", json={"plain": 20 << 20, **opts}, headers=H).json()
-    # plan (up to 100 MB, 30 days) 1.50 + 2 more openings 0.10 + devices 0.10 + receipt 0.05 + reply 0.10 + take back 0.10
-    assert q["micro"] == 1_950_000 and q["total"] == "1.950000" and len(q["lines"]) == 6
+    # plan (up to 100 MB, 30 days) 1.50 + 2 more openings 0.10 + devices 0.10 + receipt 0.05 + reply 0.10; taking it back is free
+    assert q["micro"] == 1_850_000 and q["total"] == "1.850000" and len(q["lines"]) == 5
     wide = client.post(API + "/quote", json={"plain": 100, "keep": 100 * 86400, "holders": 3, "need": 2, "checkin_days": 30,
                                              "open_until": int(time.time()) + 50 * 86400}, headers=H).json()
     assert wide["micro"] == 4_000_000 + 750_000 + 1_000_000 + 100_000              # 1-year plan (covers 100 days), 3 keys, check-in, closing date
@@ -324,7 +323,7 @@ def test_everything_added_is_paid_upfront_and_a_send_is_extended_or_destroyed(tm
             "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), **opts}
     r = client.post(API + "/files", json=body, headers=H).json()
     fid, pay = r["id"], r["pay"]
-    assert 950_000 < pay["micro"] < 951_000 and [x["usdc"] for x in r["renew"]] == ["0.500000", "1.250000", "4.000000"] and pay["to"] == FEE_WALLET and pay["chain_id"] == 84532      # price + identifying digits
+    assert 850_000 < pay["micro"] < 851_000 and [x["usdc"] for x in r["renew"]] == ["0.500000", "1.250000", "4.000000"] and pay["to"] == FEE_WALLET and pay["chain_id"] == 84532      # price + identifying digits
     up = {**H, "X-Send-Upload": r["upload"]}
     assert client.put(API + f"/files/{fid}/parts/0", content=b"x" * 100, headers=up).status_code == 402    # paid before upload
     check = lambda **kw: client.post(API + f"/files/{fid}/pay", json={**owner.sign("pay", fid), **kw}, headers=H)   # noqa: E731

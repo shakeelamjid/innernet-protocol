@@ -113,8 +113,19 @@
   /* The sender's own box key for a send others add to: only this browser can open what they add. */
   async function boxKey(id, make) {
     let pair = await run('keys', 'readonly', function (s) { return s.get('box-' + id); });
-    if (!pair && make) { pair = await C.newBoxKey(false); await run('keys', 'readwrite', function (s) { return s.put(pair, 'box-' + id); }); }
+    if (!pair && make) { pair = await C.newBoxKey(true); await run('keys', 'readwrite', function (s) { return s.put(pair, 'box-' + id); }); }
     return pair;
+  }
+  /* The box key travels inside the sender's sealed pack, so the sender key opens contributions on any device. */
+  async function boxExport(id) {
+    const pair = await boxKey(id, false);
+    if (!pair || !pair.privateKey.extractable) return null;
+    return { priv: C.b64u(new Uint8Array(await crypto.subtle.exportKey('pkcs8', pair.privateKey))), pub: C.b64u(new Uint8Array(await crypto.subtle.exportKey('raw', pair.publicKey))) };
+  }
+  async function boxImport(id, box) {
+    const alg = { name: 'ECDH', namedCurve: 'P-256' };
+    const pair = { privateKey: await crypto.subtle.importKey('pkcs8', C.unb64u(box.priv), alg, true, ['deriveBits']), publicKey: await crypto.subtle.importKey('raw', C.unb64u(box.pub), alg, true, []) };
+    await run('keys', 'readwrite', function (s) { return s.put(pair, 'box-' + id); });
   }
   function download(name, blob) {
     const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = name; document.body.append(a); a.click(); a.remove();
@@ -146,7 +157,7 @@
     qrEl.textContent = ''; if (window.InnernetQR) qrEl.append(window.InnernetQR.svg(uri, 150));
     linkEl.href = uri;
   }
-  window.InnernetSendStore = { entryCell: entryCell, payWays: payWays, boxKey: boxKey, download: download, bytes: bytes,
+  window.InnernetSendStore = { boxExport: boxExport, boxImport: boxImport, entryCell: entryCell, payWays: payWays, boxKey: boxKey, download: download, bytes: bytes,
     BASE: BASE, api: api, put: put, usdc: usdc, steps: steps, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
     sent: function () { return run('sent', 'readonly', function (s) { return s.getAll(); }); },
     remember: function (rec) { return run('sent', 'readwrite', function (s) { return s.put(rec, rec.id); }); },

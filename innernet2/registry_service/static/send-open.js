@@ -81,15 +81,31 @@
   function gate() {
     const now = Date.now() / 1000;
     let why = '';
-    if (info.locked) why = 'This is locked: its time ended. The sender can still renew it; after a few days it is destroyed.';
+    if (info.paused) why = 'The sender has paused this. It cannot be opened until they resume it.';
+    else if (info.locked) why = 'This is locked: its time ended. The sender can still renew it; after a few days it is destroyed.';
     else if (held) why = 'This is held while the sender keeps checking in. If the sender does not check in by ' + St.when(due) + ', it can be opened here. Keep ' + (joint ? 'the link and your keys' : 'the link and the PIN') + ' safe until then.';
     else if (info.open_after > now && !info.collect) why = 'The sender set this to open after ' + St.when(info.open_after) + ' (in ' + St.left(info.open_after) + '). Keep the link and the PIN until then.';
     else if (info.approvals && info.approvals.have < info.approvals.need) why = 'Waiting for approval: ' + info.approvals.have + ' of ' + info.approvals.need + ' approvers have released it.';
-    const pay = info.paylock && !info.access;
+    const claim = !why && info.claim && !info.claim.approved;
+    $('claim').hidden = !claim;
+    if (claim) {
+      $('claim-ask').hidden = info.claim.asked; $('claim-wait').hidden = !info.claim.asked; $('claim-code').textContent = info.claim.code || '';
+      $('claim-msg').textContent = info.claim.refused ? 'The sender refused this device.' : info.claim.asked ? 'Waiting for the sender to approve…' : '';
+      $('claim-go').onclick = async function () {
+        $('claim-go').disabled = true;
+        try {
+          const d = await who();
+          info.claim = await (await St.api('POST', '/files/' + id + '/claim', Object.assign({ auth: C.b64u(keys.auth), device_pub: d.pub, name: $('claim-name').value.trim() }, await C.signRequest(d.device, 'claim', id)))).json();
+          gate();
+        } catch (e) { $('claim-msg').textContent = e.message; }
+        $('claim-go').disabled = false;
+      };
+    }
+    const pay = !claim && info.paylock && !info.access;
     $('held').hidden = !why; $('held').textContent = why;
     $('buy').hidden = !pay || !!why;
     if (pay && !why) buyBox();
-    const stop = !!why || pay;
+    const stop = !!why || pay || claim;
     $('go').disabled = stop; $('pin').disabled = stop;
     if (stop && !busy) setTimeout(refresh, why && info.open_after > now ? Math.min((info.open_after - now) * 1000 + 500, 30000) : 6000);
     else if (!busy && !autoPin && !$('ask').hidden) $('pin').focus();

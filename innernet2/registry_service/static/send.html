@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Send a sealed file or note · INNERNET</title>
+  <title>INNERNET Send</title>
   <meta name="description" content="Send one file or one note to one person. It is sealed on your device, opens once with your link and PIN, and is then destroyed. No account.">
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
@@ -14,28 +14,52 @@
   <script src="static/send.js" defer></script>
 </head>
 <body>
-  <header class="top">
+  <header class="top app-top">
     <div class="wrap">
-      <a class="logo" href="/"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Send</span></a>
+      <a class="logo" href="#home"><img src="static/logo-white.svg?v=066" alt="INNERNET" width="90" height="20"><span>Send</span></a>
+      <nav class="app-nav" aria-label="Send">
+        <a href="#new" id="nav-new">New send</a>
+        <a href="#sends" id="nav-sends">Your sends</a>
+        <a href="#home" id="nav-home">All uses</a>
+      </nav>
       <span class="spacer"></span>
       <a class="btn btn-sm" href="/">About INNERNET</a>
     </div>
   </header>
   <main>
     <div class="wrap narrow">
-      <div class="head"><div>
-        <h1>Send it sealed</h1>
-        <p>A file or a note, sealed on this device before it leaves. As it is, it opens once for the person with your link and your PIN, and is then destroyed. No account. Everything else is yours to set.</p>
-        <p class="note">Early release, not yet audited. Do not rely on it for anything you cannot afford to lose.</p>
-      </div></div>
-
       <p class="notice" id="off" hidden></p>
+      <div data-view="home">
+        <div class="head"><div>
+          <h1>INNERNET Send</h1>
+          <p>Seal a file, a note or a form on your device and decide who opens it, when, and what comes back to you. No account. A plain send is free; everything else has a price in USDC shown before you pay.</p>
+          <p class="note">Early release, not yet audited. Do not rely on it for anything you cannot afford to lose.</p>
+        </div></div>
+        <div class="app-start">
+          <a class="btn btn-light" href="#new">New send</a>
+          <a class="btn" href="#sends">Your sends <span id="sends-n"></span></a>
+          <span class="dim">or start from what you want to do:</span>
+        </div>
+        <div id="recipes"></div>
+        <section class="tally" id="tally" hidden aria-label="INNERNET Send so far">
+        <div><strong id="t-sent">0</strong><span>sealed and sent</span></div>
+        <div><strong id="t-bytes">0</strong><span>sealed data carried</span></div>
+        <div><strong id="t-opened">0</strong><span>openings</span></div>
+        <div><strong id="t-destroyed">0</strong><span>destroyed on schedule</span></div>
+        </section>
+      </div>
 
+      <div data-view="new" hidden>
+        <p class="usebar"><span id="use-name">New send</span> <a href="#home">Choose another use</a></p>
+        <div class="head"><div>
+          <h1 id="new-title">New send</h1>
+          <p id="new-lede">A file or a note, sealed on this device before it leaves. As it is, it opens once for the person with your link and your PIN, and is then destroyed.</p>
+        </div></div>
       <form id="form" novalidate>
         <nav class="wz-nav" id="wz-nav" aria-label="Steps"></nav>
 
         <section class="card frame step wz" data-title="What">
-          <h2>What are you sending?</h2>
+          <h2 id="what-h">What are you sending?</h2>
           <div class="seg" role="radiogroup" aria-label="What to send">
             <label><input type="radio" name="kind" value="file" checked><span>A file</span></label>
             <label><input type="radio" name="kind" value="note"><span>A note</span></label>
@@ -86,8 +110,6 @@
                   <p class="note">If you set a "not before" time in step 3, everything added stays closed until then, to you as well, and nothing can be added after it.</p></div>
               </div>
           </div>
-          <label class="label">Or start from a ready-made use. You can change everything in the next steps.</label>
-          <div class="uses" id="recipes"></div>
         </section>
         <section class="card frame step wz" data-title="Lock">
           <h2>How is it locked?</h2>
@@ -119,6 +141,10 @@
               <div class="addon">
                 <label class="check"><input id="o-forward" type="checkbox"><span><strong>More than one device</strong><b class="price" data-p="forward"></b></span></label>
                 <p>By default only the first device that opens it can open it again. This lets any device with link and PIN open it.</p>
+              </div>
+              <div class="addon">
+                <label class="check"><input id="o-device" type="checkbox"><span><strong>Only on a device I approve</strong><b class="price" data-p="device"></b></span></label>
+                <p>Link and PIN alone open nothing. The receiver asks from their device and sees a 4-digit code; you see the same code, check with them, and approve. Passing the link to someone else is then useless.</p>
               </div>
               <div class="addon">
                 <label class="check"><input id="o-approve" type="checkbox"><span><strong>Approvers must release it first</strong><b class="price" data-p="approver" data-s=" per approver"></b></span></label>
@@ -206,7 +232,8 @@
         </section>
         <section class="card frame step wz" data-title="Extras">
           <h2>What comes back to you?</h2>
-          <p>As it is: you see that it was opened, not when.</p>
+          <p>As it is: you see that it was opened, not when. Every send comes with a sender key: with it you can pause, change, renew or delete it from any device.</p>
+          <input id="o-control" type="checkbox" hidden><input id="o-recovery" type="checkbox" hidden>
           <div class="addons one paid">
               <div class="addon">
                 <label class="check"><input id="o-receipt" type="checkbox"><span><strong>Read receipt</strong><b class="price" data-p="receipt"></b></span></label>
@@ -215,10 +242,6 @@
               <div class="addon">
                 <label class="check"><input id="o-reply" type="checkbox"><span><strong>Sealed reply</strong><b class="price" data-p="reply"></b></span></label>
                 <p>The receiver can answer with one message only you can read.</p>
-              </div>
-              <div class="addon">
-                <label class="check"><input id="o-control" type="checkbox"><span><strong>Take it back</strong><b class="price" data-p="control"></b></span></label>
-                <p>Destroy it yourself at any moment before it ends.</p>
               </div>
               <div class="addon">
                 <label class="check"><input id="o-record" type="checkbox"><span><strong>Signed record</strong><b class="price" data-p="record"></b></span></label>
@@ -234,10 +257,6 @@
                 <div class="sub" data-for="o-alarm">
                   <label class="label" for="o-alarm-url">Send it to this web address (webhook, https)</label>
                   <input id="o-alarm-url" class="field" placeholder="https://…" autocomplete="off" spellcheck="false"></div>
-              </div>
-              <div class="addon">
-                <label class="check"><input id="o-recovery" type="checkbox"><span><strong>Recovery code</strong><b class="price" data-p="recovery"></b></span></label>
-                <p>A code that moves your control of this send to another browser if you lose this one. Needed for check-in over long periods.</p>
               </div>
               <div class="addon">
                 <label class="check"><input id="o-origin" type="checkbox"><span><strong>Signed origin</strong><b class="price" data-p="origin"></b></span></label>
@@ -324,6 +343,11 @@
         <label class="label" for="pin">PIN</label>
         <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
         </div>
+        <div class="senderkey">
+          <label class="label" for="manage">Your sender key. Keep it; do not send it to anyone.</label>
+          <div class="copyable"><code id="manage"></code><button class="btn btn-sm" type="button" data-copy="manage">Copy</button></div>
+          <p class="note">Open this link on any device to control this send: check in, renew, pause, change its dates, or delete it. It is also listed under "Your sends" below.</p>
+        </div>
         <div id="artifacts"></div>
         <div class="stored" id="stored">
           <h3>What you set</h3>
@@ -337,19 +361,24 @@
         </div>
         <div class="actions"><button class="btn" id="again" type="button">Send another</button></div>
       </section>
+      </div>
 
+      <div data-view="sends" hidden>
+        <div class="head"><div>
+          <h1>Your sends</h1>
+          <p>Everything you sent from this browser, and anything you opened here with a sender key. Check in, renew, pause, change or delete each one.</p>
+        </div></div>
+        <p class="msg" id="key-msg" role="status"></p>
+        <p class="notice" id="sent-empty">Nothing here yet. Sends appear here after you make them, or when you open a sender key link.</p>
       <section class="card frame step" id="sent-card" hidden>
-        <h2>What you sent from this browser</h2>
-        <p class="note">This list is kept only in this browser. <button class="btn btn-sm" id="exp" type="button">Save a backup file</button> <label class="btn btn-sm" for="imp">Load a backup file</label><input id="imp" type="file" accept="application/json" hidden></p>
+        <h2>On record</h2>
+        <p class="note">Check in, renew, pause, change or delete each one here. The list is kept in this browser; a sender key link brings a send to any other device. <button class="btn btn-sm" id="exp" type="button">Save a backup file</button> <label class="btn btn-sm" for="imp">Load a backup file</label><input id="imp" type="file" accept="application/json" hidden></p>
         <ul class="sent" id="sent"></ul>
       </section>
+      </div>
 
-      <section class="tally" id="tally" hidden aria-label="INNERNET Send so far">
-        <div><strong id="t-sent">0</strong><span>sealed and sent</span></div>
-        <div><strong id="t-bytes">0</strong><span>sealed data carried</span></div>
-        <div><strong id="t-opened">0</strong><span>openings</span></div>
-        <div><strong id="t-destroyed">0</strong><span>destroyed on schedule</span></div>
-      </section>
+
+
     </div>
   </main>
 </body>

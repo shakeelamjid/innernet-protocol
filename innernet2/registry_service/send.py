@@ -68,21 +68,22 @@ PLAN = {(0, 7): 0, (0, 30): 500_000, (0, 90): 1_250_000, (0, 365): 4_000_000,
         (2, 7): 2_000_000, (2, 30): 5_000_000, (2, 90): 12_000_000, (2, 365): 40_000_000}
 # Add-ons: paid once, kept for the life of the send.
 PRICES = {"opening": 50_000, "unlimited": 500_000, "forward": 100_000, "open_after": 100_000, "open_until": 100_000,
-          "receipt": 50_000, "reply": 100_000, "control": 100_000, "holder": 250_000, "checkin": 1_000_000,
+          "receipt": 50_000, "reply": 100_000, "control": 0, "holder": 250_000, "checkin": 1_000_000,
           **{f"plan_{s}_{t}": v for (s, t), v in PLAN.items()}}
 ROOM_WINDOW = 600              # split custody: the needed keys must all arrive within this time
 RELEASE_DELAY = 86400          # a missed check-in can still be made good for this long, then the send is released
 ROOM_HOLD = 120                # once enough keys are in, the sealed keys stay available this long for every place to fetch
 ROOM_SEEN = 20                 # a location counts as present this long after it last asked
-MORE = {"recipient": 50_000, "succession": 500_000, "approver": 250_000, "duress": 500_000, "recovery": 50_000,
+MORE = {"recipient": 50_000, "succession": 500_000, "approver": 250_000, "duress": 500_000, "recovery": 0,
         "view_only": 100_000, "view_timer": 100_000, "presence": 250_000, "card": 50_000, "summary": 50_000, "alarm": 100_000,
         "record": 100_000, "witness": 100_000, "origin": 500_000, "name": 250_000, "chain": 100_000, "qr": 100_000,
-        "seat": 500_000, "version": 100_000}
+        "seat": 500_000, "version": 100_000, "device": 250_000}
 PRICES.update(MORE)
 LISTING_BPS = 500              # payment lock: the listing fee is 5% of what the lock can take in, paid upfront
 CARDS = ("gift", "invite", "voucher", "letter")
 FLAGS = (("view_only", "Shown on screen only"), ("presence", "Visible only while all are present"), ("record", "Signed record"),
-         ("chain", "May be handed on, with a recorded chain"), ("qr", "Printed seal"), ("recovery", "Recovery code"))
+         ("chain", "May be handed on, with a recorded chain"), ("qr", "Printed seal"), ("recovery", "Recovery code"),
+         ("device", "Opens only on a device you approve"))
 ADD_BYTES = PART + TAG + 64    # one contribution: at most one sealed part
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 DOMAIN_NAME = re.compile(r"^(?=.{4,120}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
@@ -113,6 +114,7 @@ CREATE TABLE IF NOT EXISTS send_totals (k TEXT PRIMARY KEY, n INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS send_room (file TEXT NOT NULL, seat INTEGER NOT NULL, device TEXT NOT NULL, ct TEXT NOT NULL, added_at INTEGER NOT NULL, PRIMARY KEY (file, seat));
 CREATE TABLE IF NOT EXISTS send_recipients (file TEXT NOT NULL, idx INTEGER NOT NULL, pin_tag TEXT NOT NULL, wrap TEXT NOT NULL, after INTEGER NOT NULL DEFAULT 0, until INTEGER NOT NULL DEFAULT 0, unless INTEGER, opened_at INTEGER NOT NULL DEFAULT 0, device TEXT, PRIMARY KEY (file, idx));
 CREATE TABLE IF NOT EXISTS send_approvals (file TEXT NOT NULL, idx INTEGER NOT NULL, token_hash TEXT NOT NULL, approved_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, idx));
+CREATE TABLE IF NOT EXISTS send_claims (file TEXT NOT NULL, device TEXT NOT NULL, name TEXT NOT NULL, code TEXT NOT NULL, at INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, device));
 CREATE TABLE IF NOT EXISTS send_names (name TEXT PRIMARY KEY, file TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS send_adds (file TEXT NOT NULL, n INTEGER NOT NULL, device TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, first_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, changes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, n));
 CREATE TABLE IF NOT EXISTS send_access (file TEXT NOT NULL, device TEXT NOT NULL, amount INTEGER NOT NULL, tx TEXT NOT NULL, until INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, PRIMARY KEY (file, device, tx));
@@ -129,7 +131,7 @@ ADDED = {"kind": "TEXT NOT NULL DEFAULT 'file'", "open_after": "INTEGER NOT NULL
          "version": "INTEGER NOT NULL DEFAULT 1", "versions_left": "INTEGER NOT NULL DEFAULT 0", "origin_ok": "INTEGER NOT NULL DEFAULT 0",
          "next_share": "TEXT", "next_meta": "TEXT", "next_size": "INTEGER NOT NULL DEFAULT 0", "next_parts": "INTEGER NOT NULL DEFAULT 0",
          "next_got": "INTEGER NOT NULL DEFAULT 0", "next_upload": "TEXT",
-         "room_hash": "TEXT", "seat_hashes": "TEXT", "room_until": "INTEGER NOT NULL DEFAULT 0", "checkin_every": "INTEGER NOT NULL DEFAULT 0", "checkin_due": "INTEGER NOT NULL DEFAULT 0",
+         "paused": "INTEGER NOT NULL DEFAULT 0", "pack": "TEXT", "room_hash": "TEXT", "seat_hashes": "TEXT", "room_until": "INTEGER NOT NULL DEFAULT 0", "checkin_every": "INTEGER NOT NULL DEFAULT 0", "checkin_due": "INTEGER NOT NULL DEFAULT 0",
          "ext_price": "INTEGER NOT NULL DEFAULT 0", "ext_keep": "INTEGER NOT NULL DEFAULT 0", "ext_by": "INTEGER NOT NULL DEFAULT 0"}
 
 
@@ -195,7 +197,7 @@ def price_lines(*, plain: int, keep: int, opens: int, forward: bool, open_after:
                            (open_until, "Not after a date", "open_until"), (forward and not holders, "More than one device", "forward"),
                            (receipt, "Read receipt with time", "receipt"), (reply, "One sealed reply", "reply"),
                            (control, "Take it back", "control")):
-        if on:
+        if on and P[key]:
             lines.append((label, P[key]))
     return lines
 
@@ -445,7 +447,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         for key, label in FLAGS:
             if e.get(key):
                 ex[key] = 1
-                lines.append((label, Pm[key]))
+                if Pm[key]:
+                    lines.append((label, Pm[key]))
         try:
             secs, versions = int(e.get("view_secs") or 0), int(e.get("versions") or 0)
         except (TypeError, ValueError):
@@ -502,10 +505,10 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 raise HTTPException(422, "witness_hash is needed")
             x["witness_hash"] = d.get("witness_hash")
             lines.append(("Witness link", Pm["witness"]))
-        if ex.get("recovery"):
-            if strict and not HEX64.match(str(d.get("recover_hash", ""))):
-                raise HTTPException(422, "recover_hash is needed")
-            x["recover_hash"] = d.get("recover_hash")
+        if d.get("recover_hash"):                          # the sender key: every send can have one
+            if not HEX64.match(str(d["recover_hash"])):
+                raise HTTPException(422, "recover_hash is not well formed")
+            x["recover_hash"] = d["recover_hash"]
         rc = d.get("recipients")
         n = len(rc) if isinstance(rc, list) else int(rc or 0) if isinstance(rc, (int, str)) else 0
         if n:
@@ -623,6 +626,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 except FileNotFoundError:
                     pass
         store.x("DELETE FROM send_names WHERE file=?", (fid,))
+        store.x("DELETE FROM send_claims WHERE file=?", (fid,))
         store.x("DELETE FROM send_quotes WHERE file=?", (fid,))
         event(fid, "ended: " + reason, now)
         if was["state"] in ("live", "spent"):
@@ -669,11 +673,12 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 "open_after": r["open_after"], "receipt": bool(r["receipt"]), "reply_on": bool(r["reply_on"]),
                 "control": bool(r["control"]), "open_until": r["open_until"], "holders": r["holders"], "need": r["need"],
                 "held": r["checkin_every"] > 0, "checkin_every": r["checkin_every"], "checkin_due": r["checkin_due"],
-                "release_at": r["checkin_due"] + RELEASE_DELAY if r["checkin_every"] > 0 else 0, **more_rules(r)}
+                "release_at": r["checkin_due"] + RELEASE_DELAY if r["checkin_every"] > 0 else 0, "paused": bool(r.get("paused")),
+                "has_key": bool(r.get("recover_hash")), **more_rules(r)}
 
     def more_rules(r: dict) -> dict:
         e = extras(r)
-        out = {"extras": {k: e[k] for k in ("view_only", "view_secs", "presence", "card", "record", "chain", "qr", "name") if k in e},
+        out = {"extras": {k: e[k] for k in ("view_only", "view_secs", "presence", "card", "record", "chain", "qr", "name", "device") if k in e},
                "summary": r.get("summary"), "version": r.get("version", 1), "versions_left": r.get("versions_left", 0),
                "origin": e.get("origin") if r.get("origin_ok") else None, "origin_pending": e.get("origin") if not r.get("origin_ok") else None,
                "named": store.one("SELECT COUNT(*) AS n FROM send_recipients WHERE file=?", (r["id"],))["n"]}
@@ -925,10 +930,16 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             bump("bytes", r["size"])
         return {"got": got, "live": done}
 
+    def is_owner(r: dict, action: str, d: dict) -> bool:
+        """The sender: by the sender key, or by the device the send was made on."""
+        if d.get("code") and r["recover_hash"] and hmac.compare_digest(sha(unb64u(d.get("code"), 32)), r["recover_hash"]):
+            return True
+        return bool(d.get("sig")) and verify(r["owner_pub"], action, r["id"], d.get("ts"), d.get("sig"))
+
     def owner_call(fid: str, action: str, d: dict) -> dict:
         r = row(fid)
-        if not verify(r["owner_pub"], action, fid, d.get("ts"), d.get("sig")):
-            raise HTTPException(403, "only the sender's device can do this")
+        if not is_owner(r, action, d):
+            raise HTTPException(403, "only the sender can do this: with the sender key, or from the device it was sent from")
         return r
 
     @app.post(api + "/files/{fid}/status")
@@ -941,6 +952,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         return {"id": fid, "state": r["state"], "reason": r["reason"], "created_at": r["created_at"], **rules(r),
                 "bound": bool(r["bound_pub"]), "pin_fails": r["pin_fails"], "got": r["got"], "parts": r["parts"],
                 "reply": r["reply"], "paid": usdc(r["price"]) if r["paid_at"] else None,
+                "claims": [{"device": c["device"], "name": c["name"], "code": c["code"], "at": c["at"], "approved": c["approved"]}
+                           for c in store.q("SELECT device, name, code, at, approved FROM send_claims WHERE file=? ORDER BY at", (fid,))],
                 "locked": r["state"] == "live" and now >= r["expires_at"], "destroy_at": r["expires_at"] + (GRACE if r["paid_at"] else 0),
                 "renew": [{"days": t, "usdc": usdc(c)} for t in TERMS
                           for c in [term_price(t, r["size"] - r["parts"] * TAG, prices(), limits()["max_bytes"])[1]] if c],
@@ -1021,6 +1034,120 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         store.x("UPDATE send_files SET ext_price=?, ext_keep=?, ext_by=? WHERE id=?", (amount, days * DAY, now + PAY_WINDOW, fid))
         return {"paid": False, "pay": pay_info(amount, now + PAY_WINDOW), "days": days}
 
+    @app.post(api + "/files/{fid}/claim")
+    async def claim(fid: str, request: Request):
+        """A device asks the sender to be the one that may open this. Both sides see the same short code,
+        so the sender can check by phone or in person that the request is from the right person."""
+        guard(request)
+        r = row(fid)
+        d = await body(request)
+        check_auth(r, d)
+        if not extras(r).get("device"):
+            raise HTTPException(404, "this send does not ask for an approved device")
+        if r["state"] != "live":
+            raise HTTPException(410, "this send has ended" + (f" ({r['reason']})" if r["reason"] else ""))
+        device = b64u(unb64u(d.get("device_pub"), 65))
+        if not verify(device, "claim", fid, d.get("ts"), d.get("sig")):
+            raise HTTPException(403, "this device could not prove its key")
+        limiter.check("send-claim", client_ip(request), 30, 3600)
+        if store.one("SELECT 1 AS x FROM send_claims WHERE file=? AND device=?", (fid, device)) is None:
+            if store.one("SELECT COUNT(*) AS n FROM send_claims WHERE file=?", (fid,))["n"] >= 20:
+                raise HTTPException(429, "too many devices have asked; tell the sender")
+            code = str(int(sha(unb64u(device, 65) + bytes.fromhex(fid)), 16) % 10000).zfill(4)
+            name = re.sub(r"[\x00-\x1f]", " ", str(d.get("name") or "")).strip()[:60] or "No name given"
+            store.x("INSERT INTO send_claims(file, device, name, code, at) VALUES (?,?,?,?,?)", (fid, device, name, code, int(time.time())))
+            event(fid, f"a device asked to open it (code {code})")
+            alarm(fid, f"a device asked to open it (code {code})")
+        return claim_of(fid, device)
+
+    @app.post(api + "/files/{fid}/claims")
+    async def claims(fid: str, request: Request):
+        """The sender approves or refuses a device that asked."""
+        guard(request)
+        d = await body(request)
+        owner_call(fid, "claims", d)
+        device = str(d.get("device", ""))
+        if store.one("SELECT 1 AS x FROM send_claims WHERE file=? AND device=?", (fid, device)) is None:
+            raise HTTPException(404, "no such request")
+        store.x("UPDATE send_claims SET approved=? WHERE file=? AND device=?", (1 if d.get("ok") else -1, fid, device))
+        event(fid, "the sender " + ("approved" if d.get("ok") else "refused") + " a device")
+        return {"ok": True}
+
+    @app.post(api + "/files/{fid}/pause")
+    async def pause(fid: str, request: Request):
+        """The sender stops it from being opened, or lets it be opened again. Its time keeps running."""
+        guard(request)
+        d = await body(request)
+        r = owner_call(fid, "pause", d)
+        if r["state"] != "live":
+            raise HTTPException(409, "only a send that is waiting can be paused")
+        store.x("UPDATE send_files SET paused=? WHERE id=?", (1 if d.get("on") else 0, fid))
+        event(fid, "paused by the sender" if d.get("on") else "resumed by the sender")
+        return {"paused": bool(d.get("on"))}
+
+    @app.post(api + "/files/{fid}/edit")
+    async def edit(fid: str, request: Request):
+        """The sender changes rules of a send that is still waiting. Only within what was set when sending:
+        dates can move or be dropped, openings can be lowered, the check-in period and the line shown before
+        opening can change. Adding a new priced rule is not an edit."""
+        guard(request)
+        d = await body(request)
+        r = owner_call(fid, "edit", d)
+        now = int(time.time())
+        if r["state"] != "live":
+            raise HTTPException(409, "only a send that is waiting can be changed")
+        sets, vals, said = [], [], []
+        try:
+            if "open_after" in d:
+                v = int(d["open_after"] or 0)
+                if not r["open_after"]:
+                    raise HTTPException(402, "an opening date was not part of this send")
+                if v and not now < v < r["expires_at"] - 3600:
+                    raise HTTPException(422, "the opening date must be in the future and at least an hour before the end")
+                sets.append("open_after=?"); vals.append(v); said.append("opening date " + ("changed" if v else "removed"))
+            if "open_until" in d:
+                v = int(d["open_until"] or 0)
+                if not r["open_until"]:
+                    raise HTTPException(402, "a closing date was not part of this send")
+                if v and not max(now, int(d.get("open_after", r["open_after"]) or 0)) + 3600 <= v <= r["expires_at"]:
+                    raise HTTPException(422, "the closing date must be at least an hour after the opening date and not after the end")
+                sets.append("open_until=?"); vals.append(v); said.append("closing date " + ("changed" if v else "removed"))
+            if "max_opens" in d:
+                v = int(d["max_opens"])
+                if not (v > r["opens"] and v >= 1 and (r["max_opens"] == 0 or v <= r["max_opens"])):
+                    raise HTTPException(422, "openings can be lowered, not raised, and not below what was already used")
+                sets.append("max_opens=?"); vals.append(v); said.append(f"openings set to {v}")
+            if "checkin_days" in d:
+                v = int(d["checkin_days"])
+                if r["checkin_every"] <= 0:
+                    raise HTTPException(402, "check-in release is not part of this send, or it was already released")
+                if not 1 <= v <= 90:
+                    raise HTTPException(422, "check in every 1 to 90 days")
+                sets += ["checkin_every=?", "checkin_due=?"]; vals += [v * DAY, now + v * DAY]; said.append(f"check-in every {v} days")
+        except (TypeError, ValueError):
+            raise HTTPException(422, "dates, openings and days are numbers")
+        if d.get("preview"):
+            sets.append("preview=?"); vals.append(b64u(unb64u(d["preview"], most=SMALL))); said.append("the line shown before opening changed")
+        if not sets:
+            raise HTTPException(422, "nothing to change")
+        store.x("UPDATE send_files SET " + ", ".join(sets) + " WHERE id=?", (*vals, fid))
+        event(fid, "changed by the sender: " + ", ".join(said), now)
+        return {"changed": said, **rules(row(fid))}
+
+    @app.post(api + "/files/{fid}/pack")
+    async def pack(fid: str, request: Request):
+        """The sender's own copy of what they need (link, PINs, keys), sealed under the sender key and kept
+        here so the sender key works on any device. The keeper cannot read it."""
+        guard(request)
+        d = await body(request, most=131072)
+        r = owner_call(fid, "pack", d)
+        if d.get("pack"):
+            store.x("UPDATE send_files SET pack=? WHERE id=?", (b64u(unb64u(d["pack"], most=90000)), fid))
+            return {"ok": True}
+        if not r["pack"]:
+            raise HTTPException(404, "nothing is stored for this sender key")
+        return {"pack": r["pack"]}
+
     @app.post(api + "/files/{fid}/checkin")
     async def checkin(fid: str, request: Request):
         """The sender is still here: hold the send for one more period."""
@@ -1038,8 +1165,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
     async def revoke(fid: str, request: Request):
         guard(request)
         r = owner_call(fid, "revoke", await body(request))
-        if not r["control"] and not limits()["all_rules"]:
-            raise HTTPException(402, "taking it back is a paid option, chosen when sending")
+
         if r["state"] != "dead":
             kill(fid, "taken back by the sender")
         return {"id": fid, "state": "dead"}
@@ -1056,8 +1182,13 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         if r["state"] in ("dead", "uploading", "unpaid"):
             return {"id": fid, "state": "dead" if r["state"] == "dead" else "uploading", "reason": r["reason"]}
         return {"id": fid, "state": r["state"], "locked": time.time() >= r["expires_at"], "size": r["size"], "parts": r["parts"], "part": PART, "preview": r["preview"],
-                "sealed_at": r["created_at"], "access": paid_ok(r, str(d0.get("device_pub", "")), int(time.time())) if r["pay"] else True,
+                "sealed_at": r["created_at"], "claim": claim_of(fid, str(d0.get("device_pub", ""))) if extras(r).get("device") else None, "access": paid_ok(r, str(d0.get("device_pub", "")), int(time.time())) if r["pay"] else True,
                 **rules(r), "bound": bool(r["bound_pub"]), "pin_tries_left": PIN_TRIES - r["pin_fails"]}
+
+    def claim_of(fid: str, device: str) -> dict:
+        cl = store.one("SELECT code, approved, name FROM send_claims WHERE file=? AND device=?", (fid, device))
+        return {"asked": cl is not None, "code": cl["code"] if cl else None, "approved": bool(cl and cl["approved"] == 1),
+                "refused": bool(cl and cl["approved"] == -1)}
 
     def paid_ok(r: dict, device: str, now: int) -> bool:
         p = json.loads(r["pay"])
@@ -1084,6 +1215,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             raise HTTPException(403, "this cannot be opened yet; the sender set a later opening time")
         if r["checkin_every"] > 0:
             raise HTTPException(403, "this is held while the sender keeps checking in")
+        if r["paused"]:
+            raise HTTPException(403, "the sender has paused this; it cannot be opened until they resume it")
         device = b64u(unb64u(d.get("device_pub"), 65))
         if not verify(device, "open", fid, d.get("ts"), d.get("sig")):
             raise HTTPException(403, "this device could not prove its key")
@@ -1091,6 +1224,10 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             have = store.one("SELECT COUNT(*) AS n FROM send_approvals WHERE file=? AND approved_at>0", (fid,))["n"]
             if have < r["approve_need"]:
                 raise HTTPException(403, f"waiting for approval: {have} of {r['approve_need']} have approved the release")
+        if extras(r).get("device"):
+            cl = store.one("SELECT approved, code FROM send_claims WHERE file=? AND device=?", (fid, device))
+            if cl is None or cl["approved"] != 1:
+                raise HTTPException(403, "the sender must approve this device first" + (f" (your code is {cl['code']})" if cl else ""))
         if r["pay"] and not paid_ok(r, device, now):
             raise HTTPException(402, "this opens after payment")
         recs = [dict(x) for x in store.q("SELECT * FROM send_recipients WHERE file=? ORDER BY idx", (fid,))]
@@ -1187,6 +1324,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         device = b64u(unb64u(d.get("device_pub"), 65))
         if not verify(device, "room", fid, d.get("ts"), d.get("sig")):
             raise HTTPException(403, "this device could not prove its key")
+        if r["paused"]:
+            raise HTTPException(403, "the sender has paused this; it cannot be opened until they resume it")
         if r["state"] not in ("live", "spent"):               # after the last opening the holders can still see who is present
             raise HTTPException(410, "this can no longer be opened" + (f" ({r['reason']})" if r["reason"] else ""))
         now = int(time.time())
@@ -1325,8 +1464,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         sweep()
         r = row(fid)
         d = await body(request)
-        if d.get("sig"):
-            ok = verify(r["owner_pub"], "record", fid, d.get("ts"), d.get("sig"))
+        if d.get("sig") or d.get("code"):
+            ok = is_owner(r, "record", d)
         elif d.get("token"):
             ok = bool(r["witness_hash"]) and hmac.compare_digest(sha(unb64u(d["token"], 32)), r["witness_hash"])
         else:
@@ -1436,8 +1575,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         """(may read the contributions now, this device)."""
         device = str(d.get("device_pub", ""))
         count = store.one("SELECT COUNT(*) AS n FROM send_adds WHERE file=?", (r["id"],))["n"]
-        if d.get("sig"):
-            owner = verify(r["owner_pub"], "adds", r["id"], d.get("ts"), d.get("sig"))
+        if d.get("sig") or d.get("code"):
+            owner = is_owner(r, "adds", d)
         else:
             owner = False
             check_auth(r, d)

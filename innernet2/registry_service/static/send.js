@@ -40,6 +40,7 @@
     if (on('o-alarm') && $('o-alarm-url').value.trim()) e.alarm_url = $('o-alarm-url').value.trim();
     ['record', 'chain', 'qr', 'recovery'].forEach(function (k) { if (on('o-' + k)) e[k] = 1; });
     if (on('o-witness')) e.witness = 1;
+    if (on('o-device')) e.device = 1;
     if (on('o-origin') && $('o-origin-dom').value.trim()) e.origin = $('o-origin-dom').value.trim().toLowerCase();
     if (on('o-name') && $('o-name-v').value.trim()) e.name = $('o-name-v').value.trim().toLowerCase();
     if (on('o-versions')) e.versions = Math.max(1, parseInt($('o-versions-n').value, 10) || 1);
@@ -105,6 +106,7 @@
     if (o.collect) out.push('Up to ' + o.collect.seats + ' people can add to it and replace what they added' + (o.open_after ? ' until ' + St.when(o.open_after) + '; then it all opens together' : '') + (o.collect.reveal_count ? ' once ' + o.collect.reveal_count + ' have added' : '') + ', for ' + (o.collect.audience === 'all' ? 'everyone with the link.' : 'you only.'));
     if (o.duress) out.push('A duress PIN opens a decoy and tells you.');
     if (o.extras) {
+      if (o.extras.device) out.push('It opens only on a device you approve, after you match its 4-digit code with the receiver.');
       if (o.extras.view_only) out.push('Shown on screen only, with your name across it.');
       if (o.extras.view_secs) out.push('It leaves the screen ' + Math.round(o.extras.view_secs / 60) + ' minutes after opening.');
       if (o.extras.presence) out.push('It stays visible only while the holders are present.');
@@ -118,7 +120,7 @@
     }
     if (o.receipt) out.push('You see the time of each opening here.');
     if (o.reply) out.push('The receiver can send you one sealed reply.');
-    if (o.control) out.push('You can take it back while it is waiting.');
+    out.push('With your sender key you can pause, change, renew or delete it at any time.');
     return out;
   }
   function tidy() {                                      // show an add-on's inputs only while it is on
@@ -182,6 +184,56 @@
     ['custody', 'Evidence or sample custody', 'Handed from person to person, every hand recorded.'],
     ['sign', 'Sign a contract', 'Each party reads it, signs with their own key, and everyone gets a signed record.'],
     ['year', 'Keep it a year', 'Long storage with take-back and a read receipt.']];
+  /* How each use presents itself: its group on the home screen, and the words of its setup screen. */
+  const GROUPS = [['send', 'Send something'], ['hold', 'Hold it until the right moment'], ['collect', 'Collect from others'], ['sell', 'Sell']];
+  const INFO = {
+    burn: ['send'], until: ['send', 'Seal it until a date', 'Nobody, you included, can open it through this link before the time you set.'],
+    first: ['send', 'First to open wins', 'Send the same link to many people. It opens for the first one and for nobody after.'],
+    year: ['send', 'Keep it for a year', 'Long storage, with a read receipt. Renew it each year to keep it.'],
+    glass: ['send', 'Break-glass credentials', 'A secret for emergencies: it opens once, stays on screen five minutes, and you are told the moment it is used.'],
+    seal: ['send', 'A certificate that cannot be faked', 'You get a QR code to print. Anyone who scans it sees your original and proof that it was not changed.'],
+    custody: ['send', 'Evidence or sample custody', 'Each person who opens it can seal it on to the next. Every hand is recorded.'],
+    joint: ['hold', 'Joint custody', 'Name the people. Each gets a key; it opens only when they add their keys together.'],
+    gone: ['hold', 'Release if I stop checking in', 'It stays closed while you check in. If you go silent, the people holding keys can open it.'],
+    succession: ['hold', 'Pass it down a line', 'The first person has a set time to claim it. If they do not, it passes to the next.'],
+    board: ['hold', 'Release with approvers', 'People you name must approve before it opens. Approving shows them nothing.'],
+    tender: ['collect', 'Open a tender or ask for quotations', 'Write what bidders must fill in. They add sealed offers and can change them until your deadline; then all open together.', 'What should bidders read first?', 'The tender notice, terms or instructions.'],
+    inbox: ['collect', 'Set up a sealed inbox', 'You get one link to give to clients. What they send is sealed to you; nobody else can read it.', 'What should people see when they open your link?', 'For example: Please send your signed forms and ID here.'],
+    vote: ['collect', 'Run a vote or a survey', 'People answer without names. The answers stay closed until closing time, then open together.', 'What are you asking?', 'The question, and anything voters should know.'],
+    swap: ['collect', 'Exchange with someone', 'Two people each add something. Neither sees the other\u2019s until both are in.', 'What is this exchange about?', 'A line both sides will see.'],
+    sign: ['collect', 'Get a document signed', 'Each party opens the document, signs it with their own key, and everyone can check every signature.', 'The document to be signed', 'Paste the text, or switch to a file.'],
+    sell: ['sell', 'Sell a file or a report', 'Set a price and your wallet. The reader pays you directly, then it opens.'],
+    crowd: ['sell', 'Funded release', 'It opens for everyone once a total has been paid to your wallet.'],
+    feed: ['sell', 'Paid updates', 'Readers pay per period. You post new versions behind the same link.'] };
+  let using = null;
+  function setUse(name) {
+    using = name;
+    const u = USES.filter(function (x) { return x[0] === name; })[0], i = INFO[name] || [];
+    $('use-name').textContent = u ? u[1] : 'New send';
+    $('new-title').textContent = i[1] || (u && name !== 'burn' ? u[1] : 'New send');
+    $('new-lede').textContent = i[2] || (u && name !== 'burn' ? u[2] : 'A file or a note, sealed on this device before it leaves. As it is, it opens once for the person with your link and your PIN, and is then destroyed.');
+    $('what-h').textContent = i[3] || 'What are you sending?';
+    $('text').placeholder = i[4] || '';
+    if (i[3] && !picked) { document.querySelector('input[name=kind][value=note]').checked = true; $('file-box').hidden = true; $('note-box').hidden = false; }
+  }
+  function view(name) {
+    document.querySelectorAll('[data-view]').forEach(function (v) { v.hidden = v.dataset.view !== name; });
+    ['new', 'sends', 'home'].forEach(function (n) { $('nav-' + n).classList.toggle('on', n === name); });
+    window.scrollTo(0, 0);
+  }
+  function route() {
+    const h = location.hash.replace('#', '');
+    if (busy && h !== 'new') return;
+    if (h === 'sends') { view('sends'); renderSent(); }
+    else if (h === 'new') { if (!using && !$('done').hidden) { /* the result of the last send stays on screen */ } view('new'); }
+    else view('home');
+  }
+  function choose(name) {                                  // start a send from a use (or a plain one)
+    if (busy) return;
+    $('done').hidden = true; $('work').hidden = true; $('form').hidden = false;
+    recipe(name || 'burn'); setUse(name); if (wizard.go) wizard.go(0);
+    if (location.hash !== '#new') location.hash = '#new'; else view('new');
+  }
   function recipe(name) {
     const now = Math.floor(Date.now() / 1000);
     function lockIs(v) { document.querySelector('input[name=lock][value=' + v + ']').checked = true; }
@@ -243,9 +295,24 @@
     }, 200);
   }
 
+  const codes = {};                                       // send id -> its sender key, which works from any device
+  async function proof(id, action) { return Object.assign(await C.signRequest(await St.deviceKey(), action, id), codes[id] ? { code: codes[id] } : {}); }
   async function act(id, action, extra) {
-    const d = await St.deviceKey();
-    return (await St.api('POST', '/files/' + id + '/' + action, Object.assign(await C.signRequest(d, action, id), extra || {}))).json();
+    return (await St.api('POST', '/files/' + id + '/' + action, Object.assign(await proof(id, action), extra || {}))).json();
+  }
+  /* The sender's own copy of the record, sealed under the sender key and left with the keeper. */
+  async function savePack(rec) {
+    try {
+      const key = await C.subKey(C.unb64u(rec.code), rec.id, 'pack');
+      await St.api('POST', '/files/' + rec.id + '/pack', { code: rec.code, pack: await C.sealSmall(key, rec.id, 'pack', { rec: rec, box: await St.boxExport(rec.id) }) });
+    } catch (e) { /* the send still works from this browser */ }
+  }
+  async function loadPack(id, code) {
+    codes[id] = code;
+    const got = await (await St.api('POST', '/files/' + id + '/pack', { code: code })).json();
+    const data = await C.openSmall(await C.subKey(C.unb64u(code), id, 'pack'), id, 'pack', got.pack);
+    if (data.box) await St.boxImport(id, data.box);
+    await St.remember(data.rec);
   }
 
   /* Show the payment box and wait until the keeper sees the payment on the chain. */
@@ -355,8 +422,8 @@
       }
       o.approvers = { need: o.approvers.need, hashes: hashes };
     }
+    const control = C.random(32); o.recover_hash = await C.sha256hex(control);
     if (ex.witness) { const t = C.random(32); o.witness_hash = await C.sha256hex(t); art.witness = base + 'w' + C.b64u(t); }
-    if (ex.recovery) { const t = C.random(32); o.recover_hash = await C.sha256hex(t); art.recovery = C.b64u(t); }
     if (o.summary) o.summary = await C.sealSmall(keys.preview, id, 'summary', { text: $('o-summary-text').value.trim() });
     if (o.duress) {
       let p2 = C.newPin(); while (p2 === pin) p2 = C.newPin();
@@ -384,8 +451,9 @@
     const links = joint ? joint.keys.map(function (k, i) { return { name: who[i], key: k }; }) : null;
     const shared = joint ? base + joint.link : link;
     const rec = { id: id, name: c.name, kind: c.kind, size: c.size, created_at: Math.floor(Date.now() / 1000), expires_at: made.expires_at, link: link, shared: shared, pin: pin,
-      parts: parts, rules: o, links: links, art: art, recover: art.recovery || null, open_link: !!ex.pin_in_link, named: !!art.pins, paid: made.pay ? made.pay.amount : null };
+      parts: parts, rules: o, links: links, art: art, from: from, line: $('note').value.trim(), code: C.b64u(control), manage: location.origin + St.BASE + '/send?m=' + id + '#' + C.b64u(control), recover: null, open_link: !!ex.pin_in_link, named: !!art.pins, paid: made.pay ? made.pay.amount : null };
     await St.remember(rec);
+    codes[id] = rec.code; await savePack(rec);
     if (made.pay) {
       steps.set(2, 'run', 'Deposited. Waiting for your payment of ' + St.usdc(made.pay.amount) + ' USDC before anything is uploaded…', 0.6);
       await payment(id, made.pay);
@@ -422,6 +490,7 @@
     $('done-lede').textContent = r.rec.links ? 'Send the link to everyone. Give each person only their own key, by a different channel. When they want to open it, each opens the link on their own device and adds their key; it opens for them when ' + (r.rec.rules.need === r.rec.rules.holders ? 'all' : 'any ' + r.rec.rules.need) + ' of the keys are in within 10 minutes.'
       : 'Send the link any way you like. Tell the PIN by phone or in person, not in the same message as the link.';
     const A = r.rec.art || {}, box = $('artifacts'); box.textContent = '';
+    $('manage').textContent = r.rec.manage || '';
     function item(label, value, note) {
       const l = el('label', label, 'label'), row = el('div', null, 'copyable'), b = el('button', 'Copy', 'btn btn-sm'); b.type = 'button';
       b.addEventListener('click', function () { navigator.clipboard.writeText(value).then(function () { b.textContent = 'Copied'; }); });
@@ -434,7 +503,6 @@
     (A.approvers || []).forEach(function (p) { item('Approver link for ' + p.name, p.link); });
     if (A.witness) item('Witness link', A.witness, 'Shows what happens to this send and gives the signed record. It cannot open it.');
     if (A.duress) item('Duress PIN', A.duress, 'Opens only the decoy, and tells you it was used.');
-    if (A.recovery) item('Recovery code', A.recovery, 'Keep it somewhere safe. With it you can take control of this send from another browser. It is also in the backup file.');
     if (A.origin) item('Publish this line at https://' + A.origin.domain + '/.well-known/innernet-send.txt', A.origin.line, 'Then press "Check origin" on this send in your list below.');
     if (A.qr && window.InnernetQR) {
       const wrap = el('div', null, 'qr'); wrap.append(window.InnernetQR.svg(r.rec.shared || r.rec.link, 220));
@@ -455,11 +523,11 @@
   /* What others added: fetched sealed, opened here with the sender's box key (or the link key). */
   async function readAdds(rec, s, into) {
     const secret = C.unb64u(rec.link.split('#')[1].split('.')[0]);
-    const list = await (await St.api('POST', '/files/' + rec.id + '/adds/list', await C.signRequest(await St.deviceKey(), 'adds', rec.id))).json(), box = s.collect.audience === 'owner' ? await St.boxKey(rec.id, false) : null, shared = await C.subKey(secret, rec.id, 'adds');
+    const list = await (await St.api('POST', '/files/' + rec.id + '/adds/list', await proof(rec.id, 'adds'))).json(), box = s.collect.audience === 'owner' ? await St.boxKey(rec.id, false) : null, shared = await C.subKey(secret, rec.id, 'adds');
     if (s.collect.audience === 'owner' && !box) throw new Error('The key that opens these is in the browser this was sent from.');
     const table = el('table', null, 'adds');
     for (const e of list.entries) {
-      const d = await St.deviceKey(), blob = await St.bytes('POST', '/files/' + rec.id + '/adds/' + e.entry, await C.signRequest(d, 'adds', rec.id));
+      const blob = await St.bytes('POST', '/files/' + rec.id + '/adds/' + e.entry, await proof(rec.id, 'adds'));
       const got = C.unpack(box ? await C.openFrom(box, rec.id, blob) : await C.openWith(shared, rec.id, blob));
       const tr = el('tr'); tr.append(el('th', '#' + e.entry + ' · ' + St.when(e.received_at) + (e.changes ? ' · changed ' + e.changes + '×' : '')));
       const td = await St.entryCell(rec.id, got, null);
@@ -476,7 +544,7 @@
         try {
           const file = f.files[0]; if (!file) return ok();
           const secret = C.unb64u(rec.link.split('#')[1].split('.')[0]), share = C.random(32), key = await C.fileKey(secret, share, rec.pin, rec.id), parts = C.partCount(file.size), d = await St.deviceKey();
-          const v = await (await St.api('POST', '/files/' + rec.id + '/version', Object.assign(await C.signRequest(d, 'version', rec.id), { size: file.size + parts * C.TAG, parts: parts, keeper_share: C.b64u(share),
+          const v = await (await St.api('POST', '/files/' + rec.id + '/version', Object.assign(await proof(rec.id, 'version'), { size: file.size + parts * C.TAG, parts: parts, keeper_share: C.b64u(share),
             meta: await C.sealSmall(key, rec.id, 'meta', { name: file.name, type: file.type || 'application/octet-stream', size: file.size, kind: 'file' }) }))).json();
           for (let n = 0; n < parts; n++) await St.put('/files/' + rec.id + '/vparts/' + n, await C.sealPart(key, rec.id, n, parts, new Uint8Array(await file.slice(n * C.PART, (n + 1) * C.PART).arrayBuffer())), { 'X-Send-Upload': v.upload, 'Content-Type': 'application/octet-stream' });
           rec.name = file.name; rec.size = file.size; await St.remember(rec); await done(); ok();
@@ -488,9 +556,10 @@
 
   async function renderSent() {
     const list = (await St.sent()).sort(function (a, b) { return b.created_at - a.created_at; });
-    $('sent-card').hidden = !list.length;
+    $('sent-card').hidden = !list.length; $('sent-empty').hidden = !!list.length; $('sends-n').textContent = list.length ? '(' + list.length + ')' : '';
     $('sent').textContent = '';
     list.forEach(function (rec) {
+      if (rec.code) codes[rec.id] = rec.code;
       const li = el('li');
       const head = el('div', null, 'sent-head');
       const chip = el('span', 'Checking', 'chip');
@@ -498,14 +567,15 @@
       const state = el('p', '', 'msg'), warn = el('p', '', 'msg warn'), reply = el('p', '', 'reply');
       warn.hidden = true; reply.hidden = true;
       const acts = el('div', null, 'row-actions');
-      const copy = el('button', rec.links ? 'Copy link and all keys' : 'Copy link', 'btn btn-sm'), alive = el('button', 'Check in now', 'btn btn-sm btn-light'), more = el('button', 'Renew', 'btn btn-sm'), back = el('button', 'Take it back', 'btn btn-sm btn-danger'), forget = el('button', 'Remove from this list', 'btn btn-sm');
+      const copy = el('button', rec.links ? 'Copy link and all keys' : 'Copy link', 'btn btn-sm'), alive = el('button', 'Check in now', 'btn btn-sm btn-light'), more = el('button', 'Renew', 'btn btn-sm'), hold = el('button', 'Pause', 'btn btn-sm'), change = el('button', 'Change', 'btn btn-sm'), keyb = el('button', 'Copy sender key', 'btn btn-sm'), back = el('button', 'Delete it now', 'btn btn-sm btn-danger'), forget = el('button', 'Remove from this list', 'btn btn-sm');
       const ext = el('div', null, 'inline ext'); ext.hidden = true;
       const extra = el('div', null, 'row-actions extra');
       ext.append(el('span', 'Add to the end date:'));
-      [copy, alive, more, back, forget].forEach(function (b) { b.type = 'button'; });
-      copy.hidden = alive.hidden = more.hidden = back.hidden = true;
-      acts.append(alive, copy, more, back, forget);
-      li.append(head, state, warn, reply, acts, extra, ext);
+      const editor = el('div', null, 'editor'); editor.hidden = true;
+      [copy, alive, more, back, forget, hold, change, keyb].forEach(function (b) { b.type = 'button'; });
+      copy.hidden = alive.hidden = more.hidden = back.hidden = hold.hidden = change.hidden = true; keyb.hidden = !rec.manage;
+      acts.append(alive, copy, more, hold, change, back, keyb, forget);
+      li.append(head, state, warn, reply, acts, extra, ext, editor);
       $('sent').append(li);
       function show(s) {
         const opened = s.events.filter(function (e) { return e.event === 'opened'; });
@@ -526,7 +596,10 @@
         state.textContent = text; chip.textContent = label; chip.className = 'chip ' + (s.state === 'dead' ? 'off' : opened.length ? 'on' : '');
         const live = s.state === 'live';
         alive.hidden = !(live && s.held);
-        copy.hidden = !live; more.hidden = !(live && lim.paid.on); back.hidden = !(live && s.control);
+        copy.hidden = !live; more.hidden = !(live && lim.paid.on); back.hidden = s.state === 'dead' || s.state === 'spent';
+        hold.hidden = change.hidden = !live; hold.textContent = s.paused ? 'Resume' : 'Pause';
+        if (live && s.paused) { chip.textContent = 'Paused'; state.textContent = 'Paused: nobody can open it until you resume. ' + state.textContent; }
+        last = s;
         const left = s.expires_at - now;
         const soon = live && left < Math.max(86400, 0.2 * (s.expires_at - s.created_at)), due = live && s.held && s.checkin_due - now < 3 * 86400;
         warn.hidden = !(soon || due);
@@ -550,12 +623,54 @@
         if (s.version > 1) moreText += ' Version ' + s.version + '.';
         if (s.origin) moreText += ' Shown as from ' + s.origin + '.';
         state.textContent += moreText;
+        (s.claims || []).forEach(function (c) {
+          const row = el('p', (c.name || 'Someone') + ' asks to open it on a device. Code ' + c.code + '. ' + (c.approved === 1 ? 'Approved.' : c.approved === -1 ? 'Refused.' : 'Check the code with them before you approve. '), 'claim');
+          if (c.approved === 0 && live) [['Approve', true], ['Refuse', false]].forEach(function (x) {
+            const b = el('button', x[0], 'btn btn-sm' + (x[1] ? ' btn-light' : '')); b.type = 'button';
+            b.addEventListener('click', function () { b.disabled = true; act(rec.id, 'claims', { device: c.device, ok: x[1] }).then(refresh, function (e) { state.textContent = e.message; }); });
+            row.append(b, document.createTextNode(' '));
+          });
+          extra.append(row);
+        });
+        if ((s.claims || []).some(function (c) { return c.approved === 0; }) && live) { chip.textContent = 'Asked'; setTimeout(refresh, 8000); }
         if (s.collect && s.collect.count && s.collect.revealed) tool('Read what was added', function () { return readAdds(rec, s, extra); });
         if (s.extras.record || s.state === 'dead' || s.state === 'spent') tool('Signed record', async function () { St.download('innernet-record-' + rec.id.slice(0, 8) + '.json', new Blob([JSON.stringify(await act(rec.id, 'record'), null, 2)], { type: 'application/json' })); });
         if (s.origin_pending && live) tool('Check origin', async function () { await act(rec.id, 'origin'); return refresh(); });
         if (s.versions_left > 0 && live) tool('Post a new version (' + s.versions_left + ' left)', function () { return newVersion(rec, refresh); });
         if (s.reply) readReply(rec, s.reply).then(function (t) { reply.textContent = 'Reply: ' + t; reply.hidden = false; }).catch(function () {});
       }
+      let last = null;
+      hold.addEventListener('click', function () { hold.disabled = true; act(rec.id, 'pause', { on: !(last && last.paused) }).then(refresh, function (e) { state.textContent = e.message; }).finally(function () { hold.disabled = false; }); });
+      keyb.addEventListener('click', function () { navigator.clipboard.writeText(rec.manage).then(function () { keyb.textContent = 'Copied'; }); });
+      change.addEventListener('click', function () {            // change what can still be changed, while it waits
+        editor.hidden = !editor.hidden; if (editor.hidden || !last) return;
+        editor.textContent = '';
+        const f = {};
+        function field(key, label, type, value) { const l = el('label', label, 'label'), i = el('input', null, 'field'); i.type = type; i.value = value; l.append(i); editor.append(l); f[key] = i; }
+        if (last.open_after) field('open_after', 'Not before (clear it to remove)', 'datetime-local', local(last.open_after));
+        if (last.open_until) field('open_until', 'Not after (clear it to remove)', 'datetime-local', local(last.open_until));
+        if (last.max_opens !== 1 && !last.holders && !last.named) field('max_opens', 'Openings allowed (can only be lowered; ' + last.opens + ' used)', 'number', last.max_opens || '');
+        if (last.held) field('checkin_days', 'Check in every … days', 'number', Math.round(last.checkin_every / 86400));
+        field('line', 'Line shown before opening', 'text', rec.line || '');
+        const save = el('button', 'Save changes', 'btn btn-sm btn-light'); save.type = 'button'; editor.append(save);
+        save.addEventListener('click', async function () {
+          const d = {};
+          function stamp(i) { return i.value ? Math.floor(new Date(i.value).getTime() / 1000) : 0; }
+          if (f.open_after && stamp(f.open_after) !== last.open_after) d.open_after = stamp(f.open_after);
+          if (f.open_until && stamp(f.open_until) !== last.open_until) d.open_until = stamp(f.open_until);
+          if (f.max_opens && f.max_opens.value && Number(f.max_opens.value) !== last.max_opens) d.max_opens = Number(f.max_opens.value);
+          if (f.checkin_days && Number(f.checkin_days.value) * 86400 !== last.checkin_every) d.checkin_days = Number(f.checkin_days.value);
+          if (f.line.value.trim() !== (rec.line || '')) {
+            const keys = await C.linkKeys(C.unb64u(rec.link.split('#')[1].split('.')[0]), rec.id);
+            d.preview = await C.sealSmall(keys.preview, rec.id, 'preview', { from: rec.from || '', note: f.line.value.trim() });
+          }
+          if (!Object.keys(d).length) { editor.hidden = true; return; }
+          save.disabled = true;
+          try { await act(rec.id, 'edit', d); if (d.preview) { rec.line = f.line.value.trim(); await St.remember(rec); savePack(rec); } editor.hidden = true; await refresh(); }
+          catch (e) { state.textContent = e.message; }
+          save.disabled = false;
+        });
+      });
       function refresh() {
         return act(rec.id, 'status').then(show).catch(function (e) {
           chip.textContent = 'Gone'; chip.className = 'chip off';
@@ -576,12 +691,12 @@
           if (r.pay) {
             $('six').hidden = true; $('bar').hidden = true; say('work-msg', '');
             $('work-title').textContent = 'Renew “' + rec.name + '” for ' + r.days + ' more days';
-            $('form').hidden = true; $('done').hidden = true; $('work').hidden = false; $('work').scrollIntoView({ block: 'start' });
+            $('form').hidden = true; $('done').hidden = true; $('work').hidden = false; view('new');
             await payment(rec.id, r.pay);
           }
           ext.hidden = true;
         } catch (e) { state.textContent = e.message; }
-        $('work').hidden = true; $('form').hidden = false;
+        $('work').hidden = true; $('form').hidden = false; view('sends');
         busy = false;
         refresh();
       }
@@ -622,7 +737,6 @@
     $('wz-next').addEventListener('click', function () { if (check()) go(at + 1); });
     $('wz-back').addEventListener('click', function () { say('msg', ''); go(at - 1); });
     $('wz-free').addEventListener('click', function () { recipe('burn'); if (check()) { go(pages.length - 1); setTimeout(function () { $('form').requestSubmit(); }, 400); } });
-    $('recipes').addEventListener('click', function (e) { if (e.target.closest('button') && check()) go(1); });
     wizard.go = go;
     go(0);
   }
@@ -675,7 +789,11 @@
       requote();
     });
     $('form').addEventListener('input', requote);
-    USES.forEach(function (u) { const b = el('button', null, 'use'); b.type = 'button'; b.dataset.r = u[0]; b.append(el('strong', u[1]), el('span', u[2])); $('recipes').append(b); });
+    GROUPS.forEach(function (g) {
+      const grid = el('div', null, 'uses');
+      USES.forEach(function (u) { if ((INFO[u[0]] || ['send'])[0] !== g[0]) return; const b = el('button', null, 'use'); b.type = 'button'; b.dataset.r = u[0]; b.append(el('strong', u[1]), el('span', u[2])); grid.append(b); });
+      $('recipes').append(el('h2', g[1], 'grp'), grid);
+    });
     $('exp').addEventListener('click', async function () { St.download('innernet-send-backup.json', new Blob([JSON.stringify({ type: 'innernet-send-backup/1', sent: await St.sent() })], { type: 'application/json' })); });
     $('imp').addEventListener('change', async function () {
       try {
@@ -691,12 +809,16 @@
     $('o-form-add').addEventListener('click', function () { addRow({}); });
     wizard();
     const use = new URLSearchParams(location.search).get('use');
-    if (use && USES.some(function (u) { return u[0] === use; })) { recipe(use); say('msg', 'Started from “' + USES.filter(function (u) { return u[0] === use; })[0][1] + '”. Add what you are sending, then go through the steps.'); }
-    $('recipes').addEventListener('click', function (e) { const b = e.target.closest('button'); if (b) recipe(b.dataset.r); });
+    window.addEventListener('hashchange', route);
+    document.querySelectorAll('a[href="#new"]').forEach(function (a) { a.addEventListener('click', function (e) { e.preventDefault(); choose(null); }); });
+    if (use && USES.some(function (u) { return u[0] === use; })) { history.replaceState(null, '', location.pathname); choose(use); }
+    else if (location.hash === '#new') choose(null);
+    else route();
+    $('recipes').addEventListener('click', function (e) { const b = e.target.closest('button'); if (b && !b.disabled) choose(b.dataset.r); });
     if (!lim.paid.on) $('recipes').querySelectorAll('button').forEach(function (b) { b.disabled = ['burn', 'first'].indexOf(b.dataset.r) < 0; });
     $('again').addEventListener('click', function () {
       $('done').hidden = true; $('form').hidden = false; $('form').reset(); $('file-box').hidden = false; $('note-box').hidden = true;
-      say('text-msg', ''); recipe('burn'); pick(null); wizard.go(0);
+      $('form').reset(); pick(null); say('text-msg', ''); choose(null);
     });
     $('form').addEventListener('submit', function (ev) {
       ev.preventDefault();
@@ -714,6 +836,13 @@
         .finally(function () { busy = false; $('go').disabled = false; renderSent(); tally(); });
     });
     pick(null);
+    const mk = new URLSearchParams(location.search).get('m');
+    if (mk && /^[0-9a-f]{32}$/.test(mk) && location.hash.length > 20) {
+      if (busy) return;
+      try { await loadPack(mk, location.hash.slice(1)); history.replaceState(null, '', location.pathname + '#sends'); say('key-msg', 'Your sender key worked. That send is listed here, with its controls.'); }
+      catch (e) { history.replaceState(null, '', location.pathname + '#sends'); say('key-msg', e.status === 403 || e.status === 404 ? 'That sender key does not match a send that is still on record.' : e.message, true); }
+    }
+    route();
     renderSent();
     tally();
   }

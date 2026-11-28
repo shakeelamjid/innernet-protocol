@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import re
 import time
 
 import pytest
@@ -232,5 +233,56 @@ def test_every_block_has_a_price(tmp_path, monkeypatch):
         "extras": {"view_only": 1, "view_secs": 60, "presence": 1, "card": "gift", "alarm_url": "https://x.example/h", "record": 1, "witness": 1,
                    "origin": "example.com", "name": "my-name", "chain": 1, "qr": 1, "recovery": 1, "versions": 2}}).json()
     got = {l["label"]: l["usdc"] for l in q["lines"]}
-    assert len(got) == 21 and got["Payment lock, listing fee (5% of what it can take in)"] == "10.000000" and got["4 people can add to it"] == "2.000000"
+    assert len(got) == 20 and got["Payment lock, listing fee (5% of what it can take in)"] == "10.000000" and got["4 people can add to it"] == "2.000000"
     assert q["micro"] == sum(round(float(v) * 1e6) for v in got.values())
+
+
+def test_the_sender_key_controls_a_send_from_any_device(app):
+    client, a, tmp = app
+    owner, rx = Device(), Device()
+    code, now = os.urandom(32), int(time.time())
+    key = {"code": send.b64u(code)}                           # what a device that only has the sender key sends
+    fid, _ = make(client, owner, keep=30 * 86400, max_opens=5, open_after=now + 86400, open_until=now + 10 * 86400, recover_hash=h64(code))
+    post = lambda path, **kw: client.post(API + f"/files/{fid}/{path}", json={**key, **kw}, headers=H)   # noqa: E731
+    assert client.post(API + f"/files/{fid}/status", json={"code": send.b64u(os.urandom(32))}, headers=H).status_code == 403
+    st = post("status").json()
+    assert st["state"] == "live" and st["has_key"] and st["paused"] is False
+    # The sender's own pack, sealed by them, readable only with the sender key.
+    assert post("pack").status_code == 404 and post("pack", pack=send.b64u(b"sealed pack")).status_code == 200
+    assert post("pack").json()["pack"] == send.b64u(b"sealed pack")
+    assert client.post(API + f"/files/{fid}/pack", json=rx.sign("pack", fid), headers=H).status_code == 403
+    # Check in, change the rules while it is waiting, pause and resume, then delete.
+    ed = post("edit", open_after=now + 2 * 86400, open_until=now + 5 * 86400, max_opens=2).json()
+    assert ed["open_after"] == now + 2 * 86400 and ed["open_until"] == now + 5 * 86400 and ed["max_opens"] == 2
+    assert post("edit", checkin_days=14).status_code == 402
+    assert post("edit", max_opens=3).status_code == 422 and post("edit", open_after=now - 5).status_code == 422 and post("edit").status_code == 422
+    assert post("edit", open_after=0, preview=send.b64u(b"new line")).json()["open_after"] == 0
+    assert post("edit", open_after=now + 86400).status_code == 402          # once dropped, it is not part of the send any more
+    assert post("pause", on=True).json() == {"paused": True}
+    assert "paused" in open_(client, fid, rx).text and info(client, fid).json()["paused"] is True
+    assert post("pause", on=False).json() == {"paused": False} and open_(client, fid, rx).status_code == 200
+    assert post("revoke").json()["state"] == "dead"
+    assert [e["event"] for e in post("status").json()["events"]][-1] == "ended: taken back by the sender"
+    f2, _ = make(client, owner)                                              # every send can be taken back, free
+    assert client.post(API + f"/files/{f2}/revoke", json=owner.sign("revoke", f2), headers=H).json()["state"] == "dead"
+    f3, _ = make(client, owner, keep=30 * 86400, checkin_days=7, recover_hash=h64(code))
+    assert client.post(API + f"/files/{f3}/checkin", json=key, headers=H).json()["checkin_due"] >= now + 7 * 86400 - 5
+    assert client.post(API + f"/files/{f3}/edit", json={**key, "checkin_days": 14}, headers=H).json()["checkin_every"] == 14 * 86400
+
+
+def test_only_a_device_the_sender_approved_can_open_it(app):
+    client, a, tmp = app
+    owner, right, wrong = Device(), Device(), Device()
+    fid, _ = make(client, owner, keep=30 * 86400, max_opens=3, forward=True, extras={"device": True})
+    ask = lambda dev, name: client.post(API + f"/files/{fid}/claim", headers=H, json={   # noqa: E731
+        "auth": send.b64u(b"A" * 32), "device_pub": dev.pub, "name": name, **dev.sign("claim", fid)})
+    assert "must approve this device first" in open_(client, fid, right).text          # link and PIN alone open nothing
+    c1, c2 = ask(right, "Bilal").json(), ask(wrong, "Someone else").json()
+    assert re.fullmatch(r"\d{4}", c1["code"]) and c1["approved"] is False and ask(right, "x").json()["code"] == c1["code"]
+    seen = status(client, fid, owner)["claims"]
+    assert sorted((c["name"], c["code"], c["approved"]) for c in seen) == [("Bilal", c1["code"], 0), ("Someone else", c2["code"], 0)]
+    decide = lambda dev, ok, who=owner: client.post(API + f"/files/{fid}/claims", json={**who.sign("claims", fid), "device": dev.pub, "ok": ok}, headers=H)   # noqa: E731
+    assert decide(right, True, who=wrong).status_code == 403                           # only the sender decides
+    assert decide(right, True).status_code == 200 and decide(wrong, False).status_code == 200
+    assert client.post(API + f"/files/{fid}/info", json={"auth": send.b64u(b"A" * 32), "device_pub": right.pub}, headers=H).json()["claim"]["approved"] is True
+    assert open_(client, fid, right).status_code == 200 and open_(client, fid, wrong).status_code == 403
