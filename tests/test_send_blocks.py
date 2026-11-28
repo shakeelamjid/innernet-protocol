@@ -231,9 +231,9 @@ def test_every_block_has_a_price(tmp_path, monkeypatch):
         "plain": 100, "keep": 30 * 86400, "recipients": 3, "succession": True, "approvers": {"count": 3, "need": 2}, "duress": True,
         "summary": "x", "collect": {"seats": 4}, "pay": {"mode": "each", "price": "10", "to": "0x" + "5e" * 20, "buyers": 20},
         "extras": {"view_only": 1, "view_secs": 60, "presence": 1, "card": "gift", "alarm_url": "https://x.example/h", "record": 1, "witness": 1,
-                   "origin": "example.com", "name": "my-name", "chain": 1, "qr": 1, "recovery": 1, "versions": 2}}).json()
+                   "origin": "example.com", "name": "my-name", "chain": 1, "qr": 1, "recovery": 1, "versions": 2, "spread": 8}}).json()
     got = {l["label"]: l["usdc"] for l in q["lines"]}
-    assert len(got) == 20 and got["Payment lock, listing fee (5% of what it can take in)"] == "10.000000" and got["4 people can add to it"] == "2.000000"
+    assert got["Spread on 8 machines (any 4 rebuild it)"] == "0.400000" and len(got) == 21 and got["Payment lock, listing fee (5% of what it can take in)"] == "10.000000" and got["4 people can add to it"] == "2.000000"
     assert q["micro"] == sum(round(float(v) * 1e6) for v in got.values())
 
 
@@ -286,3 +286,72 @@ def test_only_a_device_the_sender_approved_can_open_it(app):
     assert decide(right, True).status_code == 200 and decide(wrong, False).status_code == 200
     assert client.post(API + f"/files/{fid}/info", json={"auth": send.b64u(b"A" * 32), "device_pub": right.pub}, headers=H).json()["claim"]["approved"] is True
     assert open_(client, fid, right).status_code == 200 and open_(client, fid, wrong).status_code == 403
+
+
+class FakeMachines:
+    """Machines of the network, in memory: each holds chunks per (lease, object, index)."""
+    def __init__(self, names):
+        self.online = {n: True for n in names}
+        self.disk = {n: {} for n in names}
+
+    def candidates(self):
+        return [{"id": n, "name": n, "region": "r" + str(i % 3), "uptime": 1.0 - i / 100, "load": 0}
+                for i, n in enumerate(self.online) if self.online[n]]
+
+    def put(self, c, lease, obj, idx, data):
+        self.disk[c["id"]][(lease, obj, idx)] = bytes(data)
+
+    def get(self, c, lease, obj, idx):
+        return self.disk[c["id"]][(lease, obj, idx)]
+
+    def delete(self, c, lease):
+        self.disk[c["id"]] = {k: v for k, v in self.disk[c["id"]].items() if k[0] != lease}
+
+
+def test_spread_moves_shards_onto_machines_as_they_come_and_any_four_rebuild_it(tmp_path, monkeypatch):
+    monkeypatch.setenv("INNERNET_SEND_ALL_RULES", "1")
+    from innernet2.registry_service import send as send_mod
+    fleet = FakeMachines(["m%d" % i for i in range(8)])
+    for n in fleet.online:
+        fleet.online[n] = False                                # no machines at first
+    real = send_mod.register
+    monkeypatch.setattr(send_mod, "register", lambda *a, **kw: real(*a, **{**kw, "machines": fleet}))
+    a = create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0)
+    client = TestClient(a, base_url=ORIGIN)
+    owner, rx = Device(), Device()
+    data = os.urandom(2 * send.PART + 12345)                      # three sealed parts
+    parts = 3
+    fid = os.urandom(16).hex()
+    body = {"id": fid, "size": len(data), "parts": parts, "keep": 30 * 86400, "max_opens": 0, "forward": True,
+            "auth_hash": h64(b"A" * 32), "pin_tag": "aa" * 32, "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32),
+            "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), "extras": {"spread": 6}}
+    r = client.post(API + "/files", json={**body, "size": len(data) + parts * send.TAG}, headers=H).json()
+    sealed = data + os.urandom(parts * send.TAG)
+    for n in range(parts):
+        client.put(API + f"/files/{fid}/parts/{n}", content=sealed[n * (send.PART + send.TAG):(n + 1) * (send.PART + send.TAG)],
+                   headers={**H, "X-Send-Upload": r["upload"]})
+    a.state.send_place()                                         # nobody to take them: the keeper keeps the file
+    sp = info(client, fid).json()["spread"]
+    assert sp == {"n": 6, "k": 4, "keeper_copy": True, "machines": []}
+    for n in ["m0", "m1", "m2"]:
+        fleet.online[n] = True
+    a.state.send_place()                                         # three machines came: three shards move
+    sp = info(client, fid).json()["spread"]
+    assert [m["name"] for m in sp["machines"]] == ["m0", "m1", "m2"] and sp["keeper_copy"] is True
+    for n in fleet.online:
+        fleet.online[n] = True
+    a.state.send_place()                                         # enough machines: all six placed, one each, keeper copy removed
+    sp = info(client, fid).json()["spread"]
+    assert len({m["name"] for m in sp["machines"]}) == 6 and sp["keeper_copy"] is False
+    rel = open_(client, fid, rx).json()
+    for name in ["m0", "m3"]:                                    # two of six machines go away: any four still rebuild it
+        fleet.online[name] = False
+    resp = [client.get(API + f"/files/{fid}/parts/{n}", headers={"X-Send-Token": rel["token"]}) for n in range(parts)]
+    assert b"".join(x.content for x in resp) == sealed and resp[0].headers["X-Send-From"] == "machines:2,3,5,6"
+    fleet.online["m1"] = False                                   # only three left: it cannot be rebuilt now
+    assert client.get(API + f"/files/{fid}/parts/0", headers={"X-Send-Token": rel["token"]}).status_code == 503
+    for name in fleet.online:
+        fleet.online[name] = True
+    client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H)
+    a.state.send_place()                                         # ended: every machine is told to delete its shard
+    assert all(not d for d in fleet.disk.values())

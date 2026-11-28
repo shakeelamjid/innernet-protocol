@@ -10,6 +10,7 @@
   <script src="static/send-core.js" defer></script>
   <script src="static/send-store.js" defer></script>
   <script src="static/send-qr.js" defer></script>
+  <script src="static/send-film.js" defer></script>
   <script src="static/wallet.js" defer></script>
   <script src="static/send.js" defer></script>
 </head>
@@ -210,6 +211,11 @@
           </div>
           <div class="addons one paid">
               <div class="addon">
+                <label class="check"><input id="o-spread" type="checkbox"><span><strong>Spread across machines</strong><b class="price" data-p="node" data-s=" per machine per 30 days"></b></span></label>
+                <p>The sealed file is coded into shards, one per machine of the network; any 4 of them rebuild it, so machines can come and go. Until enough machines are free, the keeper holds it, and shards move to machines as they join.</p>
+                <div class="sub" data-for="o-spread"><div class="inline"><input id="o-spread-n" class="field num" type="number" min="6" max="32" value="8"> machines, any 4 rebuild it</div><p class="note" id="o-spread-now"></p></div>
+              </div>
+              <div class="addon">
                 <label class="check"><input id="o-versions" type="checkbox"><span><strong>New versions on the same link</strong><b class="price" data-p="version" data-s=" each"></b></span></label>
                 <p>Replace what is behind the link later, without sending a new link.</p>
                 <div class="sub" data-for="o-versions"><div class="inline"><input id="o-versions-n" class="field num" type="number" min="1" max="50" value="3"> new versions</div></div>
@@ -303,6 +309,7 @@
 
       <section class="card frame step" id="work" hidden>
         <h2 id="work-title">Sealing on this device</h2>
+        <div id="film"></div>
         <div class="bar" id="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" data-pct="0%"></div>
         <ol class="six" id="six"></ol>
 
@@ -343,6 +350,7 @@
         <label class="label" for="pin">PIN</label>
         <div class="copyable"><code id="pin" class="big"></code><button class="btn btn-sm" type="button" data-copy="pin">Copy</button></div>
         </div>
+        <div id="done-film"></div>
         <div class="senderkey">
           <label class="label" for="manage">Your sender key. Keep it; do not send it to anyone.</label>
           <div class="copyable"><code id="manage"></code><button class="btn btn-sm" type="button" data-copy="manage">Copy</button></div>

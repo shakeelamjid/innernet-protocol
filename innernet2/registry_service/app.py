@@ -176,7 +176,8 @@ def create_app(settings: Settings, *, store: Store | None = None, rpc=chain.http
             for fn, iv in ((lambda: probe.probe_once(store, connect, attached=tunnels.attached, payout_ok=payout_ok),
                             settings.probe_interval),
                            (lambda: chain.scan_once(store, settings, rpc), settings.chain_interval),
-                           (lambda: app.state.send_sweep(), 300)):     # end expired, faded and opened files
+                           (lambda: app.state.send_sweep(), 300),      # end expired, faded and opened files
+                           (lambda: app.state.send_place(), 60)):      # move spread shards onto machines
                 t = threading.Thread(target=worker, args=(fn, iv), daemon=True)
                 t.start()
                 threads.append(t)

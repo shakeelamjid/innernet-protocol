@@ -8,7 +8,7 @@
   const path = location.pathname.match(/\/send\/(?:o\/([0-9a-f]{32})|n\/([a-z0-9-]+))\/?$/);
   let id = path && path[1], secret = null, keys = null, busy = false, steps = null, isNote = false, token = null;
   let afterOpen = null;
-  let joint = false, held = false, due = 0, autoPin = null, info = null, roomCall = null, roomNeed = 0, opened = null;
+  let joint = false, held = false, due = 0, jointNames = null, autoPin = null, info = null, roomCall = null, roomNeed = 0, opened = null;
 
   function say(text, err) { $('msg').textContent = text || ''; $('msg').classList.toggle('error', !!err); }
   function end(title, text) { $('title').textContent = title; $('lede').textContent = text; ['ask', 'custody', 'side', 'collect'].forEach(function (s) { $(s).hidden = true; }); }
@@ -211,7 +211,7 @@
      When enough keys are in within one window, the keeper hands the sealed keys to every place that added
      one; each place unseals them with the room secret from the link, rebuilds the link secret and opens. */
   async function custody(jl) {
-    joint = true; roomNeed = jl.k;
+    joint = true; jointNames = jl.names.slice(); roomNeed = jl.k;
     const all = jl.k === jl.names.length, d = await who(), rm = await C.room(jl.room, id);
     let timer = null, over = false;
     $('title').textContent = 'Sealed under split custody';
@@ -279,14 +279,41 @@
   async function open(pin) {
     const d = await who();
     $('work').hidden = false;
+    const F = window.InnernetFilm, checks = [];
+    checks.push(joint ? 'keys combined' : info.named ? 'your own PIN' : 'PIN proved');
+    checks.push(info.max_opens === 1 ? 'one opening' : info.max_opens ? 'opening ' + (info.opens + 1) + ' of ' + info.max_opens : 'any number of openings');
+    if (!info.forward && !info.named) checks.push('first device');
+    if (info.open_after) checks.push('after ' + St.when(info.open_after));
+    if (info.open_until) checks.push('before ' + St.when(info.open_until));
+    if (info.approvals) checks.push('approved ' + info.approvals.have + ' of ' + info.approvals.need);
+    if (info.paylock) checks.push('paid');
+    if (info.claim) checks.push('device approved');
+    const spread = info.spread && !info.spread.keeper_copy ? info.spread : null;
+    checks.push('within its time');
+    const fPlaces = [{ id: 'link', label: 'This link' }];
+    if (joint) fPlaces.push({ id: 'holders', label: 'Key holders' }); else if (!autoPin) fPlaces.push({ id: 'pin', label: info.named ? 'Your own PIN' : 'Your PIN' });
+    if (spread) fPlaces.push({ id: 'machines', label: 'Machines', state: spread.machines.length + ' hold shards' });
+    fPlaces.push({ id: 'keeper', label: 'Keeper' });
+    const fTokens = [{ id: 'a', label: 'link secret', at: joint ? 'later' : 'link' }];
+    if (!joint) fTokens.push({ id: 'b', label: 'PIN', at: autoPin ? 'link' : 'pin' });
+    fTokens.push({ id: 'c', label: 'keeper part', at: 'keeper' });
+    (jointNames || []).forEach(function (nm, i) { fTokens.push({ id: 'h' + i, label: nm.slice(0, 14), at: 'holders', cls: 'person' }); });
+    const film = F.create($('film'), { mode: 'open', label: 'How it is opened on this device', places: fPlaces, tokens: fTokens,
+      rules: checks.map(function (t) { return '\u2713 ' + t; }), spawnCount: 3, keyLabel: info.named ? 'your key' : 'file key',
+      content: { kind: isNote ? 'note' : 'file', reserve: !isNote, title: 'Sealed \u00b7 ' + St.size(info.size) } });
+    film.beat('start', joint ? 'The holders\u2019 keys reached this device' : autoPin ? 'The link, with its PIN inside, on this device' : 'Your link and PIN, on this device');
+    if (joint) film.beat('combine', 'Together they rebuilt the link secret', { from: (jointNames || []).map(function (n2, i) { return 'h' + i; }), to: 'a', place: 'link' });
     steps.set(1, 'run');
     const body = Object.assign({ auth: C.b64u(keys.auth), pin_proof: await C.pinTag(keys, pin), device_pub: d.pub }, await C.signRequest(d.device, 'open', id));
+    film.beat('prove', 'Proofs sent: not the link, not the PIN');
     steps.set(2, 'run', 'Asking the keeper…', 0.4);
     let rel;
     try { rel = await (await St.api('POST', '/files/' + id + '/open', body)).json(); }
     catch (e) { steps.set(1, 'wait'); steps.set(2, 'wait', 'The keeper checks the sender’s rules, then hands over its part.'); $('work').hidden = true; throw e; }
     $('ask').hidden = true;
     steps.set(1, 'done');
+    film.beat('check', 'The keeper checked ' + checks.length + ' rules');
+    film.beat('release', 'It released its key piece');
     steps.set(2, 'done', rel.last ? 'Released for the last time. The keeper has now destroyed its part: this link will open nothing again.'
       : 'Released. Opening ' + rel.opens + (rel.max_opens ? ' of ' + rel.max_opens : '') + '.');
     steps.set(3, 'run', 'Stretching the PIN 200,000 rounds…');
@@ -294,18 +321,34 @@
     if (rel.wrap) key = await C.unwrapKey(key, id, rel.wrap);          // this person's own PIN opens their copy of the content key
     const meta = await C.openSmall(key, id, 'meta', rel.meta);
     steps.set(3, 'done', 'Rebuilt here. The keeper never had the whole key.');
-    const out = [];
+    const isPic = /^image\/(png|jpeg|gif|webp)$/.test(meta.type);
+    film.title(meta.kind === 'note' ? 'Note' : meta.name + ' \u00b7 ' + F.typeLabel(meta.name, meta.type) + ' \u00b7 ' + St.size(meta.size));
+    film.parts(rel.parts);
+    film.beat('rebuild', rel.wrap ? 'Your own PIN unwrapped your copy of the key' : 'The file key, rebuilt here');
+    const out = []; let from0 = [];
+    if (spread) film.beat('shards', null, { n: spread.n, at: 'machines' });
     for (let n = 0; n < rel.parts; n++) {
       steps.set(4, 'run', 'Part ' + (n + 1) + ' of ' + rel.parts + ': fetched sealed, opened here.', n / rel.parts);
-      const sealed = await St.bytes('GET', '/files/' + id + '/parts/' + n, null, { 'X-Send-Token': rel.token });
+      const resp = await St.api('GET', '/files/' + id + '/parts/' + n, null, { 'X-Send-Token': rel.token });
+      const sealed = new Uint8Array(await resp.arrayBuffer());
+      if (n === 0) from0 = String(resp.headers.get('X-Send-From') || '').replace(/^machines:/, '').split(',').filter(Boolean).map(Number);
+      if (n === 0 && spread) film.beat('gather', 'Shards ' + from0.join(', ') + ' answered from the machines; the keeper rebuilt the sealed file from them', { which: from0 });
+      if (n === 0) film.sealed(isPic ? { tiles: F.noiseTiles(sealed.subarray(0, 432)) } : { chars: F.sealedChars(sealed) });
       out.push(await C.openPart(key, id, n, rel.parts, sealed));
       steps.set(4, 'run', null, (n + 1) / rel.parts);
     }
     steps.set(4, 'done', rel.parts + (rel.parts === 1 ? ' part' : ' parts') + ' opened. Each seal matched, so nothing was changed on the way.');
+    film.beat('fetch', rel.parts === 1 ? 'The sealed part, fetched' : rel.parts + ' sealed parts, fetched');
     steps.set(5, 'run');
     const blob = new Blob(out, { type: meta.type });
     if (blob.size !== meta.size) throw new Error('it is not complete');
     steps.set(5, 'done', St.size(meta.size) + ', complete and unchanged.');
+    const picTiles = isPic ? await F.imageTiles(blob) : null;
+    film.plain(picTiles ? { tiles: picTiles } : { chars: F.firstChars(new Uint8Array(await blob.slice(0, 48).arrayBuffer()), meta.kind === 'note' || /^text\//.test(meta.type)).chars });
+    film.beat('unseal', meta.kind === 'note' ? 'Opened: the note, unchanged' : picTiles ? 'Opened: the picture, unchanged' : 'Opened: ' + meta.name + ', unchanged');
+    if (rel.last) film.beat('destroy', 'The keeper destroyed its piece. This link opens nothing again');
+    else film.beat('kept', 'The keeper keeps its piece for the next opening', { left: rel.max_opens ? rel.max_opens - rel.opens : 0 });
+    await film.end(meta.kind === 'note' ? 'Your note is open' : picTiles ? 'Your picture is open' : 'Your file is open');
     return { blob: blob, meta: meta, rel: rel };
   }
 

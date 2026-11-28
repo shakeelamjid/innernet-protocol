@@ -41,6 +41,7 @@
     ['record', 'chain', 'qr', 'recovery'].forEach(function (k) { if (on('o-' + k)) e[k] = 1; });
     if (on('o-witness')) e.witness = 1;
     if (on('o-device')) e.device = 1;
+    if (on('o-spread')) e.spread = Math.min(32, Math.max(6, parseInt($('o-spread-n').value, 10) || 8));
     if (on('o-origin') && $('o-origin-dom').value.trim()) e.origin = $('o-origin-dom').value.trim().toLowerCase();
     if (on('o-name') && $('o-name-v').value.trim()) e.name = $('o-name-v').value.trim().toLowerCase();
     if (on('o-versions')) e.versions = Math.max(1, parseInt($('o-versions-n').value, 10) || 1);
@@ -74,6 +75,7 @@
       return { q: i[0].value.trim(), type: type, req: r.querySelector('input[type=checkbox]').checked, opts: type === 'choice' ? i[1].value.split(',').map(function (t) { return t.trim(); }).filter(Boolean) : [] };
     }).filter(function (f) { return f.q; }).slice(0, 20);
   }
+  function machinesNow() { const m = (lim.paid.spread || {}).machines || 0; return m === 0 ? 'No storage machine is online right now.' : m === 1 ? '1 storage machine is online now.' : m + ' storage machines are online now.'; }
   function names() { return $('o-names').value.split(/\n|,/).map(function (t) { return t.trim().slice(0, 40); }).filter(Boolean).slice(0, 20); }
   function opts() {
     const many = $('o-many').checked;
@@ -106,6 +108,7 @@
     if (o.collect) out.push('Up to ' + o.collect.seats + ' people can add to it and replace what they added' + (o.open_after ? ' until ' + St.when(o.open_after) + '; then it all opens together' : '') + (o.collect.reveal_count ? ' once ' + o.collect.reveal_count + ' have added' : '') + ', for ' + (o.collect.audience === 'all' ? 'everyone with the link.' : 'you only.'));
     if (o.duress) out.push('A duress PIN opens a decoy and tells you.');
     if (o.extras) {
+      if (o.extras.spread) out.push('Coded into ' + o.extras.spread + ' shards for ' + o.extras.spread + ' machines; any 4 rebuild it. ' + machinesNow() + ' Until then the keeper holds it.');
       if (o.extras.device) out.push('It opens only on a device you approve, after you match its 4-digit code with the receiver.');
       if (o.extras.view_only) out.push('Shown on screen only, with your name across it.');
       if (o.extras.view_secs) out.push('It leaves the screen ' + Math.round(o.extras.view_secs / 60) + ' minutes after opening.');
@@ -135,6 +138,7 @@
       $('o-pay-fee').textContent = (mode === 'crowd' ? 'Target ' + take.toFixed(2) + ' USDC, all of it paid to your address.' : price.toFixed(2) + ' USDC × up to ' + n + ' readers = up to ' + take.toFixed(2) + ' USDC, all of it paid to your address.') +
         ' INNERNET fee: ' + (bps * 100) + '% of that = ' + fee.toFixed(2) + ' USDC, paid by you now with this send. Readers pay only the price.';
     })();
+    $('o-spread-now').textContent = machinesNow() + ' Each shard moves to its own machine as one becomes free.';
     $('o-split').checked = lock() === 'keys';
     $('keys-box').hidden = !$('o-split').checked;
     if ($('o-split').checked) $('o-forward').checked = false;
@@ -372,22 +376,73 @@
       { title: 'Cut into parts', text: '' },
       { title: 'Each part sealed', text: 'AES-256-GCM, on this device.', cells: true },
       { title: 'Sealed parts stored', text: 'Only sealed bytes leave this device.', cells: true }]);
-    $('six').hidden = false; $('bar').hidden = false; $('pay').hidden = true; say('work-msg', '');
+    $('six').hidden = false; $('bar').hidden = false; $('pay').hidden = true; say('work-msg', ''); $('film').hidden = false;
     $('work-title').textContent = 'Sealing on this device';
     $('form').hidden = true; $('work').hidden = false; $('work').scrollIntoView({ block: 'start' });
-
+    // The film: built from this send, its content, its lock, its rules and where each piece goes.
+    const F = window.InnernetFilm, L = lock(), fx = o.extras || {};
+    const keyPeople = L === 'keys' ? names() : [], pinPeople = L === 'named' ? lines('o-rnames', 20) : [], apprPeople = o.approvers ? lines('o-anames', 10) : [];
+    const short = function (list) { const t = list.join(', '); return t.length > 24 ? t.slice(0, 23) + '\u2026' : t; };
+    const head = new Uint8Array(await c.blob.slice(0, 48).arrayBuffer());
+    const first = F.firstChars(head, c.kind === 'note' || /^text\//.test(c.type));
+    const tiles = c.kind === 'file' && /^image\/(png|jpeg|gif|webp)$/.test(c.type) ? await F.imageTiles(c.blob) : null;
+    const filmRules = [];
+    filmRules.push(o.max_opens === 1 ? 'opens once' : o.max_opens ? 'opens ' + o.max_opens + ' times' : 'opens any number of times');
+    if (L === 'pin' && !o.forward && !fx.pin_in_link) filmRules.push('first device only');
+    if (L === 'named') filmRules.push(pinPeople.length + ' own PINs' + (o.succession ? ', one after another' : ''));
+    if (L === 'keys') filmRules.push((o.need === o.holders ? 'all ' : 'any ' + o.need + ' of ') + o.holders + ' keys together');
+    if (o.open_after) filmRules.push('not before ' + St.when(o.open_after));
+    if (o.open_until) filmRules.push('not after ' + St.when(o.open_until));
+    if (o.checkin_days) filmRules.push('held while you check in every ' + o.checkin_days + ' days');
+    if (o.approvers) filmRules.push(o.approvers.need + ' of ' + o.approvers.count + ' approvers release it');
+    if (o.pay) filmRules.push(o.pay.mode === 'crowd' ? 'opens at ' + o.pay.target + ' USDC raised' : 'reader pays ' + o.pay.price + ' USDC' + (o.pay.mode === 'period' ? ' per ' + o.pay.period_days + ' days' : ''));
+    if (fx.device) filmRules.push('approved device only');
+    if (fx.spread) filmRules.push(fx.spread + ' shards, any 4 rebuild it');
+    if (o.collect) filmRules.push(o.collect.seats + ' people can add');
+    if (o.duress) filmRules.push('duress PIN opens a decoy');
+    if (fx.view_only) filmRules.push('screen only');
+    if (fx.view_secs) filmRules.push('visible ' + Math.round(fx.view_secs / 60) + ' min');
+    if (fx.presence) filmRules.push('only while all are present');
+    if (o.receipt) filmRules.push('read receipt');
+    if (o.reply) filmRules.push('one sealed reply');
+    filmRules.push('kept ' + Math.round(o.keep / 86400) + ' days');
+    const filmPlaces = [{ id: 'link', label: L === 'keys' ? 'The link: names only' : 'The link', short: 'Link' }, { id: 'you', label: 'You' }];
+    if (keyPeople.length || pinPeople.length) filmPlaces.push({ id: 'people', label: short(keyPeople.length ? keyPeople : pinPeople) });
+    if (apprPeople.length) filmPlaces.push({ id: 'appr', label: 'Approvers' });
+    if (fx.spread) filmPlaces.push({ id: 'machines', label: 'Machines', state: ((lim.paid.spread || {}).machines || 0) + ' online now' });
+    filmPlaces.push({ id: 'keeper', label: 'Keeper' });
+    const filmTokens = [{ id: 'a', label: 'link secret', at: 'spawn', slot: 0, to: L === 'keys' ? null : 'link' }];
+    if (L !== 'keys') filmTokens.push({ id: 'b', label: 'PIN', at: 'spawn', slot: 1, to: L === 'named' ? null : fx.pin_in_link ? 'link' : 'you' });
+    filmTokens.push({ id: 'c', label: 'keeper part', at: 'spawn', slot: 2, to: 'keeper' });
+    keyPeople.forEach(function (p, i) { filmTokens.push({ id: 'h' + i, label: p.slice(0, 14), at: 'split', to: 'people', cls: 'person' }); });
+    pinPeople.forEach(function (p, i) { filmTokens.push({ id: 'p' + i, label: p.slice(0, 14), at: 'split', to: 'people', cls: 'person' }); });
+    apprPeople.forEach(function (p, i) { filmTokens.push({ id: 'r' + i, label: p.slice(0, 14), at: 'later', to: 'appr', cls: 'person' }); });
+    filmTokens.push({ id: 'sk', label: 'sender key', at: 'later', to: 'you' });
+    if (fx.witness) filmTokens.push({ id: 'wl', label: 'witness link', at: 'later', to: 'you' });
+    if (o.duress) filmTokens.push({ id: 'dp', label: 'duress PIN', at: 'later', to: 'you' });
+    const film = F.create($('film'), {
+      mode: 'seal', label: 'How this send is sealed', keyLabel: L === 'named' ? 'content key' : 'file key',
+      content: { kind: tiles ? 'image' : c.kind === 'note' ? 'note' : 'file',
+        title: c.kind === 'note' ? 'Note \u00b7 ' + Array.from(new TextDecoder().decode(await c.blob.arrayBuffer())).length + ' characters' : c.name + ' \u00b7 ' + F.typeLabel(c.name, c.type) + ' \u00b7 ' + St.size(c.size) },
+      places: filmPlaces, tokens: filmTokens, rules: filmRules, spawnCount: 3 });
+    film.plain(tiles ? { tiles: tiles } : { chars: first.chars });
+    film.beat('content', c.kind === 'note' ? 'Your note, on this device' : tiles ? 'Your picture, on this device' : c.name + (first.hex ? ': its first bytes, in hex' : ': its first characters'));
     steps.set(0, 'run');
     const id = C.newId(), secret = C.random(32), share = C.random(32), who = names();
     const pin = o.holders ? await C.jointPin(secret) : C.newPin();
     const device = await St.deviceKey();
     await pause(350);
     steps.set(0, 'done', 'A link secret, a 6-digit PIN and a keeper part. The first two never reach a server.');
+    film.beat('keys', L === 'keys' ? 'A link secret and a keeper part, made here' : 'Three random key pieces, made here');
+    if (keyPeople.length) film.beat('split', 'The link secret becomes ' + keyPeople.length + ' keys: ' + (o.need === o.holders ? 'all' : 'any ' + o.need) + ' needed', { from: 'a', into: keyPeople.map(function (p, i) { return 'h' + i; }) });
+    if (pinPeople.length) film.beat('split', 'A PIN for each of ' + pinPeople.length + ' people', { from: 'b', into: pinPeople.map(function (p, i) { return 'p' + i; }) });
 
     steps.set(1, 'run', 'Stretching the PIN 200,000 rounds, so it cannot be guessed quickly…');
     const keys = await C.linkKeys(secret, id);
     const key = await C.fileKey(secret, share, pin, id);
     await pause(250);
     steps.set(1, 'done', 'Built from link secret + PIN + keeper part. Missing any one, there is no key.');
+    film.beat('filekey', L === 'named' ? 'One content key, wrapped once for each PIN' : 'Together they make the file key');
 
     steps.set(2, 'run', 'Depositing the keeper part and your rules…', 0.3);
     const parts = C.partCount(c.size);
@@ -454,31 +509,47 @@
       parts: parts, rules: o, links: links, art: art, from: from, line: $('note').value.trim(), code: C.b64u(control), manage: location.origin + St.BASE + '/send?m=' + id + '#' + C.b64u(control), recover: null, open_link: !!ex.pin_in_link, named: !!art.pins, paid: made.pay ? made.pay.amount : null };
     await St.remember(rec);
     codes[id] = rec.code; await savePack(rec);
+    film.beat('rules', filmRules.length === 1 ? 'Your rule' : 'Your ' + filmRules.length + ' rules');
+    film.beat('deposit', 'The keeper gets one key piece and these rules');
     if (made.pay) {
       steps.set(2, 'run', 'Deposited. Waiting for your payment of ' + St.usdc(made.pay.amount) + ' USDC before anything is uploaded…', 0.6);
       await payment(id, made.pay);
     }
     steps.set(2, 'done', commentary(o, made.expires_at).join(' ') + (made.pay ? ' Paid ' + St.usdc(made.pay.amount) + ' USDC.' : ''));
+    if (made.pay) film.beat('pay', 'Paid ' + St.usdc(made.pay.amount) + ' USDC on Base, found on the chain', { label: St.usdc(made.pay.amount) + ' USDC', from: 'you' });
 
     if (decoy) await St.put('/files/' + id + '/decoy', decoy, { 'X-Send-Upload': made.upload, 'Content-Type': 'application/octet-stream' });
     steps.set(3, 'run');
     await pause(250);
     steps.set(3, 'done', parts === 1 ? St.size(c.size) + ' fits in one part.' : St.size(c.size) + ' in ' + parts + ' parts of up to 4 MB.');
+    film.beat('cut', parts === 1 ? 'It fits in one part' : 'Cut into ' + parts + ' parts of up to 4 MB', { parts: parts });
 
     for (let n = 0; n < parts; n++) {
       steps.set(4, 'run', 'Sealing part ' + (n + 1) + ' of ' + parts + '. Each is numbered, so none can be swapped, dropped or cut.', n / parts);
       const plain = new Uint8Array(await c.blob.slice(n * C.PART, (n + 1) * C.PART).arrayBuffer());
       const sealed = await C.sealPart(contentKey, id, n, parts, plain);
+      if (n === 0) film.sealed(tiles ? { tiles: F.noiseTiles(sealed.subarray(0, 432)) } : { chars: F.sealedChars(sealed) });
+      if (n + 1 === parts && fx.spread) film.beat('seal', tiles ? 'Sealed: the real sealed bytes, drawn as pixels' : 'Sealed: these are the real sealed bytes');
+      if (n + 1 === parts && fx.spread) film.beat('shards', 'Coded into ' + fx.spread + ' shards: any 4 rebuild it', { n: fx.spread });
+      else if (n + 1 === parts) film.beat('seal', tiles ? 'Sealed: the real sealed bytes, drawn as pixels' : 'Sealed: these are the real sealed bytes');
       steps.set(4, n + 1 === parts ? 'done' : 'run', n + 1 === parts ? (parts === 1 ? 'The part is' : 'All ' + parts + ' parts are') + ' sealed with AES-256-GCM, numbered so none can be swapped, dropped or cut.' : null, (n + 1) / parts);
       steps.set(5, 'run', 'Storing part ' + (n + 1) + ' of ' + parts + ' with the keeper…', n / parts);
       await store(id, n, sealed, made.upload, function (f) { steps.set(5, 'run', null, (n + f) / parts); });
+      if (parts > 1) film.beat('progress', null, { text: (n + 1) + ' of ' + parts + ' parts stored' });
     }
     steps.set(5, 'done', 'Stored. The keeper holds sealed bytes and cannot read them.');
-    await pause(500);
-    return { rec: rec, lines: commentary(o, made.expires_at) };
+    if (fx.spread) film.beat('progress', null, { text: 'holds ' + fx.spread + ' shards' });
+    film.beat('store', fx.spread ? 'Held by the keeper; shards move to machines as they join' : keyPeople.length ? 'Stored sealed. A key to each of ' + keyPeople.length + ' people; the file key is kept nowhere'
+      : pinPeople.length ? 'Stored sealed. A PIN to each person; the content key is kept nowhere'
+      : apprPeople.length ? 'Stored sealed. Approval links to ' + apprPeople.length + ' people; the file key is kept nowhere' : 'Stored sealed. The file key is kept nowhere');
+    const when = [o.open_after ? 'after ' + St.when(o.open_after) : '', o.approvers ? 'once approved' : '', o.pay ? 'after payment' : '', o.checkin_days ? 'if you stop checking in' : '', fx.device ? 'on a device you approve' : ''].filter(Boolean);
+    await film.end((keyPeople.length ? 'Opens when ' + (o.need === o.holders ? 'all ' + o.holders : o.need + ' of ' + o.holders) + ' keys are added together'
+      : pinPeople.length ? 'Each person opens it with their own PIN' : fx.pin_in_link ? 'Anyone with the link can open it' : 'Opens with the link and the PIN') + (when.length ? ', ' + when.join(', ') : ''));
+    return { rec: rec, lines: commentary(o, made.expires_at), film: film };
   }
 
   function showDone(r) {
+    $('done-film').textContent = ''; if (r.film) $('done-film').append(r.film.el);
     $('link').textContent = r.rec.shared || r.rec.link; $('pin').textContent = r.rec.pin;
     $('many-links').hidden = !r.rec.links; $('pin-box').hidden = !!r.rec.links;
     $('links').textContent = '';
@@ -620,6 +691,7 @@
         if (s.paylock) moreText += s.paylock.mode === 'crowd' ? ' Raised ' + St.usdc(s.paylock.raised) + ' of ' + St.usdc(s.paylock.target) + ' USDC.' : ' Sold to ' + s.paylock.sold + ' of ' + s.paylock.buyers + '; ' + St.usdc(s.paylock.raised) + ' USDC paid to you.';
         if (s.collect) moreText += ' ' + s.collect.count + ' of ' + s.collect.seats + ' have added.' + (s.collect.revealed ? '' : ' Closed to everyone until it opens.');
         if (s.events.some(function (e) { return e.event === 'duress PIN used'; })) moreText += ' The duress PIN was used.';
+        if (s.spread) moreText += ' Shards: ' + s.spread.machines.length + ' of ' + s.spread.n + ' on machines' + (s.spread.machines.length ? ' (' + s.spread.machines.map(function (m) { return m.name + (m.region ? ', ' + m.region : ''); }).join('; ') + ')' : '') + (s.spread.keeper_copy ? '; the keeper holds the rest.' : '; the keeper\u2019s copy is removed.');
         if (s.version > 1) moreText += ' Version ' + s.version + '.';
         if (s.origin) moreText += ' Shown as from ' + s.origin + '.';
         state.textContent += moreText;
@@ -689,7 +761,7 @@
         try {
           const r = await act(rec.id, 'extend', { days: daysMore });
           if (r.pay) {
-            $('six').hidden = true; $('bar').hidden = true; say('work-msg', '');
+            $('six').hidden = true; $('bar').hidden = true; $('film').hidden = true; say('work-msg', '');
             $('work-title').textContent = 'Renew “' + rec.name + '” for ' + r.days + ' more days';
             $('form').hidden = true; $('done').hidden = true; $('work').hidden = false; view('new');
             await payment(rec.id, r.pay);

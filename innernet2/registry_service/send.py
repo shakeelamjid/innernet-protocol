@@ -77,7 +77,7 @@ ROOM_SEEN = 20                 # a location counts as present this long after it
 MORE = {"recipient": 50_000, "succession": 500_000, "approver": 250_000, "duress": 500_000, "recovery": 0,
         "view_only": 100_000, "view_timer": 100_000, "presence": 250_000, "card": 50_000, "summary": 50_000, "alarm": 100_000,
         "record": 100_000, "witness": 100_000, "origin": 500_000, "name": 250_000, "chain": 100_000, "qr": 100_000,
-        "seat": 500_000, "version": 100_000, "device": 250_000}
+        "seat": 500_000, "version": 100_000, "device": 250_000, "node": 50_000}
 PRICES.update(MORE)
 LISTING_BPS = 500              # payment lock: the listing fee is 5% of what the lock can take in, paid upfront
 CARDS = ("gift", "invite", "voucher", "letter")
@@ -88,6 +88,7 @@ ADD_BYTES = PART + TAG + 64    # one contribution: at most one sealed part
 SLUG = re.compile(r"^[a-z0-9][a-z0-9-]{2,39}$")
 DOMAIN_NAME = re.compile(r"^(?=.{4,120}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$")
 HEX64 = re.compile(r"^[0-9a-f]{64}$")
+SPREAD_K, SPREAD_MIN, SPREAD_MAX = 4, 6, 32   # spread: N shards on N machines, any 4 rebuild the sealed file
 GRACE = 3 * 86400              # a paid send whose time ended is locked this long (renewable), then destroyed
 TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 ADDRESS = re.compile(r"^0x[0-9a-fA-F]{40}$")
@@ -115,6 +116,8 @@ CREATE TABLE IF NOT EXISTS send_room (file TEXT NOT NULL, seat INTEGER NOT NULL,
 CREATE TABLE IF NOT EXISTS send_recipients (file TEXT NOT NULL, idx INTEGER NOT NULL, pin_tag TEXT NOT NULL, wrap TEXT NOT NULL, after INTEGER NOT NULL DEFAULT 0, until INTEGER NOT NULL DEFAULT 0, unless INTEGER, opened_at INTEGER NOT NULL DEFAULT 0, device TEXT, PRIMARY KEY (file, idx));
 CREATE TABLE IF NOT EXISTS send_approvals (file TEXT NOT NULL, idx INTEGER NOT NULL, token_hash TEXT NOT NULL, approved_at INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, idx));
 CREATE TABLE IF NOT EXISTS send_claims (file TEXT NOT NULL, device TEXT NOT NULL, name TEXT NOT NULL, code TEXT NOT NULL, at INTEGER NOT NULL, approved INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, device));
+CREATE TABLE IF NOT EXISTS send_shards (file TEXT NOT NULL, idx INTEGER NOT NULL, provider TEXT NOT NULL, name TEXT NOT NULL, region TEXT NOT NULL, placed_at INTEGER NOT NULL, PRIMARY KEY (file, idx));
+CREATE TABLE IF NOT EXISTS send_trash (provider TEXT NOT NULL, lease TEXT NOT NULL, since INTEGER NOT NULL, PRIMARY KEY (provider, lease));
 CREATE TABLE IF NOT EXISTS send_names (name TEXT PRIMARY KEY, file TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS send_adds (file TEXT NOT NULL, n INTEGER NOT NULL, device TEXT NOT NULL, size INTEGER NOT NULL, hash TEXT NOT NULL, first_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, changes INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (file, n));
 CREATE TABLE IF NOT EXISTS send_access (file TEXT NOT NULL, device TEXT NOT NULL, amount INTEGER NOT NULL, tx TEXT NOT NULL, until INTEGER NOT NULL DEFAULT 0, at INTEGER NOT NULL, PRIMARY KEY (file, device, tx));
@@ -131,7 +134,7 @@ ADDED = {"kind": "TEXT NOT NULL DEFAULT 'file'", "open_after": "INTEGER NOT NULL
          "version": "INTEGER NOT NULL DEFAULT 1", "versions_left": "INTEGER NOT NULL DEFAULT 0", "origin_ok": "INTEGER NOT NULL DEFAULT 0",
          "next_share": "TEXT", "next_meta": "TEXT", "next_size": "INTEGER NOT NULL DEFAULT 0", "next_parts": "INTEGER NOT NULL DEFAULT 0",
          "next_got": "INTEGER NOT NULL DEFAULT 0", "next_upload": "TEXT",
-         "paused": "INTEGER NOT NULL DEFAULT 0", "pack": "TEXT", "room_hash": "TEXT", "seat_hashes": "TEXT", "room_until": "INTEGER NOT NULL DEFAULT 0", "checkin_every": "INTEGER NOT NULL DEFAULT 0", "checkin_due": "INTEGER NOT NULL DEFAULT 0",
+         "paused": "INTEGER NOT NULL DEFAULT 0", "spread": "INTEGER NOT NULL DEFAULT 0", "local": "INTEGER NOT NULL DEFAULT 1", "pack": "TEXT", "room_hash": "TEXT", "seat_hashes": "TEXT", "room_until": "INTEGER NOT NULL DEFAULT 0", "checkin_every": "INTEGER NOT NULL DEFAULT 0", "checkin_due": "INTEGER NOT NULL DEFAULT 0",
          "ext_price": "INTEGER NOT NULL DEFAULT 0", "ext_keep": "INTEGER NOT NULL DEFAULT 0", "ext_by": "INTEGER NOT NULL DEFAULT 0"}
 
 
@@ -289,13 +292,39 @@ def micro(text) -> int:
     return v
 
 
-def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, rpc=None, signer=None) -> None:
+def shard_object(fid: str, idx: int) -> str:
+    return hashlib.sha256(f"{fid}/{idx}".encode()).hexdigest()[:32]
+
+
+def pick_machines(cands: list[dict], k: int) -> list[dict]:
+    """Which machines take the shards of one send: one shard per machine; different regions first;
+    then the longest 7-day uptime; then the machine holding the fewest shards for this registry."""
+    pool = sorted(cands, key=lambda c: (-c.get("uptime", 0.0), c.get("load", 0), c["id"]))
+    picked, regions = [], set()
+    for c in pool:
+        if len(picked) == k:
+            break
+        if c.get("region") not in regions:
+            picked.append(c)
+            regions.add(c.get("region"))
+    for c in pool:
+        if len(picked) == k:
+            break
+        if c not in picked:
+            picked.append(c)
+    return picked
+
+
+def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, rpc=None, signer=None, machines=None) -> None:
     migrate(store)
     from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC
     network = os.environ.get("INNERNET_SEND_NETWORK", "eip155:8453")
     payto = os.environ.get("INNERNET_SEND_PAYTO", "") or settings.fee_payto.get(network, "")
     if network not in USDC or not ADDRESS.match(payto or "") or not settings.rpc.get(network) or rpc is None:
         payto = ""                                         # paid sends are off until a public receiving address is set
+
+    if machines is None and signer is not None:
+        machines = network_machines(store, settings, P, signer)
 
     def bump(k: str, n: int = 1) -> None:
         store.x("INSERT INTO send_totals(k, n) VALUES (?,?) ON CONFLICT(k) DO UPDATE SET n=n+excluded.n", (k, n))
@@ -470,6 +499,14 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             lines.append(("Card design", Pm["card"]))
         if e.get("pin_in_link"):
             ex["pin_in_link"] = 1
+        if e.get("spread"):
+            try:
+                sp = int(e["spread"])
+            except (TypeError, ValueError):
+                raise HTTPException(422, "spread is a number of machines")
+            if not SPREAD_MIN <= sp <= SPREAD_MAX:
+                raise HTTPException(422, f"spread across {SPREAD_MIN} to {SPREAD_MAX} machines")
+            ex["spread"] = sp
         url, mails = str(e.get("alarm_url") or "").strip(), e.get("alarm_email") or []
         if url or mails:
             if url and not (url.startswith("https://") and len(url) <= 300):
@@ -627,6 +664,9 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                     pass
         store.x("DELETE FROM send_names WHERE file=?", (fid,))
         store.x("DELETE FROM send_claims WHERE file=?", (fid,))
+        for sh in store.q("SELECT provider FROM send_shards WHERE file=?", (fid,)):
+            store.x("INSERT OR IGNORE INTO send_trash(provider, lease, since) VALUES (?,?,?)", (sh["provider"], fid, now or int(time.time())))
+        store.x("DELETE FROM send_shards WHERE file=?", (fid,))
         store.x("DELETE FROM send_quotes WHERE file=?", (fid,))
         event(fid, "ended: " + reason, now)
         if was["state"] in ("live", "spent"):
@@ -682,6 +722,10 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                "summary": r.get("summary"), "version": r.get("version", 1), "versions_left": r.get("versions_left", 0),
                "origin": e.get("origin") if r.get("origin_ok") else None, "origin_pending": e.get("origin") if not r.get("origin_ok") else None,
                "named": store.one("SELECT COUNT(*) AS n FROM send_recipients WHERE file=?", (r["id"],))["n"]}
+        if r.get("spread"):
+            out["spread"] = {"n": r["spread"], "k": SPREAD_K, "keeper_copy": bool(r.get("local", 1)),
+                             "machines": [{"shard": x["idx"] + 1, "name": x["name"], "region": x["region"], "since": x["placed_at"]}
+                                          for x in store.q("SELECT idx, name, region, placed_at FROM send_shards WHERE file=? ORDER BY idx", (r["id"],))]}
         if r.get("approve_need"):
             out["approvals"] = {"need": r["approve_need"], "have": store.one(
                 "SELECT COUNT(*) AS n FROM send_approvals WHERE file=? AND approved_at>0", (r["id"],))["n"],
@@ -754,6 +798,9 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             receipt=o["receipt"], reply=o["reply"], control=o["control"], holders=holders, checkin=checkin, free_bytes=lim["max_bytes"])
         if not lim["all_rules"]:                           # a send lives exactly one storage period
             o["keep"] = term_price(math.ceil(keep / DAY), plain, prices(), lim["max_bytes"])[0] * DAY
+        sp = o["more"]["extras"].get("spread", 0)
+        if sp and not lim["all_rules"]:
+            o["lines"].append((f"Spread on {sp} machines (any {SPREAD_K} rebuild it)", sp * math.ceil(o["keep"] / (30 * DAY)) * prices()["node"]))
         if not lim["all_rules"]:
             o["lines"] += o["more"]["lines"]
         o["total"] = sum(n for _, n in o["lines"])
@@ -809,7 +856,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 "tier": "all" if lim["all_rules"] else "paid" if payto else "free", "pin_tries": PIN_TRIES,
                 "paid": {"on": bool(payto) and not lim["all_rules"], "max_bytes": lim["paid_max_bytes"], "max_keep": lim["paid_max_keep"],
                          "to": payto, "network": NETWORK_NAMES.get(network, network), "listing_bps": LISTING_BPS, "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
-                         "grace": GRACE, "plan": [[usdc(prices()[f"plan_{r}_{t}"]) for t in TERMS] for r in range(3)],
+                         "grace": GRACE, "spread": {"k": SPREAD_K, "min": SPREAD_MIN, "max": SPREAD_MAX, "machines": machine_count()}, "plan": [[usdc(prices()[f"plan_{r}_{t}"]) for t in TERMS] for r in range(3)],
                          "prices": {k: usdc(v) for k, v in prices().items()}}}
 
     @app.get(api + "/stats")
@@ -877,6 +924,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                      room_hash, json.dumps(seats) if seats else None))
         except Exception:  # noqa: BLE001  (duplicate id)
             raise HTTPException(409, "that id is taken")
+        store.x("UPDATE send_files SET spread=? WHERE id=?", (x["extras"].get("spread", 0), fid))
         store.x("UPDATE send_files SET extras=?, summary=?, recover_hash=?, witness_hash=?, approve_need=?, duress_tag=?, decoy_share=?, "
                 "decoy_meta=?, decoy_size=?, collect=?, pay=?, parent=?, versions_left=? WHERE id=?",
                 (json.dumps(x["extras"]), x.get("summary"), x.get("recover_hash"), x.get("witness_hash"),
@@ -1287,13 +1335,17 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         decoy = t["kind"] == "decoy"
         if not 0 <= n < (1 if decoy else r["parts"]):
             raise HTTPException(404, "no such part")
+        if not decoy and not r["local"]:
+            data, used = from_machines(r, n)
+            return Response(data, media_type="application/octet-stream",
+                            headers={"Cache-Control": "no-store", "X-Send-From": "machines:" + ",".join(str(i + 1) for i in used)})
         try:
             with open(side(fid, "decoy") if decoy else path(fid), "rb") as f:
                 f.seek(n * (PART + TAG))
                 data = f.read(PART + TAG)
         except FileNotFoundError:
             raise HTTPException(410, "the sealed bytes are gone")
-        return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "no-store"})
+        return Response(data, media_type="application/octet-stream", headers={"Cache-Control": "no-store", "X-Send-From": "keeper"})
 
     @app.post(api + "/files/{fid}/reply")
     async def reply(fid: str, request: Request):
@@ -1721,6 +1773,10 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             store.x("UPDATE send_files SET next_got=? WHERE id=?", (n + 1, fid))
             return {"got": n + 1, "live": False}
         os.replace(side(fid, "next"), path(fid))
+        for sh in store.q("SELECT provider FROM send_shards WHERE file=?", (fid,)):     # the old shards no longer match
+            store.x("INSERT OR IGNORE INTO send_trash(provider, lease, since) VALUES (?,?,?)", (sh["provider"], fid, int(time.time())))
+        store.x("DELETE FROM send_shards WHERE file=?", (fid,))
+        store.x("UPDATE send_files SET local=1 WHERE id=?", (fid,))
         h = hashlib.sha256()
         with open(path(fid), "rb") as f:
             for block in iter(lambda: f.read(1 << 20), b""):
@@ -1731,3 +1787,144 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         store.x("DELETE FROM send_tokens WHERE file=?", (fid,))
         event(fid, f"new version {r['version'] + 1}")
         return {"got": n + 1, "live": True, "version": r["version"] + 1}
+
+    # ---- spread: shards on machines of the network ----------------------------------------------
+
+    count_cache = {"at": 0, "n": 0}
+
+    def machine_count() -> int:
+        if machines is None:
+            return 0
+        if time.time() - count_cache["at"] > 60:
+            try:
+                count_cache["n"], count_cache["at"] = len(machines.candidates()), time.time()
+            except Exception:  # noqa: BLE001
+                count_cache["at"] = time.time()
+        return count_cache["n"]
+
+    def part_len(r: dict, n: int) -> int:
+        return PART + TAG if n < r["parts"] - 1 else r["size"] - (r["parts"] - 1) * (PART + TAG)
+
+    def from_machines(r: dict, n: int) -> bytes:
+        """Rebuild sealed part n from any 4 shards on machines that answer."""
+        from ..codec import decode
+        if machines is None:
+            raise HTTPException(503, "the machines holding this cannot be reached from here")
+        online = {c["id"]: c for c in machines.candidates()}
+        got = {}
+        for sh in store.q("SELECT idx, provider FROM send_shards WHERE file=? ORDER BY idx", (r["id"],)):
+            c = online.get(sh["provider"])
+            if c is None:
+                continue
+            try:
+                got[sh["idx"]] = machines.get(c, r["id"], shard_object(r["id"], sh["idx"]), n)
+            except Exception:  # noqa: BLE001  (try the next machine)
+                continue
+            if len(got) == SPREAD_K:
+                break
+        if len(got) < SPREAD_K:
+            raise HTTPException(503, f"only {len(got)} of the {SPREAD_K} machines needed answered; try again later")
+        return decode(got, SPREAD_K, r["spread"], part_len(r, n)), sorted(got)
+
+    def place_once(budget: int = 256 << 20) -> None:
+        """Move shards from the keeper to machines, one shard per machine, as machines become available.
+        When every shard is on its own machine, the keeper removes its copy. Also deletes leases of ended sends."""
+        if machines is None:
+            return
+        from ..codec import encode
+        cands = machines.candidates()
+        online = {c["id"]: c for c in cands}
+        for t in store.q("SELECT provider, lease FROM send_trash"):
+            c = online.get(t["provider"])
+            if c is None:
+                continue
+            try:
+                machines.delete(c, t["lease"])
+            except Exception:  # noqa: BLE001
+                continue
+            store.x("DELETE FROM send_trash WHERE provider=? AND lease=?", (t["provider"], t["lease"]))
+        if not cands:
+            return
+        for r in store.q("SELECT * FROM send_files WHERE state='live' AND spread>0 AND local=1 AND got=parts"):
+            if budget <= 0:
+                return
+            held = {x["idx"]: x["provider"] for x in store.q("SELECT idx, provider FROM send_shards WHERE file=?", (r["id"],))}
+            missing = [i for i in range(r["spread"]) if i not in held]
+            picks = pick_machines([c for c in cands if c["id"] not in set(held.values())], len(missing))
+            plan, failed = list(zip(missing, picks)), set()
+            if not plan:
+                continue
+            try:
+                with open(path(r["id"]), "rb") as f:
+                    for n in range(r["parts"]):
+                        pieces = encode(f.read(part_len(r, n)), SPREAD_K, r["spread"])
+                        for idx, c in plan:
+                            if idx in failed:
+                                continue
+                            try:
+                                machines.put(c, r["id"], shard_object(r["id"], idx), n, pieces[idx])
+                            except Exception:  # noqa: BLE001
+                                failed.add(idx)
+                                store.x("INSERT OR IGNORE INTO send_trash(provider, lease, since) VALUES (?,?,?)", (c["id"], r["id"], int(time.time())))
+            except FileNotFoundError:
+                continue
+            now = int(time.time())
+            for idx, c in plan:
+                if idx in failed:
+                    continue
+                store.x("INSERT OR REPLACE INTO send_shards(file, idx, provider, name, region, placed_at) VALUES (?,?,?,?,?,?)",
+                        (r["id"], idx, c["id"], c["name"], c.get("region", ""), now))
+                event(r["id"], f"shard {idx + 1} placed on {c['name']}", now)
+                budget -= r["size"] // SPREAD_K
+            placed = store.q("SELECT DISTINCT provider FROM send_shards WHERE file=?", (r["id"],))
+            if len(placed) == r["spread"]:              # every shard on its own machine: the keeper lets go of its copy
+                drop_bytes(r["id"])
+                store.x("UPDATE send_files SET local=0 WHERE id=?", (r["id"],))
+                event(r["id"], f"all {r['spread']} shards are on machines; the keeper removed its copy", now)
+
+    app.state.send_place = place_once
+
+
+def network_machines(store, settings, P: str, signer):
+    """The machines of the network that can take shards now: listed, online, offering STO-1."""
+    from . import presence
+
+    class Machines:
+        def candidates(self) -> list[dict]:
+            out, now = [], int(time.time())
+            for p in store.providers():
+                e = p["entry"]
+                if p["state"] != "listed" or "STO-1" not in e.get("services", []):
+                    continue
+                live = presence.live(store, p["id"], now)
+                if not live or not live["online"]:
+                    continue
+                rec = live["record"]["payload"]
+                route = {"path": rec["path"], "host": rec["endpoint"]["host"], "port": rec["endpoint"]["port"]}
+                if rec["path"] == "relay":
+                    route["relay_key"] = rec.get("relay_key")
+                if rec["path"] == "tunnel":
+                    route["http_base"] = settings.origin + P + f"/t/{p['id']}"
+                try:
+                    up = float(e.get("reputation", {}).get("uptime_7d", "0") or 0)
+                except (TypeError, ValueError):
+                    up = 0.0
+                out.append({"id": p["id"], "name": e.get("name") or p["id"][:8], "region": e.get("region", ""), "entry": e,
+                            "route": route, "uptime": up,
+                            "load": store.one("SELECT COUNT(*) AS n FROM send_shards WHERE provider=?", (p["id"],))["n"]})
+            return out
+
+        def _p(self, c):
+            from ..irm_client import Provider
+            return Provider(c["entry"], signer, route=c["route"], timeout=30)
+
+        def put(self, c, lease, obj, idx, data):
+            self._p(c).put_chunk(lease, obj, idx, data)
+
+        def get(self, c, lease, obj, idx) -> bytes:
+            return self._p(c).get_chunk(lease, obj, idx)
+
+        def delete(self, c, lease):
+            self._p(c).delete(lease)
+
+    return Machines()
