@@ -4,6 +4,11 @@
 
 ### INNERNET Send: the first application on the protocol (SEND-1, draft)
 
+- Prices: set on the admin dashboard (tab "Send prices"), kept in the database, audit-logged; the `INNERNET_SEND_PRICES` variable is gone.
+- Selling: no listing fee. Readers pay the seller's own `INNERnetSplit` from the existing payout factory (97.5% seller, 2.5% INNERNET, enforced on the chain, any way of paying including a pasted hash); a payment to the raw wallet does not count. "Collect sales" creates the split if needed and releases it.
+- Notes can be HTML, shown safely (allowlist, closed shadow root, clipped box, no scripts or outside requests); `.html` files can be shown the same way.
+- Free protection shown to both sides; a stronger 10-sign PIN; the sender sets 1 to 10 wrong PINs.
+
 - `/registry/send`: send one sealed file to one person. The file is sealed in the browser (AES-256-GCM, 4 MiB parts) with a key made from a link secret (in the link's `#fragment`, never sent to a server), a 6-digit PIN told by another channel, and a keeper share. No account for sender or receiver; each browser makes a device key.
 - Free: one file up to 10 MB or one note up to 500 words, one opening on the first device that proves link and PIN, then destroyed; destroyed after 7 days if unopened; 5 wrong PINs destroy it.
 - Paid, charged upfront in USDC on Base to the operator's public address: a storage plan (one price for size and period, up to 1 GB and 1 year) and add-ons paid once (a key per person, check-in release, not before / not after a date, more openings, more devices, read receipt, sealed reply, take it back). The payment is recognised on the chain by its exact amount; the registry holds no wallet.

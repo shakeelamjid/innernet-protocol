@@ -12,7 +12,8 @@
   function el(tag, text, cls) { const e = document.createElement(tag); if (text != null) e.textContent = text; if (cls) e.className = cls; return e; }
   function pause(ms) { return calm ? Promise.resolve() : new Promise(function (ok) { setTimeout(ok, ms); }); }
   function kind() { return document.querySelector('input[name=kind]:checked').value; }
-  function words(t) { const m = t.trim().match(/\S+/g); return m ? m.length : 0; }
+  function fmt() { const f = document.querySelector('input[name=fmt]:checked'); return f ? Number(f.value) : 0; }
+  function words(t) { if (fmt() === 2 && window.InnernetHtml) return window.InnernetHtml.words(t); const m = t.trim().match(/\S+/g); return m ? m.length : 0; }
   function round(n) { return St.size(n).replace(/\.0+ /, ' '); }
   function days(s) { const d = Math.round(s / 86400); return d === 1 ? '1 day' : d + ' days'; }
 
@@ -20,7 +21,7 @@
     if (kind() === 'note') {
       const text = $('text').value.trim();
       const bytes = new TextEncoder().encode(text);
-      return { kind: 'note', name: 'Note', type: 'text/plain;charset=utf-8', size: bytes.length, blob: new Blob([bytes]), words: words(text) };
+      return { kind: 'note', name: 'Note', type: fmt() === 2 ? 'text/html;charset=utf-8' : 'text/plain;charset=utf-8', size: bytes.length, blob: new Blob([bytes]), words: words(text) };
     }
     return picked ? { kind: 'file', name: picked.name, type: picked.type || 'application/octet-stream', size: picked.size, blob: picked } : null;
   }
@@ -46,6 +47,8 @@
     if (on('o-name') && $('o-name-v').value.trim()) e.name = $('o-name-v').value.trim().toLowerCase();
     if (on('o-versions')) e.versions = Math.max(1, parseInt($('o-versions-n').value, 10) || 1);
     if (lock() === 'open' || collect || pay) e.pin_in_link = 1;
+    if ($('o-strong').checked) e.strong_pin = 1;
+    e.pin_tries = Math.min(10, Math.max(1, parseInt($('o-tries').value, 10) || 5));
     const m = { extras: e };
     if (named) { m.recipients = lines('o-rnames', 20).length; m.succession = on('o-succ'); }
     if (on('o-approve') && lines('o-anames', 10).length) m.approvers = { count: lines('o-anames', 10).length, need: Math.min(lines('o-anames', 10).length, Math.max(1, parseInt($('o-aneed').value, 10) || 1)) };
@@ -133,10 +136,17 @@
     $('o-pay-target-box').hidden = $('o-pay-mode').value !== 'crowd'; $('o-pay-period-box').hidden = $('o-pay-mode').value !== 'period';
     $('o-pay-price-l').textContent = $('o-pay-mode').value === 'crowd' ? 'at least, per person' : $('o-pay-mode').value === 'period' ? 'per reader, per period' : 'per reader';
     (function () {
-      const mode = $('o-pay-mode').value, price = Number($('o-pay-price').value) || 0, n = Math.max(1, parseInt($('o-pay-buyers').value, 10) || 1), bps = (lim.paid.listing_bps || 500) / 10000;
-      const take = mode === 'crowd' ? Number($('o-pay-target').value) || 0 : price * n, fee = Math.max(0.1, take * bps);
-      $('o-pay-fee').textContent = (mode === 'crowd' ? 'Target ' + take.toFixed(2) + ' USDC, all of it paid to your address.' : price.toFixed(2) + ' USDC × up to ' + n + ' readers = up to ' + take.toFixed(2) + ' USDC, all of it paid to your address.') +
-        ' INNERNET fee: ' + (bps * 100) + '% of that = ' + fee.toFixed(2) + ' USDC, paid by you now with this send. Readers pay only the price.';
+      const mode = $('o-pay-mode').value, price = Number($('o-pay-price').value) || 0, n = Math.max(1, parseInt($('o-pay-buyers').value, 10) || 1);
+      const sale = lim.paid && lim.paid.sale, cut = sale ? sale.fee_bps / 100 : 2.5;
+      const take = mode === 'crowd' ? Number($('o-pay-target').value) || 0 : price * n;
+      $('o-pay-fee').textContent = !sale ? 'Selling is not available on this keeper right now.' :
+        (mode === 'crowd' ? 'Target ' + take.toFixed(2) + ' USDC.' : price.toFixed(2) + ' USDC × up to ' + n + ' readers = up to ' + take.toFixed(2) + ' USDC.') +
+        ' Nothing to pay upfront for selling. Each reader pays your own sales contract, which sends ' + (100 - cut) + '% to your wallet and ' + cut + '% to INNERNET, split on the chain. You keep ' + (take * (1 - cut / 100)).toFixed(2) + ' USDC of that. Storage machines receive none of it.';
+    })();
+    (function () {
+      const pq = !(on('o-collect') && $('o-audience').value === 'owner');
+      const sh = { tries: Math.min(10, Math.max(1, parseInt($('o-tries').value, 10) || 5)), strong: $('o-strong').checked && lock() !== 'keys', pq: pq };
+      ['shield-lock', 'shield-review'].forEach(function (id) { $(id).textContent = ''; $(id).append(St.shield(sh)); });
     })();
     $('o-spread-now').textContent = machinesNow() + ' Each shard moves to its own machine as one becomes free.';
     $('o-split').checked = lock() === 'keys';
@@ -178,7 +188,7 @@
     ['succession', 'Pass it down a line', 'First person has a week; if they do not claim it, it goes to the next.'],
     ['board', 'Company secret with approvers', 'Named approvers release it; they never see it. An alarm tells you.'],
     ['glass', 'Break-glass credentials', 'Opens once, visible for five minutes, with an alarm and a signed record.'],
-    ['sell', 'Sell a file or report', 'Each reader pays you directly before it opens.'],
+    ['sell', 'Sell a file or report', 'Each reader pays before it opens: 97.5% goes to your wallet.'],
     ['crowd', 'Funded release', 'It opens for everyone once a total has been paid to you.'],
     ['feed', 'Paid updates', 'Readers pay per period; you post new versions on the same link.'],
     ['vote', 'Vote or survey', 'People answer without names. Answers open together at closing.'],
@@ -206,7 +216,7 @@
     vote: ['collect', 'Run a vote or a survey', 'People answer without names. The answers stay closed until closing time, then open together.', 'What are you asking?', 'The question, and anything voters should know.'],
     swap: ['collect', 'Exchange with someone', 'Two people each add something. Neither sees the other\u2019s until both are in.', 'What is this exchange about?', 'A line both sides will see.'],
     sign: ['collect', 'Get a document signed', 'Each party opens the document, signs it with their own key, and everyone can check every signature.', 'The document to be signed', 'Paste the text, or switch to a file.'],
-    sell: ['sell', 'Sell a file or a report', 'Set a price and your wallet. The reader pays you directly, then it opens.'],
+    sell: ['sell', 'Sell a file or a report', 'Set a price and your wallet. The reader pays, it opens, and 97.5% goes to your wallet on the chain.'],
     crowd: ['sell', 'Funded release', 'It opens for everyone once a total has been paid to your wallet.'],
     feed: ['sell', 'Paid updates', 'Readers pay per period. You post new versions behind the same link.'] };
   let using = null;
@@ -429,10 +439,10 @@
     film.beat('content', c.kind === 'note' ? 'Your note, on this device' : tiles ? 'Your picture, on this device' : c.name + (first.hex ? ': its first bytes, in hex' : ': its first characters'));
     steps.set(0, 'run');
     const id = C.newId(), secret = C.random(32), share = C.random(32), who = names();
-    const pin = o.holders ? await C.jointPin(secret) : C.newPin();
+    const strong = $('o-strong').checked && !o.holders, pin = o.holders ? await C.jointPin(secret) : C.newPin(strong);
     const device = await St.deviceKey();
     await pause(350);
-    steps.set(0, 'done', 'A link secret, a 6-digit PIN and a keeper part. The first two never reach a server.');
+    steps.set(0, 'done', 'A link secret, a ' + (strong ? '10-sign' : '6-digit') + ' PIN and a keeper part. The first two never reach a server.');
     film.beat('keys', L === 'keys' ? 'A link secret and a keeper part, made here' : 'Three random key pieces, made here');
     if (keyPeople.length) film.beat('split', 'The link secret becomes ' + keyPeople.length + ' keys: ' + (o.need === o.holders ? 'all' : 'any ' + o.need) + ' needed', { from: 'a', into: keyPeople.map(function (p, i) { return 'h' + i; }) });
     if (pinPeople.length) film.beat('split', 'A PIN for each of ' + pinPeople.length + ' people', { from: 'b', into: pinPeople.map(function (p, i) { return 'p' + i; }) });
@@ -461,7 +471,7 @@
       const raw = C.random(32), people = lines('o-rnames', 20), d = Math.max(1, parseInt($('o-succ-days').value, 10) || 7) * 86400, list = [], used = {};
       contentKey = await C.aesKey(raw); art.pins = [];
       for (let i = 0; i < people.length; i++) {
-        let p = C.newPin(); while (used[p]) p = C.newPin(); used[p] = 1;
+        let p = C.newPin(strong); while (used[p]) p = C.newPin(strong); used[p] = 1;
         steps.set(2, 'run', 'Making a PIN and a wrapped key for ' + people[i] + '…', 0.2);
         const it = { pin_tag: await C.pinTag(keys, p), wrap: await C.wrapKey(await C.fileKey(secret, share, p, id), id, raw) };
         if (o.succession) { it.after = i ? now0 + d * i : 0; it.until = i < people.length - 1 ? now0 + d * (i + 1) : 0; it.unless = i ? i - 1 : null; }
@@ -481,7 +491,7 @@
     if (ex.witness) { const t = C.random(32); o.witness_hash = await C.sha256hex(t); art.witness = base + 'w' + C.b64u(t); }
     if (o.summary) o.summary = await C.sealSmall(keys.preview, id, 'summary', { text: $('o-summary-text').value.trim() });
     if (o.duress) {
-      let p2 = C.newPin(); while (p2 === pin) p2 = C.newPin();
+      let p2 = C.newPin(strong); while (p2 === pin) p2 = C.newPin(strong);
       const dShare = C.random(32), dKey = await C.fileKey(secret, dShare, p2, id), text = new TextEncoder().encode($('o-decoy').value.trim() || 'Nothing here yet.');
       decoy = await C.sealPart(dKey, id, 0, 1, text); art.duress = p2;
       o.duress = { pin_tag: await C.pinTag(keys, p2), share: C.b64u(dShare), size: decoy.length,
@@ -498,7 +508,7 @@
       owner_pub: await C.publicRaw(device), keeper_share: C.b64u(share),
       preview: await C.sealSmall(keys.preview, id, 'preview', { from: from, note: $('note').value.trim() }),
       meta: await C.sealSmall(contentKey, id, 'meta', { name: c.name, type: c.type, size: c.size, kind: c.kind, mark: from,
-        rich: c.kind === 'note' && $('o-rich').checked ? 1 : 0, view_only: ex.view_only || 0, view_secs: ex.view_secs || 0, presence: ex.presence || 0, card: ex.card || '' })
+        rich: c.kind === 'note' ? fmt() : 0, view_only: ex.view_only || 0, view_secs: ex.view_secs || 0, presence: ex.presence || 0, card: ex.card || '' })
     }, o))).json();
     const link = base + C.b64u(secret) + (ex.pin_in_link ? '.' + pin : '');
     if (ex.origin) art.origin = { domain: ex.origin, line: await C.publicRaw(device) };
@@ -550,7 +560,7 @@
 
   function showDone(r) {
     $('done-film').textContent = ''; if (r.film) $('done-film').append(r.film.el);
-    $('link').textContent = r.rec.shared || r.rec.link; $('pin').textContent = r.rec.pin;
+    $('link').textContent = r.rec.shared || r.rec.link; $('pin').textContent = C.showPin(r.rec.pin);
     $('many-links').hidden = !r.rec.links; $('pin-box').hidden = !!r.rec.links;
     $('links').textContent = '';
     (r.rec.links || []).forEach(function (l) {
@@ -569,7 +579,7 @@
     }
     $('pin-box').hidden = !!r.rec.links || !!r.rec.named || !!r.rec.open_link;
     if (r.rec.open_link) $('done-lede').textContent = 'Anyone who has this link can use it. The PIN is inside the link.';
-    (A.pins || []).forEach(function (p) { item('PIN for ' + p.name + (p.from || p.to ? ' (' + (p.from ? 'from ' + St.when(p.from) : 'from now') + (p.to ? ' until ' + St.when(p.to) : '') + ')' : ''), p.pin); });
+    (A.pins || []).forEach(function (p) { item('PIN for ' + p.name + (p.from || p.to ? ' (' + (p.from ? 'from ' + St.when(p.from) : 'from now') + (p.to ? ' until ' + St.when(p.to) : '') + ')' : ''), C.showPin(p.pin)); });
     if (A.pins) $('done-lede').textContent = 'Send everyone the same link. Tell each person only their own PIN.';
     (A.approvers || []).forEach(function (p) { item('Approver link for ' + p.name, p.link); });
     if (A.witness) item('Witness link', A.witness, 'Shows what happens to this send and gives the signed record. It cannot open it.');
@@ -688,7 +698,19 @@
         let moreText = '';
         if (s.approvals) moreText += ' Approved by ' + s.approvals.have + ' of ' + s.approvals.need + ' needed.';
         if (s.named) { const who = s.events.filter(function (e) { return e.event.indexOf('opened by recipient ') === 0; }).map(function (e) { const p = ((rec.art || {}).pins || [])[Number(e.event.slice(20)) - 1]; return p ? p.name : e.event.slice(10); }); moreText += who.length ? ' Opened by ' + who.join(', ') + '.' : ''; }
-        if (s.paylock) moreText += s.paylock.mode === 'crowd' ? ' Raised ' + St.usdc(s.paylock.raised) + ' of ' + St.usdc(s.paylock.target) + ' USDC.' : ' Sold to ' + s.paylock.sold + ' of ' + s.paylock.buyers + '; ' + St.usdc(s.paylock.raised) + ' USDC paid to you.';
+        if (s.paylock) moreText += s.paylock.mode === 'crowd' ? ' Raised ' + St.usdc(s.paylock.raised) + ' of ' + St.usdc(s.paylock.target) + ' USDC.' : ' Sold to ' + s.paylock.sold + ' of ' + s.paylock.buyers + '; ' + St.usdc(s.paylock.raised) + ' USDC paid' + (s.paylock.fee_bps ? ' by readers.' : ' to you.');
+        if (s.paylock && s.paylock.fee_bps && lim.paid.sale) {
+          moreText += ' Readers pay your sales contract ' + s.paylock.to + ': ' + (100 - s.paylock.fee_bps / 100) + '% is yours.';
+          tool('Collect sales to your wallet', async function () {
+            const sale = lim.paid.sale, W = window.InnernetWallet;
+            const acct = await W.connect(sale.chain_id);
+            const split = await W.findOrCreate(sale.factory, acct, s.paylock.wallet, function (t) { state.textContent = t; });
+            state.textContent = 'Confirm the collection in your wallet…';
+            const hash = await W.request('eth_sendTransaction', [{ from: acct, to: split, data: '0x' + W.SEL.release + W.pad(sale.usdc) }]);
+            state.textContent = 'Collecting…'; await W.waitReceipt(hash);
+            state.textContent = 'Collected: ' + (100 - s.paylock.fee_bps / 100) + '% of the sales so far went to ' + s.paylock.wallet + ', ' + (s.paylock.fee_bps / 100) + '% to INNERNET.';
+          });
+        }
         if (s.collect) moreText += ' ' + s.collect.count + ' of ' + s.collect.seats + ' have added.' + (s.collect.revealed ? '' : ' Closed to everyone until it opens.');
         if (s.events.some(function (e) { return e.event === 'duress PIN used'; })) moreText += ' The duress PIN was used.';
         if (s.spread) moreText += ' Shards: ' + s.spread.machines.length + ' of ' + s.spread.n + ' on machines' + (s.spread.machines.length ? ' (' + s.spread.machines.map(function (m) { return m.name + (m.region ? ', ' + m.region : ''); }).join('; ') + ')' : '') + (s.spread.keeper_copy ? '; the keeper holds the rest.' : '; the keeper\u2019s copy is removed.');
@@ -789,11 +811,12 @@
       if (at === 0) {
         if (!c) return say('msg', 'Choose a file first.', true), false;
         if (!c.size) return say('msg', c.kind === 'note' ? 'Write the note first.' : 'That file is empty.', true), false;
-        if (c.kind === 'note' && (c.words > 500 || c.size > lim.note_bytes)) return say('msg', 'A note is at most 500 words.', true), false;
+        if (c.kind === 'note' && (c.words > 500 || c.size > lim.note_bytes)) return say('msg', c.size > lim.note_bytes ? 'A note is at most ' + Math.round(lim.note_bytes / 1024) + ' KB. For a bigger page, send it as a file.' : 'A note is at most 500 words.', true), false;
         if (!$('from').value.trim()) return say('msg', 'Add your name, so the receiver knows who it is from.', true), false;
       }
       if ($('o-split').checked && names().length < 2) return say('msg', 'Split custody needs at least 2 names.', true), false;
       if (at >= 1 && on('o-pay') && !/^0x[0-9a-fA-F]{40}$/.test($('o-pay-to').value.trim())) return say('msg', 'Add your receiving address for the payment lock (0x and 40 characters).', true), false;
+      if (at >= 1 && on('o-pay') && [lim.paid.to, (lim.paid.sale || {}).fee_to].filter(Boolean).map(function (x) { return x.toLowerCase(); }).indexOf($('o-pay-to').value.trim().toLowerCase()) >= 0) return say('msg', 'That is INNERNET\'s own address. Readers pay the address you give here, so give your own wallet.', true), false;
       if (at >= 1 && lock() === 'named' && lines('o-rnames', 20).length < 1) return say('msg', 'Name at least one person who gets a PIN.', true), false;
       if (quoted.error) return say('msg', quoted.error, true), false;
       say('msg', ''); return true;
@@ -855,10 +878,23 @@
     ['dragenter', 'dragover'].forEach(function (n) { $('drop').addEventListener(n, function (e) { e.preventDefault(); $('drop').classList.add('over'); }); });
     ['dragleave', 'drop'].forEach(function (n) { $('drop').addEventListener(n, function (e) { e.preventDefault(); $('drop').classList.remove('over'); }); });
     $('drop').addEventListener('drop', function (e) { if (e.dataTransfer.files[0]) pick(e.dataTransfer.files[0]); });
-    $('text').addEventListener('input', function () {
-      const n = words($('text').value);
-      say('text-msg', n + ' of 500 words', n > 500);
-      requote();
+    function noteInfo() {
+      const n = words($('text').value), b = new TextEncoder().encode($('text').value.trim()).length;
+      say('text-msg', n + ' of 500 words' + (fmt() === 2 ? ', ' + (b / 1024).toFixed(1) + ' of ' + Math.round(lim.note_bytes / 1024) + ' KB' : ''), n > 500 || b > lim.note_bytes);
+      $('fmt-help').hidden = fmt() !== 2; $('fmt-preview').hidden = fmt() === 0;
+      if (!$('fmt-view').hidden) preview();
+    }
+    function preview() {
+      const v = $('fmt-view'), t = $('text').value; v.textContent = '';
+      if (fmt() === 2) v.append(window.InnernetHtml.render(t, document));
+      else if (fmt() === 1) { const d = C.rich(t, document); d.className = 'shown rich'; v.append(d); }
+      v.hidden = fmt() === 0;
+      $('fmt-preview').textContent = 'Hide preview';
+    }
+    $('text').addEventListener('input', function () { noteInfo(); requote(); });
+    document.querySelectorAll('input[name=fmt]').forEach(function (r) { r.addEventListener('change', noteInfo); });
+    $('fmt-preview').addEventListener('click', function () {
+      if ($('fmt-view').hidden) preview(); else { $('fmt-view').hidden = true; $('fmt-preview').textContent = 'Preview'; }
     });
     $('form').addEventListener('input', requote);
     GROUPS.forEach(function (g) {
@@ -898,7 +934,7 @@
       const c = content();
       if (!c) return say('msg', 'Choose a file first.', true);
       if (!c.size) return say('msg', c.kind === 'note' ? 'Write the note first.' : 'That file is empty.', true);
-      if (c.kind === 'note' && (c.words > 500 || c.size > lim.note_bytes)) return say('msg', 'A note is at most 500 words.', true);
+      if (c.kind === 'note' && (c.words > 500 || c.size > lim.note_bytes)) return say('msg', c.size > lim.note_bytes ? 'A note is at most ' + Math.round(lim.note_bytes / 1024) + ' KB. For a bigger page, send it as a file.' : 'A note is at most 500 words.', true);
       if ($('o-split').checked && names().length < 2) return say('msg', 'Split custody needs at least 2 names.', true);
       if (!$('from').value.trim()) return say('msg', 'Add your name, so the receiver knows who it is from.', true);
       if (quoted.error) return say('msg', quoted.error, true);

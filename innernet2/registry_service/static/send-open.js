@@ -9,6 +9,7 @@
   let id = path && path[1], secret = null, keys = null, busy = false, steps = null, isNote = false, token = null;
   let afterOpen = null;
   let joint = false, held = false, due = 0, jointNames = null, autoPin = null, info = null, roomCall = null, roomNeed = 0, opened = null;
+  let strongPin = false;
 
   function say(text, err) { $('msg').textContent = text || ''; $('msg').classList.toggle('error', !!err); }
   function end(title, text) { $('title').textContent = title; $('lede').textContent = text; ['ask', 'custody', 'side', 'collect'].forEach(function (s) { $(s).hidden = true; }); }
@@ -71,6 +72,9 @@
     steps.set(0, 'done');
     $('ask').hidden = false;
     held = info.held; due = info.release_at;
+    strongPin = !!(info.extras || {}).strong_pin;
+    if (strongPin) { $('pin').inputMode = 'text'; $('pin').maxLength = 14; $('pin').removeAttribute('pattern'); $('pin').placeholder = 'XXXXX-XXXXX'; document.querySelector('label[for=pin]').textContent = 'PIN from the sender: 10 letters and digits'; }
+    if (!autoPin) $('shield').append(St.shield({ tries: info.pin_tries_left, strong: strongPin, pq: !(info.collect && info.collect.audience === 'owner'), reader: true }));
     if (autoPin) { $('pin').value = autoPin; $('pin').hidden = true; document.querySelector('label[for=pin]').hidden = true; }
     gate();
     if (info.collect) collect();
@@ -132,7 +136,7 @@
       try {
         const d = await who();
         buying = await (await St.api('POST', '/files/' + id + '/buy', Object.assign({ auth: C.b64u(keys.auth), device_pub: d.pub, amount: crowd ? $('buy-amount').value : undefined }, await C.signRequest(d.device, 'buy', id)))).json();
-        $('buy-exact').textContent = buying.amount; $('buy-to').textContent = buying.to; $('buy-net').textContent = buying.network_name;
+        $('buy-exact').textContent = buying.amount; $('buy-to').textContent = buying.to; $('buy-net').textContent = buying.network_name; if (buying.fee_bps) $('buy-split').textContent = 'The address above is the sender\'s own sales contract: it sends ' + (100 - buying.fee_bps / 100) + '% to the sender and ' + (buying.fee_bps / 100) + '% to INNERNET, split on the chain. Storage machines receive none of it. Keep this page open until the payment is seen on the chain.';
         $('buy-how').hidden = false; $('buy-wallet').hidden = !window.ethereum; $('buy-go').hidden = true; St.payWays($('buy-qr'), $('buy-open'), buying);
         $('buy-msg').textContent = 'Waiting for the payment…';
         watchPay();
@@ -354,13 +358,21 @@
 
   async function show(r) {
     const m = r.meta, note = m.kind === 'note', pic = /^image\/(png|jpeg|gif|webp)$/.test(m.type), text = /^text\//.test(m.type);
+    const htmlDoc = (note && m.rich === 2) || (!note && /^text\/html\b/.test(m.type || '')) || (!note && /\.html?$/i.test(m.name || ''));
     const onScreen = note || (m.view_only && (pic || text));
     opened = r;
     $('name').textContent = note ? 'The note' : m.name;
     if (onScreen) {
       $('view').hidden = false; $('save').hidden = true;
       if (pic) { $('pic').src = URL.createObjectURL(r.blob); $('pic').hidden = false; }
-      else { const t = await r.blob.text(); if (m.rich) { $('shown').textContent = ''; $('shown').append(C.rich(t, document)); $('shown').className = 'shown rich'; } else $('shown').textContent = t; $('shown').hidden = false; if (m.card) $('shown').className += ' card-' + m.card; }
+      else {
+        const t = await r.blob.text();
+        $('shown').textContent = '';
+        if (htmlDoc) { $('shown').append(window.InnernetHtml.render(t, document)); $('shown').className = 'shown html'; }
+        else if (m.rich) { $('shown').append(C.rich(t, document)); $('shown').className = 'shown rich'; }
+        else $('shown').textContent = t;
+        $('shown').hidden = false; if (m.card && !htmlDoc) $('shown').className += ' card-' + m.card;
+      }
       if (m.view_only && m.mark) { $('mark').textContent = (m.mark + ' · ' + St.when(Date.now() / 1000) + '   ').repeat(40); $('mark').hidden = false; }
       $('facts').textContent = 'Opened and checked on this device. It is shown only here.';
     } else if (m.view_only) {
@@ -368,6 +380,13 @@
       $('facts').textContent = 'The sender allowed this to be shown on screen only, and this kind of file (' + (m.type || 'unknown') + ') cannot be shown in the page. Ask the sender for a picture or text version.';
     } else {
       $('save').href = URL.createObjectURL(r.blob); $('save').download = m.name;
+      if (htmlDoc) {
+        $('show-html').hidden = false;
+        $('show-html').onclick = async function () {
+          $('show-html').hidden = true; $('view').hidden = false; $('shown').textContent = '';
+          $('shown').append(window.InnernetHtml.render(await r.blob.text(), document)); $('shown').className = 'shown html'; $('shown').hidden = false;
+        };
+      }
       $('facts').textContent = St.size(m.size) + '. Opened and checked on this device.';
     }
     $('after').textContent = (r.rel.last ? 'That was the last opening: it is now being destroyed on the network. ' : '') + (onScreen ? 'Closing this page discards it.' : m.view_only ? '' : 'Save it now; closing this page discards it.');
@@ -493,8 +512,8 @@
   $('form').addEventListener('submit', function (ev) {
     ev.preventDefault();
     if (busy) return;
-    const pin = $('pin').value.replace(/\D/g, '');
-    if (pin.length !== 6) return say('The PIN has 6 digits.', true);
+    const pin = C.readPin($('pin').value);
+    if (pin.length !== 6 && pin.length !== 10) return say(strongPin ? 'The PIN has 10 letters and digits.' : 'The PIN has 6 digits.', true);
     busy = true; $('go').disabled = true;
     open(pin).then(show).catch(function (e) {
       say(e.name === 'OperationError' ? 'It could not be opened: its seal does not match. Nothing was saved.' : e.message, true);

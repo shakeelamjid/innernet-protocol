@@ -12,6 +12,9 @@ from fastapi.testclient import TestClient
 from innernet2.registry_service import send
 from innernet2.registry_service.app import create_app
 from tests.test_registry_service import FEE_WALLET, ORIGIN, SEPOLIA, FakeChain, settings
+
+FACTORY = "0x" + "fa" * 20
+split_for = lambda w: "0x" + hashlib.sha256(("split" + w[2:].lower()).encode()).hexdigest()[:40]   # noqa: E731
 from tests.test_send import API, H, Device, PayChain, info, make, open_
 
 h64 = lambda b: hashlib.sha256(b).hexdigest()   # noqa: E731
@@ -175,18 +178,20 @@ def test_payment_as_a_lock_new_versions_and_the_hand_on_chain(tmp_path, monkeypa
     monkeypatch.setenv("INNERNET_SEND_ALL_RULES", "1")
     monkeypatch.setenv("INNERNET_SEND_NETWORK", SEPOLIA)
     chain = PayChain()
-    a = create_app(settings(tmp_path), rpc=chain, connect=lambda h, p, t: 3.0)
+    a = create_app(settings(tmp_path, split_factory={SEPOLIA: FACTORY}), rpc=chain, connect=lambda h, p, t: 3.0)
     client = TestClient(a, base_url=ORIGIN)
     owner, r1, r2 = Device(), Device(), Device()
-    seller = "0x" + "5e" * 20
-    fid, _ = make(client, owner, keep=30 * 86400, max_opens=0, forward=True, pay={"mode": "each", "price": "2", "to": seller, "buyers": 1},
+    wallet = "0x" + "5e" * 20
+    seller = split_for(wallet)
+    fid, _ = make(client, owner, keep=30 * 86400, max_opens=0, forward=True, pay={"mode": "each", "price": "2", "to": wallet, "buyers": 1},
                   extras={"versions": 1, "chain": True})
     assert open_(client, fid, r1).status_code == 402
     who = lambda dev: {"auth": send.b64u(b"A" * 32), "device_pub": dev.pub, **dev.sign("buy", fid)}   # noqa: E731
     q = client.post(API + f"/files/{fid}/buy", json=who(r1), headers=H).json()
-    assert 2_000_000 < q["micro"] < 2_001_000 and q["to"] == seller
+    assert 2_000_000 < q["micro"] < 2_001_000 and q["to"] == seller and q["fee_bps"] == 250
     assert client.post(API + f"/files/{fid}/buy/check", json=who(r1), headers=H).json()["access"] is False
     chain.pay(FEE_WALLET, q["micro"], 990)                              # paid to the wrong address: not counted
+    chain.pay(wallet, q["micro"], 991)                                  # paid around the split, to the raw wallet: not counted either
     assert client.post(API + f"/files/{fid}/buy/check", json=who(r1), headers=H).json()["access"] is False
     chain.pay(seller, q["micro"], 995)
     done = client.post(API + f"/files/{fid}/buy/check", json=who(r1), headers=H).json()
@@ -214,7 +219,7 @@ def test_payment_as_a_lock_new_versions_and_the_hand_on_chain(tmp_path, monkeypa
     assert client.post(API + f"/files/{fid}/version", json={**owner.sign("version", fid), "size": 26, "parts": 1,
                                                             "keeper_share": send.b64u(b"N" * 32), "meta": send.b64u(b"m2")}, headers=H).status_code == 402
     # A crowd lock opens for everyone once the target is reached.
-    f2, _ = make(client, owner, keep=30 * 86400, max_opens=0, forward=True, pay={"mode": "crowd", "price": "1", "target": "3", "to": seller, "buyers": 10})
+    f2, _ = make(client, owner, keep=30 * 86400, max_opens=0, forward=True, pay={"mode": "crowd", "price": "1", "target": "3", "to": wallet, "buyers": 10})
     who2 = lambda dev: {"auth": send.b64u(b"A" * 32), "device_pub": dev.pub, **dev.sign("buy", f2)}   # noqa: E731
     for dev, amt in ((r1, "1"), (r2, "2.5")):
         q2 = client.post(API + f"/files/{f2}/buy", json={**who2(dev), "amount": amt}, headers=H).json()
@@ -226,14 +231,14 @@ def test_payment_as_a_lock_new_versions_and_the_hand_on_chain(tmp_path, monkeypa
 def test_every_block_has_a_price(tmp_path, monkeypatch):
     monkeypatch.delenv("INNERNET_SEND_ALL_RULES", raising=False)
     monkeypatch.setenv("INNERNET_SEND_NETWORK", SEPOLIA)
-    client = TestClient(create_app(settings(tmp_path), rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
+    client = TestClient(create_app(settings(tmp_path, split_factory={SEPOLIA: FACTORY}), rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
     q = client.post(API + "/quote", headers=H, json={
         "plain": 100, "keep": 30 * 86400, "recipients": 3, "succession": True, "approvers": {"count": 3, "need": 2}, "duress": True,
         "summary": "x", "collect": {"seats": 4}, "pay": {"mode": "each", "price": "10", "to": "0x" + "5e" * 20, "buyers": 20},
         "extras": {"view_only": 1, "view_secs": 60, "presence": 1, "card": "gift", "alarm_url": "https://x.example/h", "record": 1, "witness": 1,
                    "origin": "example.com", "name": "my-name", "chain": 1, "qr": 1, "recovery": 1, "versions": 2, "spread": 8}}).json()
     got = {l["label"]: l["usdc"] for l in q["lines"]}
-    assert got["Spread on 8 machines (any 4 rebuild it)"] == "0.400000" and len(got) == 21 and got["Payment lock, listing fee (5% of what it can take in)"] == "10.000000" and got["4 people can add to it"] == "2.000000"
+    assert got["Spread on 8 machines (any 4 rebuild it)"] == "0.400000" and len(got) == 20 and not any("listing" in k for k in got) and got["4 people can add to it"] == "2.000000"
     assert q["micro"] == sum(round(float(v) * 1e6) for v in got.values())
 
 
@@ -355,3 +360,65 @@ def test_spread_moves_shards_onto_machines_as_they_come_and_any_four_rebuild_it(
     client.post(API + f"/files/{fid}/revoke", json=owner.sign("revoke", fid), headers=H)
     a.state.send_place()                                         # ended: every machine is told to delete its shard
     assert all(not d for d in fleet.disk.values())
+
+
+def test_the_admin_sets_one_price_list_for_everyone(tmp_path, monkeypatch):
+    monkeypatch.delenv("INNERNET_SEND_ALL_RULES", raising=False)
+    monkeypatch.setenv("INNERNET_SEND_NETWORK", SEPOLIA)
+    monkeypatch.setenv("INNERNET_ADMIN_USER", "shakeel")
+    monkeypatch.setenv("INNERNET_ADMIN_PASSWORD", "a-long-admin-password-123")
+    client = TestClient(create_app(settings(tmp_path, split_factory={SEPOLIA: FACTORY}), rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
+    ask = {"plain": 100, "keep": 30 * 86400, "approvers": {"count": 2, "need": 1}}
+    lines = lambda: {l["label"]: l["usdc"] for l in client.post(API + "/quote", headers=H, json=ask).json()["lines"]}   # noqa: E731
+    before = lines()
+    # Nobody but the admin can read or change prices.
+    assert client.get("/registry/api/admin/prices").status_code == 401
+    assert client.post("/registry/api/admin/prices", json={"prices": {"approver": "9"}}, headers=H).status_code == 401
+    assert client.post("/registry/api/admin/login/password", json={"user": "shakeel", "password": "a-long-admin-password-123"},
+                       headers=H).status_code == 200
+    sheet = client.get("/registry/api/admin/prices").json()
+    keys = [i["key"] for g in sheet["groups"] for i in g["items"]]
+    assert sorted(keys) == sorted(send.PRICES)
+    assert sheet["sale"]["fee_bps"] == 250 and sheet["sale"]["fee_to"] == FEE_WALLET and sheet["sale"]["factory"] == FACTORY
+    for bad in ({"prices": {"approver": "-1"}}, {"prices": {"approver": "20000"}}, {"prices": {"nope": "1"}}, {"prices": {"approver": "x"}}):
+        assert client.post("/registry/api/admin/prices", json=bad, headers=H).status_code == 422
+    r = client.post("/registry/api/admin/prices", json={"prices": {"approver": "1.5", "plan_0_30": "0.75"}}, headers=H).json()
+    assert r["changed"] == ["approver=1.500000", "plan_0_30=0.750000"]
+    after = lines()
+    assert [v for k, v in after.items() if "approver" in k] == ["3.000000"]
+    assert client.get(API + "/limits").json()["paid"]["plan"][0][1] == "0.750000"
+    assert "admin-prices" in [a["event"] for a in client.get("/registry/api/admin/overview").json()["audit"]]
+    client.post("/registry/api/admin/prices", json={"reset": ["approver", "plan_0_30"]}, headers=H)
+    assert lines() == before
+
+
+def test_a_seller_is_paid_through_their_split_and_nothing_is_charged_upfront(tmp_path, monkeypatch):
+    monkeypatch.delenv("INNERNET_SEND_ALL_RULES", raising=False)
+    monkeypatch.setenv("INNERNET_SEND_NETWORK", SEPOLIA)
+    pay = {"mode": "each", "price": "10", "to": "0x" + "5e" * 20, "buyers": 2}
+    (tmp_path / "a").mkdir(); (tmp_path / "b").mkdir()   # noqa: E702
+    off = TestClient(create_app(settings(tmp_path / "a"), rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
+    assert off.post(API + "/quote", headers=H, json={"plain": 100, "keep": 30 * 86400, "pay": pay}).status_code == 503   # no factory: no selling
+    client = TestClient(create_app(settings(tmp_path / "b", split_factory={SEPOLIA: FACTORY}), rpc=FakeChain(), connect=lambda h, p, t: 3.0), base_url=ORIGIN)
+    lim = client.get(API + "/limits").json()["paid"]
+    assert lim["sale"]["fee_bps"] == 250 and lim["sale"]["factory"] == FACTORY
+    q = client.post(API + "/quote", headers=H, json={"plain": 100, "keep": 30 * 86400, "pay": pay}).json()
+    assert q["micro"] == 500_000 and len(q["lines"]) == 1                 # only the storage plan: no listing fee
+    for ours in (lim["to"], FEE_WALLET):                                   # INNERNET's addresses cannot be a seller's wallet
+        r = client.post(API + "/quote", headers=H, json={"plain": 100, "keep": 30 * 86400, "pay": {**pay, "to": ours}})
+        assert r.status_code == 422 and ("INNERNET" in r.text), r.text
+
+
+def test_the_sender_sets_how_many_wrong_pins_it_takes(app):
+    client, a, tmp = app
+    owner, rx = Device(), Device()
+    fid, _ = make(client, owner, keep=86400, extras={"pin_tries": 2, "strong_pin": 1})
+    got = info(client, fid).json()
+    assert got["pin_tries_left"] == 2 and got["extras"]["strong_pin"] == 1 and got["extras"]["pin_tries"] == 2
+    r = open_(client, fid, rx, pin_tag="cc" * 32)
+    assert r.status_code == 403 and "1 try left" in r.text
+    assert open_(client, fid, rx, pin_tag="cc" * 32).status_code == 410            # the second wrong PIN destroys it
+    for bad in (0, 11, "x"):
+        body = {"id": os.urandom(16).hex(), "size": 10 + send.TAG, "parts": 1, "keep": 86400, "auth_hash": "ab" * 32, "pin_tag": "aa" * 32,
+                "owner_pub": owner.pub, "keeper_share": send.b64u(b"S" * 32), "preview": send.b64u(b"p"), "meta": send.b64u(b"m"), "extras": {"pin_tries": bad}}
+        assert client.post(API + "/files", json=body, headers=H).status_code == 422

@@ -8,6 +8,7 @@
   <link rel="icon" href="../../static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="../../static/registry.css">
   <script src="../../static/send-core.js" defer></script>
+  <script src="../../static/send-html.js" defer></script>
   <script src="../../static/send-store.js" defer></script>
   <script src="../../static/send-qr.js" defer></script>
   <script src="../../static/send-film.js" defer></script>
@@ -89,12 +90,13 @@
             </div>
           </div>
           <p class="msg" id="buy-msg" role="status"></p>
-          <p class="note">The payment goes straight to the sender. Keep this page open until it is seen on the chain.</p>
+          <p class="note" id="buy-split">The address above is the sender's own sales contract: it pays the sender, with a small share to INNERNET, on the chain. Keep this page open until the payment is seen on the chain.</p>
         </div>
 
         <form id="form" novalidate>
           <label class="label" for="pin">PIN from the sender</label>
-          <input id="pin" class="field code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+          <input id="pin" class="field code-input" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}|[0-9A-Za-z -]{10,14}">
+          <div id="shield"></div>
           <div class="actions"><button class="btn btn-light" id="go" type="submit">Open</button></div>
         </form>
         <p class="msg" id="msg" role="status"></p>
@@ -112,7 +114,7 @@
         <p id="facts"></p>
         <div class="view" id="view" hidden><div class="shown" id="shown" hidden></div><img id="pic" alt="" hidden><span class="mark" id="mark" hidden></span></div>
         <p class="msg warn" id="timer" hidden></p>
-        <div class="actions"><a class="btn btn-light" id="save" download>Save the file</a><button class="btn" id="rec" type="button" hidden>Signed record</button></div>
+        <div class="actions"><a class="btn btn-light" id="save" download>Save the file</a><button class="btn" id="show-html" type="button" hidden>Show this page here</button><button class="btn" id="rec" type="button" hidden>Signed record</button></div>
         <p class="note" id="after"></p>
         <form id="reply" hidden novalidate>
           <label class="label" for="reply-text">Reply to the sender (one message, sealed here; only they can read it)</label>

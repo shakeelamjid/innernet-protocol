@@ -532,3 +532,24 @@ table.adds .error { color: var(--bad, #ff6b6b); font-weight: 500; }
 .film .cell.sealed image { filter: none; }
 .film .tok.shard rect { fill: #fff; }
 .film .tok.shard text { font-size: 12px; }
+
+/* Admin: INNERNET Send prices */
+.price-fee { margin: 18px 0 8px; }
+.price-fee .row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.price-fee .field { max-width: 120px; }
+.price-h { margin: 28px 0 10px; font-size: 1rem; }
+table.prices td:first-child { width: 50%; }
+.price-in { max-width: 120px; padding: 6px 8px; }
+.price-in.edited { border-color: var(--text, #EDEDED); }
+/* HTML from the sender: a closed, clipped box. Nothing inside can draw outside it. */
+.shown.html { white-space: normal; padding: 0; border-left: 0; background: transparent; }
+.html-note { display: block; contain: paint; isolation: isolate; position: relative; overflow: auto; max-height: 75vh; border: 1px solid var(--frame); background: #fff; }
+#fmt-view { margin-top: 12px; }
+.fmt { display: grid; gap: 4px; margin-top: 6px; }
+/* Free protection, shown to sender and receiver */
+.protect { margin-top: 18px; padding: 16px 18px; border: 1px solid var(--border-2, #333); }
+.protect h3, .shield h3 { font-size: 1rem; margin: 0 0 10px; }
+.protect .field.num { max-width: 90px; }
+.shield { margin-top: 14px; }
+.shield ul.checks li { margin: 6px 0; font-size: .92rem; color: var(--muted, #A8A8A8); }
+.shield ul.checks strong { color: var(--text, #EDEDED); font-weight: 500; }

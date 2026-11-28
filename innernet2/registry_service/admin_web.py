@@ -264,6 +264,28 @@ def register(app, *, store: Store, settings, P: str, guard, client_ip, body_json
                  for r in store.q("SELECT * FROM audit ORDER BY id DESC LIMIT 200")]
         return {"machines": machines, "pending": pending, "admins": admins, "audit": audit}
 
+    # ---- INNERNET Send prices: one list for everyone, changed here, kept in the database ----
+    @app.get(P + "/api/admin/prices")
+    def send_prices(request: Request):
+        admin_session(request)
+        from . import send
+        return send.price_sheet()
+
+    @app.post(P + "/api/admin/prices")
+    async def save_send_prices(request: Request):
+        guard(request)
+        admin_session(request)
+        from . import send
+        data = await body_json(request)
+        changes = data.get("prices") or {}
+        reset = data.get("reset") or []
+        if not isinstance(changes, dict) or not isinstance(reset, list) or len(changes) + len(reset) > 200:
+            raise HTTPException(422, "prices is a map of key to USDC; reset is a list of keys")
+        done = send.set_prices(store, changes, reset)
+        if done:
+            log("prices", "send", ", ".join(done)[:900], request)
+        return {"changed": done, **send.price_sheet()}
+
     # ---- at scale: summary, paged and filtered tables, details, bulk actions ----
     from . import owners as own, presence, probe as probe_mod
 

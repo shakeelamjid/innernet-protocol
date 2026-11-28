@@ -302,9 +302,59 @@
     });
   }
 
+  // ---- INNERNET Send prices ----
+  let sheet = null;
+  function drawPrices(o) {
+    sheet = o;
+    const sale = o.sale;
+    $('p-sale').textContent = sale
+      ? 'Each reader pays the seller\'s own split contract, made by the payout factory ' + sale.factory + '. It sends ' + (100 - sale.fee_bps / 100) + '% to the seller and ' + (sale.fee_bps / 100) + '% to INNERNET (' + sale.fee_to + '). The share is fixed in the factory on the chain, so it cannot be changed here; nothing is charged upfront. Storage machines receive none of it.'
+      : 'Selling is off: no payout contract factory is set for this network, or the chain could not be read just now.';
+    const box = $('p-groups'); box.textContent = '';
+    o.groups.forEach(function (g) {
+      box.append(el('h3', 'price-h', g.title));
+      const wrap = el('div', 'tbl-wrap'), t = el('table', 'adm prices'), head = el('thead'), hr = el('tr');
+      ['What', 'Default', 'Price', ''].forEach(function (h) { hr.append(el('th', null, h)); });
+      head.append(hr); t.append(head);
+      const tb = el('tbody');
+      g.items.forEach(function (it) {
+        const tr = el('tr'); td(tr, it.label); td(tr, Number(it.default).toString(), 'dim mono');
+        const c = el('td'), inp = el('input', 'field price-in'); inp.value = Number(it.price).toString(); inp.inputMode = 'decimal';
+        inp.dataset.key = it.key; inp.dataset.was = inp.value; inp.setAttribute('aria-label', it.label + ', price in USDC');
+        inp.addEventListener('input', function () { inp.classList.toggle('edited', inp.value !== inp.dataset.was); });
+        c.append(inp); tr.append(c);
+        const a = el('td');
+        if (it.changed) {
+          a.append(el('span', 'state listed', 'changed'), ' ');
+          const b = el('button', 'btn btn-sm', 'Back to default'); b.type = 'button';
+          b.addEventListener('click', function () { savePrices({}, [it.key]); });
+          a.append(b);
+        }
+        tr.append(a); tb.append(tr);
+      });
+      t.append(tb); wrap.append(t); box.append(wrap);
+    });
+  }
+  async function loadPrices() { drawPrices(await I.api('/api/admin/prices')); }
+  async function savePrices(changes, reset) {
+    say('p-msg', 'Saving…');
+    try {
+      const body = { prices: changes, reset: reset || [] };
+      const o = await I.api('/api/admin/prices', body);
+      drawPrices(o);
+      say('p-msg', o.changed.length ? 'Saved: ' + o.changed.length + ' change' + (o.changed.length === 1 ? '' : 's') + '. New quotes use them now.' : 'Nothing changed.');
+    } catch (err) { say('p-msg', I.friendly(err), true); }
+  }
+  $('p-save').addEventListener('click', function () {
+    const changes = {};
+    document.querySelectorAll('.price-in').forEach(function (i) { if (i.value.trim() !== i.dataset.was) changes[i.dataset.key] = i.value.trim(); });
+    if (!Object.keys(changes).length) return say('p-msg', 'Nothing changed.');
+    savePrices(changes, []);
+  });
+
   // ---- tabs ----
   let current = 'waiting';
-  const LOAD = { waiting: loadSummary, machines: loadMachines, owners: loadOwners, setups: loadSetups, admins: loadAdmins, audit: loadAudit };
+  const LOAD = { waiting: loadSummary, machines: loadMachines, owners: loadOwners, setups: loadSetups, prices: loadPrices, admins: loadAdmins, audit: loadAudit };
   function tab(name) {
     current = name;
     document.querySelectorAll('[role=tab]').forEach(function (t) { t.setAttribute('aria-selected', String(t.getAttribute('data-tab') === name)); });

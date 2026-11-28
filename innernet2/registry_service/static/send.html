@@ -8,6 +8,7 @@
   <link rel="icon" href="static/favicon.svg?v=066" type="image/svg+xml">
   <link rel="stylesheet" href="static/registry.css">
   <script src="static/send-core.js" defer></script>
+  <script src="static/send-html.js" defer></script>
   <script src="static/send-store.js" defer></script>
   <script src="static/send-qr.js" defer></script>
   <script src="static/send-film.js" defer></script>
@@ -76,7 +77,14 @@
             <label class="label" for="text">Your note. It is shown on the receiver's screen, once.</label>
             <textarea id="text" class="field area" rows="6" autocomplete="off" spellcheck="true"></textarea>
             <p class="msg" id="text-msg"></p>
-            <label class="check"><input id="o-rich" type="checkbox"> Formatted: lines starting with # are headings, - are list items, **bold**, *italic*, links are clickable</label>
+            <div class="fmt" role="radiogroup" aria-label="How the note is written">
+              <label class="check"><input type="radio" name="fmt" value="0" checked> Plain text</label>
+              <label class="check"><input type="radio" name="fmt" value="1"> Formatted: # heading, - list, **bold**, *italic*</label>
+              <label class="check"><input type="radio" name="fmt" value="2"> HTML: paste your own page</label>
+            </div>
+            <p class="note" id="fmt-help" hidden>HTML is shown in a closed box on the receiver's screen, with its layout and styles. Scripts, forms, frames and outside pictures are removed; pictures embedded in the HTML (data:image) stay. Links open in a new tab. A note is at most 16 KB; for a bigger page, send it as an .html file and it can be shown the same way.</p>
+            <div class="actions"><button class="btn btn-sm" type="button" id="fmt-preview" hidden>Preview</button></div>
+            <div id="fmt-view" class="view" hidden></div>
           </div>
           <label class="label" for="from">Your name, shown before opening</label>
           <input id="from" class="field" maxlength="60" autocomplete="name">
@@ -124,6 +132,13 @@
             <label class="addon lock"><span class="check"><input type="radio" name="lock" value="open"><span><strong>Anyone with the link</strong><b class="price">included</b></span></span>
               <p>The PIN travels inside the link. For documents many people must read, things others add to, sales, and printed seals. First to open wins if you allow one opening.</p></label>
           </div>
+          <div class="protect">
+            <h3>Protection, included free</h3>
+            <label class="check"><input id="o-strong" type="checkbox"> Stronger PIN: 10 letters and digits instead of 6 digits</label>
+            <label class="label" for="o-tries">Wrong PINs allowed before it is destroyed</label>
+            <input id="o-tries" class="field num" type="number" min="1" max="10" value="5">
+            <div id="shield-lock"></div>
+          </div>
           <div class="paid" id="named-box" hidden>
             <label class="label" for="o-rnames">Who gets a PIN? One name per line, up to 20.</label>
             <textarea id="o-rnames" class="field area" rows="3" placeholder="First person&#10;Second person"></textarea>
@@ -157,7 +172,7 @@
               </div>
               <div class="addon">
                 <label class="check"><input id="o-pay" type="checkbox"><span><strong>It opens after payment</strong></span></label>
-                <p>The reader pays you directly, in USDC on Base, to your own address. Nothing passes through us. You pay a listing fee of 5% of what the lock can take in.</p>
+                <p>Readers pay in USDC on Base to your own sales contract, made for your wallet. It sends 97.5% to you and 2.5% to INNERNET, split on the chain; nobody can change or redirect it. Nothing to pay upfront for selling. Storage machines receive none of it.</p>
                 <div class="sub" data-for="o-pay">
                   <label class="label" for="o-pay-mode">How</label>
                   <select id="o-pay-mode" class="field"><option value="each">Each reader pays once</option><option value="crowd">It opens for everyone when a target is reached</option><option value="period">Each reader pays per period (you post new versions)</option></select>
@@ -288,6 +303,7 @@
         <section class="card frame step wz" data-title="Review">
           <h2>Review</h2>
           <ul class="plain" id="review"></ul>
+          <div id="shield-review"></div>
           <div class="meter" id="meter" aria-live="polite">
             <ul id="meter-lines"></ul>
             <p class="meter-total"><span>Today, paid before sending</span><strong id="meter-total">Free</strong></p>

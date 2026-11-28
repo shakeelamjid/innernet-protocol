@@ -79,7 +79,6 @@ MORE = {"recipient": 50_000, "succession": 500_000, "approver": 250_000, "duress
         "record": 100_000, "witness": 100_000, "origin": 500_000, "name": 250_000, "chain": 100_000, "qr": 100_000,
         "seat": 500_000, "version": 100_000, "device": 250_000, "node": 50_000}
 PRICES.update(MORE)
-LISTING_BPS = 500              # payment lock: the listing fee is 5% of what the lock can take in, paid upfront
 CARDS = ("gift", "invite", "voucher", "letter")
 FLAGS = (("view_only", "Shown on screen only"), ("presence", "Visible only while all are present"), ("record", "Signed record"),
          ("chain", "May be handed on, with a recorded chain"), ("qr", "Printed seal"), ("recovery", "Recovery code"),
@@ -98,6 +97,7 @@ DOMAIN = "INNERNET/SEND-1"
 ID = re.compile(r"^[0-9a-f]{32}$")
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS send_prices (k TEXT PRIMARY KEY, micro INTEGER NOT NULL, at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS send_files (
   id TEXT PRIMARY KEY, state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at INTEGER NOT NULL,
   expires_at INTEGER NOT NULL, die_at INTEGER NOT NULL, half_life INTEGER NOT NULL DEFAULT 0,
@@ -161,16 +161,82 @@ def usdc(micro: int) -> str:
     return f"{micro // USDC1}.{micro % USDC1:06d}"
 
 
+# What each price is, in the words the admin sees. Order is the order of the admin's Prices tab.
+PRICE_GROUPS = (
+    ("Storage plans (size and period, paid upfront, renewal at the same price)",
+     [(f"plan_{r}_{t}", f"{('Up to 10 MB', 'Up to 100 MB', 'Up to 1 GB')[r]}, {t} days") for r in range(3) for t in (7, 30, 90, 365)]),
+    ("Opening and delivery", [("opening", "Each extra opening"), ("unlimited", "Unlimited openings"), ("forward", "May be passed on"),
+                              ("open_after", "Opens only after a date"), ("open_until", "Opens only until a date"),
+                              ("device", "Opens only on a device you approve"), ("receipt", "Read receipt"), ("reply", "Sealed reply")]),
+    ("People and keys", [("holder", "Each key holder (split custody)"), ("seat", "Each person who can add (contributions)"),
+                         ("recipient", "Each named person with their own PIN"), ("succession", "Succession"),
+                         ("approver", "Each approver"), ("checkin", "Release if you stop checking in"), ("duress", "Duress PIN")]),
+    ("Viewing rules", [("view_only", "Shown on screen only"), ("view_timer", "Shown for a set time"), ("presence", "Visible only while all are present")]),
+    ("Proof and records", [("record", "Signed record"), ("witness", "Witness link"), ("origin", "Signed origin (your domain)"),
+                           ("chain", "Hand-on chain"), ("qr", "Printed seal (QR)"), ("version", "Each new version"), ("alarm", "Alarm")]),
+    ("Presentation", [("card", "Card design"), ("summary", "Summary shown before opening"), ("name", "Link name")]),
+    ("Storage machines", [("node", "Each machine the send is spread on, per 30 days")]),
+    ("Always free (kept at 0 unless you decide otherwise)", [("control", "Sender control"), ("recovery", "Recovery code")]),
+)
+PRICE_MAX = 10_000 * USDC1        # a typing slip cannot set a price above 10,000 USDC
+_price_db: dict = {"store": None, "at": 0.0, "rows": {}}
+
+
+def _saved() -> dict:
+    """Prices the admin saved (micro-USDC). Read at most every few seconds."""
+    st = _price_db["store"]
+    if st is None:
+        return {}
+    if time.time() - _price_db["at"] > 3:
+        try:
+            _price_db["rows"] = {r["k"]: int(r["micro"]) for r in st.q("SELECT k, micro FROM send_prices")}
+        except Exception:  # noqa: BLE001
+            pass
+        _price_db["at"] = time.time()
+    return _price_db["rows"]
+
+
 def prices() -> dict:
-    """The price list. The operator can change any price without a release: INNERNET_SEND_PRICES='{"term_30": "0.75"}'."""
-    out = dict(PRICES)
-    try:
-        for k, v in json.loads(os.environ.get("INNERNET_SEND_PRICES") or "{}").items():
-            if k in out:
-                out[k] = max(0, round(float(v) * USDC1))
-    except (ValueError, TypeError, AttributeError):
-        pass
+    """The price list: the defaults in this file, then any price the admin saved on the Prices tab."""
+    out, saved = dict(PRICES), _saved()
+    for k in out:
+        if k in saved:
+            out[k] = max(0, min(PRICE_MAX, saved[k]))
     return out
+
+
+def price_sheet() -> dict:
+    saved, now = _saved(), prices()
+    sale = None
+    try:
+        sale = _price_db["sale"]() if _price_db.get("sale") else None
+    except Exception:  # noqa: BLE001
+        sale = None
+    return {"groups": [{"title": t, "items": [{"key": k, "label": lab, "default": usdc(PRICES[k]), "price": usdc(now[k]),
+                                               "changed": k in saved} for k, lab in items]} for t, items in PRICE_GROUPS],
+            "sale": sale}
+
+
+def set_prices(store, changes: dict, reset: list | None = None) -> list[str]:
+    """Save prices from the admin. Values are USDC strings; returns what changed, for the audit log."""
+    done, now = [], int(time.time())
+    for k in reset or []:
+        if k in PRICES:
+            store.x("DELETE FROM send_prices WHERE k=?", (k,))
+            done.append(f"{k}=default")
+    for k, v in (changes or {}).items():
+        if k not in PRICES:
+            raise HTTPException(422, f"unknown price {k}")
+        try:
+            m = round(float(str(v).strip()) * USDC1)
+        except (TypeError, ValueError):
+            raise HTTPException(422, f"{k}: a price is a number of USDC")
+        if not 0 <= m <= PRICE_MAX:
+            raise HTTPException(422, f"{k}: 0 to 10000 USDC")
+        store.x("INSERT INTO send_prices(k, micro, at) VALUES (?,?,?) ON CONFLICT(k) DO UPDATE SET micro=excluded.micro, at=excluded.at", (k, m, now))
+        done.append(f"{k}={usdc(m)}")
+    _price_db["at"] = 0.0
+    return done
 
 
 def size_row(plain: int, free_bytes: int) -> int:
@@ -317,6 +383,7 @@ def pick_machines(cands: list[dict], k: int) -> list[dict]:
 
 def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, rpc=None, signer=None, machines=None) -> None:
     migrate(store)
+    _price_db.update(store=store, at=0.0, rows={})
     from .config import CHAIN_IDS, EXPLORER_TX, NETWORK_NAMES, USDC
     network = os.environ.get("INNERNET_SEND_NETWORK", "eip155:8453")
     payto = os.environ.get("INNERNET_SEND_PAYTO", "") or settings.fee_payto.get(network, "")
@@ -368,6 +435,44 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             if store.one("SELECT 1 AS x FROM send_payments WHERE tx=?", (h,)) is None:
                 return h, "0x" + topics[1][-40:]
         return None
+    from . import chain as chain_mod
+    sale_cache: dict = {}
+
+    def sale_terms() -> dict | None:
+        """The payout factory's fixed share and fee wallet (read from the chain, kept an hour)."""
+        if rpc is None or network not in USDC:
+            return None
+        hit = sale_cache.get("terms")
+        if hit and hit[0] > time.time():
+            return hit[1]
+        try:
+            terms = chain_mod.factory_terms(settings, network, rpc)
+        except Exception:  # noqa: BLE001
+            return hit[1] if hit else None
+        if terms:
+            sale_cache["terms"] = (time.time() + 3600, terms)
+        return terms
+
+    def sale_public() -> dict | None:
+        t = sale_terms()
+        return t and {"fee_bps": t["fee_bps"], "factory": t["factory"], "fee_to": t["fee_to"], "usdc": USDC[network],
+                      "chain_id": CHAIN_IDS[network]}
+
+    def seller_split(wallet: str) -> str:
+        key = "split:" + wallet.lower()
+        if key in sale_cache:
+            return sale_cache[key]
+        try:
+            split = chain_mod.predict_split(settings, network, wallet, rpc)
+        except Exception:  # noqa: BLE001
+            split = None
+        if not split or not ADDRESS.match(split):
+            raise HTTPException(503, "could not read the payout contract factory just now; try again in a moment")
+        sale_cache[key] = split
+        return split
+
+    _price_db["sale"] = sale_public
+
     root = os.path.join(os.path.dirname(settings.db_path) or ".", "send")
     os.makedirs(root, mode=0o700, exist_ok=True)
     api = P + "/send/api"
@@ -487,6 +592,16 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 raise HTTPException(422, "the view timer is between 10 seconds and 1 day")
             ex["view_secs"] = secs
             lines.append(("Leaves the screen after a set time", Pm["view_timer"]))
+        if e.get("pin_tries") is not None:                 # free: the sender sets how many wrong PINs it takes
+            try:
+                tries = int(e.get("pin_tries"))
+            except (TypeError, ValueError):
+                raise HTTPException(422, "pin_tries is a number")
+            if not 1 <= tries <= 10:
+                raise HTTPException(422, "1 to 10 wrong PINs before it is destroyed")
+            ex["pin_tries"] = tries
+        if e.get("strong_pin"):
+            ex["strong_pin"] = 1
         if versions:
             if not 1 <= versions <= 50:
                 raise HTTPException(422, "1 to 50 new versions")
@@ -618,6 +733,16 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             pay = {"mode": pl["mode"], "price": micro(pl.get("price")), "to": str(pl.get("to", ""))}
             if (strict or pay["to"]) and not ADDRESS.match(pay["to"]):
                 raise HTTPException(422, "the payment lock needs your receiving address (0x and 40 characters)")
+            if pay["to"] and payto and pay["to"].lower() == payto.lower():
+                raise HTTPException(422, "that is INNERNET's own address. Readers pay the address you give here, so give your own wallet")
+            terms = sale_terms()
+            if terms is None:
+                raise HTTPException(503, "selling is not available on this keeper yet: no payout contract factory is set")
+            if pay["to"] and terms["fee_to"].lower() == pay["to"].lower():
+                raise HTTPException(422, "that is INNERNET's fee wallet. Give your own wallet")
+            if strict:                                      # readers pay the seller's split: the share is enforced on the chain
+                pay["wallet"], pay["fee_bps"] = pay["to"], terms["fee_bps"]
+                pay["to"] = seller_split(pay["wallet"])
             try:
                 pay["buyers"], pay["period"] = int(pl.get("buyers") or 1), int(pl.get("period_days") or 0) * DAY
             except (TypeError, ValueError):
@@ -632,7 +757,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             if pay["mode"] == "period" and not DAY <= pay["period"] <= 365 * DAY:
                 raise HTTPException(422, "a paid period is 1 to 365 days")
             x["pay"] = pay
-            lines.append(("Payment lock, listing fee (5% of what it can take in)", max(100_000, take * LISTING_BPS // 10_000)))
+            del take                                        # no fee upfront: the share is taken from each payment, on the chain
         if d.get("parent"):
             x["parent"] = str(d["parent"])
             if strict:
@@ -716,9 +841,12 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
                 "release_at": r["checkin_due"] + RELEASE_DELAY if r["checkin_every"] > 0 else 0, "paused": bool(r.get("paused")),
                 "has_key": bool(r.get("recover_hash")), **more_rules(r)}
 
+    def tries_of(r: dict) -> int:
+        return int(extras(r).get("pin_tries") or PIN_TRIES)
+
     def more_rules(r: dict) -> dict:
         e = extras(r)
-        out = {"extras": {k: e[k] for k in ("view_only", "view_secs", "presence", "card", "record", "chain", "qr", "name", "device") if k in e},
+        out = {"extras": {k: e[k] for k in ("view_only", "view_secs", "presence", "card", "record", "chain", "qr", "name", "device", "pin_tries", "strong_pin") if k in e},
                "summary": r.get("summary"), "version": r.get("version", 1), "versions_left": r.get("versions_left", 0),
                "origin": e.get("origin") if r.get("origin_ok") else None, "origin_pending": e.get("origin") if not r.get("origin_ok") else None,
                "named": store.one("SELECT COUNT(*) AS n FROM send_recipients WHERE file=?", (r["id"],))["n"]}
@@ -737,7 +865,8 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         if r.get("pay"):
             p = json.loads(r["pay"])
             paid = store.one("SELECT COALESCE(SUM(amount),0) AS a, COUNT(DISTINCT device) AS n FROM send_access WHERE file=?", (r["id"],))
-            out["paylock"] = {"mode": p["mode"], "price": usdc(p["price"]), "to": p["to"], "buyers": p["buyers"], "sold": paid["n"],
+            out["paylock"] = {"mode": p["mode"], "price": usdc(p["price"]), "to": p["to"], "wallet": p.get("wallet", p["to"]),
+                              "fee_bps": p.get("fee_bps", 0), "buyers": p["buyers"], "sold": paid["n"],
                           "period_days": p.get("period", 0) // DAY, "target": usdc(p["target"]) if p.get("target") else None,
                           "raised": usdc(paid["a"]), "network": NETWORK_NAMES.get(network, network)}
         if r.get("parent"):
@@ -855,7 +984,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         return {"on": lim["on"], "max_bytes": lim["max_bytes"], "note_bytes": NOTE_BYTES, "part": PART, "free_keep": lim["max_keep"],
                 "tier": "all" if lim["all_rules"] else "paid" if payto else "free", "pin_tries": PIN_TRIES,
                 "paid": {"on": bool(payto) and not lim["all_rules"], "max_bytes": lim["paid_max_bytes"], "max_keep": lim["paid_max_keep"],
-                         "to": payto, "network": NETWORK_NAMES.get(network, network), "listing_bps": LISTING_BPS, "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
+                         "to": payto, "network": NETWORK_NAMES.get(network, network), "sale": sale_public(), "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
                          "grace": GRACE, "spread": {"k": SPREAD_K, "min": SPREAD_MIN, "max": SPREAD_MAX, "machines": machine_count()}, "plan": [[usdc(prices()[f"plan_{r}_{t}"]) for t in TERMS] for r in range(3)],
                          "prices": {k: usdc(v) for k, v in prices().items()}}}
 
@@ -1231,7 +1360,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             return {"id": fid, "state": "dead" if r["state"] == "dead" else "uploading", "reason": r["reason"]}
         return {"id": fid, "state": r["state"], "locked": time.time() >= r["expires_at"], "size": r["size"], "parts": r["parts"], "part": PART, "preview": r["preview"],
                 "sealed_at": r["created_at"], "claim": claim_of(fid, str(d0.get("device_pub", ""))) if extras(r).get("device") else None, "access": paid_ok(r, str(d0.get("device_pub", "")), int(time.time())) if r["pay"] else True,
-                **rules(r), "bound": bool(r["bound_pub"]), "pin_tries_left": PIN_TRIES - r["pin_fails"]}
+                **rules(r), "bound": bool(r["bound_pub"]), "pin_tries_left": tries_of(r) - r["pin_fails"]}
 
     def claim_of(fid: str, device: str) -> dict:
         cl = store.one("SELECT code, approved, name FROM send_claims WHERE file=? AND device=?", (fid, device))
@@ -1288,10 +1417,11 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         if not decoy and who is None and not (good and not recs and hmac.compare_digest(proof, r["pin_tag"])):
             fails = r["pin_fails"] + 1
             store.x("UPDATE send_files SET pin_fails=? WHERE id=?", (fails, fid))
-            if fails >= PIN_TRIES:
+            if fails >= tries_of(r):
                 kill(fid, "too many wrong PINs")
                 raise HTTPException(410, "too many wrong PINs: the file has been destroyed")
-            raise HTTPException(403, f"wrong PIN ({PIN_TRIES - fails} tries left)")
+            left = tries_of(r) - fails
+            raise HTTPException(403, f"wrong PIN ({left} {'try' if left == 1 else 'tries'} left)")
         token = secrets.token_bytes(32)
         opens = r["opens"] + 1
         last = bool(r["max_opens"]) and opens >= r["max_opens"]
@@ -1699,7 +1829,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         store.x("DELETE FROM send_quotes WHERE pay_by<?", (now - PAY_GRACE,))
         amount = unique(base)
         store.x("INSERT INTO send_quotes(amount, file, device, pay_by) VALUES (?,?,?,?)", (amount, fid, device, now + PAY_WINDOW))
-        return {"amount": usdc(amount), "micro": amount, "to": p["to"], "network": network, "network_name": NETWORK_NAMES[network],
+        return {"amount": usdc(amount), "micro": amount, "to": p["to"], "fee_bps": p.get("fee_bps", 0), "network": network, "network_name": NETWORK_NAMES[network],
                 "chain_id": CHAIN_IDS[network], "usdc": USDC[network], "pay_by": now + PAY_WINDOW, "explorer": EXPLORER_TX[network]}
 
     @app.post(api + "/files/{fid}/buy/check")

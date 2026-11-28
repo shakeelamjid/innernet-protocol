@@ -111,6 +111,8 @@ class FakeChain:
                 return word(1 if ("0x" + arg[-40:]) in self.splits.values() else 0)
             if sel == chain.SEL_FEE_RECIPIENT:
                 return word(int(FEE_WALLET, 16))
+            if sel == chain.SEL_PREDICT:                  # a deterministic stand-in for CREATE2
+                return word(int(hashlib.sha256(("split" + arg[-40:]).encode()).hexdigest()[:40], 16))
             if sel == chain.SEL_FEE_BPS:
                 return word(250)
             raise AssertionError(sel)

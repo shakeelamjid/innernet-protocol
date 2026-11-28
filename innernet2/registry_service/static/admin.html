@@ -43,6 +43,7 @@
           <button role="tab" data-tab="machines" aria-selected="false">Machines <span id="n-machines"></span></button>
           <button role="tab" data-tab="owners" aria-selected="false">Owners <span id="n-owners"></span></button>
           <button role="tab" data-tab="setups" aria-selected="false">Setups never applied <span id="n-setups"></span></button>
+          <button role="tab" data-tab="prices" aria-selected="false">Send prices</button>
           <button role="tab" data-tab="admins" aria-selected="false">Admins</button>
           <button role="tab" data-tab="audit" aria-selected="false">Audit log</button>
         </nav>
@@ -83,6 +84,16 @@
 
         <section class="tabpanel" data-panel="setups" hidden>
           <div class="tbl-wrap"><table class="adm"><thead><tr><th>Machine</th><th>System</th><th>Status</th><th>Started</th><th></th></tr></thead><tbody id="setups"></tbody></table></div>
+        </section>
+
+        <section class="tabpanel" data-panel="prices" hidden>
+          <p class="dim">One price list for everyone who uses INNERNET Send. A change applies to new quotes from the moment you save; a send already paid for keeps what it paid. Prices are in USDC.</p>
+          <div class="price-fee">
+            <h3 class="price-h">Sales through the payment lock</h3>
+            <p id="p-sale" class="dim"></p>
+          </div>
+          <div id="p-groups"></div>
+          <div class="toolbar"><button class="btn btn-light" type="button" id="p-save">Save prices</button><span class="spacer"></span><span id="p-msg" class="msg" role="status"></span></div>
         </section>
 
         <section class="tabpanel" data-panel="admins" hidden>

@@ -157,7 +157,25 @@
     qrEl.textContent = ''; if (window.InnernetQR) qrEl.append(window.InnernetQR.svg(uri, 150));
     linkEl.href = uri;
   }
-  window.InnernetSendStore = { boxExport: boxExport, boxImport: boxImport, entryCell: entryCell, payWays: payWays, boxKey: boxKey, download: download, bytes: bytes,
+  /* What protects every send, included free. Each line is true of the send it is shown for. */
+  function shield(o) {
+    const box = document.createElement('div'); box.className = 'shield';
+    const h = document.createElement('h3'); h.textContent = o.reader ? 'How this is protected' : 'Protection included with every send, free'; box.append(h);
+    const ul = document.createElement('ul'); ul.className = 'plain checks';
+    const tries = o.tries || 5;
+    [['End-to-end sealed', (o.reader ? 'Opened only here, on this device,' : 'Sealed on your device') + ' with AES-256. INNERNET\u2019s servers never see the content, the link secret or the PIN.'],
+      o.pq ? ['Safe against quantum computers', 'The content is sealed only with AES-256 and SHA-256. It has no public-key step, the part a quantum computer could break, so it cannot be recorded now and opened later.']
+           : ['Quantum note', 'Contributions are sealed to the sender\u2019s device key (P-256). That step is not quantum-safe; the rest is.'],
+      ['Three-part key', 'Link secret + PIN + the keeper\u2019s part. None of them opens anything alone, and a stolen copy of our database opens nothing.'],
+      ['PIN guarded', (o.strong ? '10 letters and digits, about a billion times more combinations than 6 digits. ' : '') + tries + ' wrong ' + (tries === 1 ? 'try' : 'tries') + (o.reader ? ' left' : '') + ', then it is destroyed for good. Each try is stretched 200,000 times.'],
+      ['Every part checked', 'A changed, missing or reordered part is refused before anything is shown.'],
+      ['Gone when it ends', 'At the end the keeper\u2019s part is deleted, so what is left can never be opened.']].forEach(function (x) {
+      const li = document.createElement('li'), b = document.createElement('strong'); b.textContent = x[0] + '. '; li.append(b, x[1]); ul.append(li);
+    });
+    box.append(ul);
+    return box;
+  }
+  window.InnernetSendStore = { shield: shield, boxExport: boxExport, boxImport: boxImport, entryCell: entryCell, payWays: payWays, boxKey: boxKey, download: download, bytes: bytes,
     BASE: BASE, api: api, put: put, usdc: usdc, steps: steps, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
     sent: function () { return run('sent', 'readonly', function (s) { return s.getAll(); }); },
     remember: function (rec) { return run('sent', 'readwrite', function (s) { return s.put(rec, rec.id); }); },

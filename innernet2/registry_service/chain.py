@@ -46,6 +46,7 @@ SEL_IS_SPLIT = "8b8f5031"       # isSplit(address)
 SEL_FEE_RECIPIENT = "46904840"  # feeRecipient()
 SEL_FEE_BPS = "24a9d853"        # feeBps()
 SEL_SPLIT_OF = "41890891"       # splitOf(address)
+SEL_PREDICT = "901b96e7"        # predict(address)
 
 
 def _call(rpc: Rpc, url: str, to: str, selector: str, arg: str | None = None) -> int:
@@ -70,6 +71,24 @@ def split_of(settings: Settings, network: str, wallet: str, rpc: Rpc = http_rpc)
         return None
     value = _call(rpc, url, factory, SEL_SPLIT_OF, wallet)
     return None if not value else "0x" + format(value, "040x")
+
+
+def predict_split(settings: Settings, network: str, wallet: str, rpc: Rpc = http_rpc) -> str | None:
+    """The address the factory gives wallet's split, before or after it is created (CREATE2)."""
+    factory, url = settings.split_factory.get(network), settings.rpc.get(network)
+    if not factory or not url:
+        return None
+    value = _call(rpc, url, factory, SEL_PREDICT, wallet)
+    return None if not value else "0x" + format(value, "040x")
+
+
+def factory_terms(settings: Settings, network: str, rpc: Rpc = http_rpc) -> dict | None:
+    """The factory's fixed fee share and fee wallet, read from the chain."""
+    factory, url = settings.split_factory.get(network), settings.rpc.get(network)
+    if not factory or not url:
+        return None
+    return {"factory": factory, "fee_bps": _call(rpc, url, factory, SEL_FEE_BPS),
+            "fee_to": "0x" + format(_call(rpc, url, factory, SEL_FEE_RECIPIENT), "040x")}
 
 
 def payout_check(settings: Settings, network: str, address: str, rpc: Rpc = http_rpc) -> tuple[bool, str]:

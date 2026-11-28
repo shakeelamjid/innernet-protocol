@@ -34,10 +34,17 @@
     return out;
   }
   function random(n) { return crypto.getRandomValues(new Uint8Array(n)); }
-  function newPin() {                       // 6 digits, each uniformly random
+  const STRONG = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';   // 32 signs, none that look alike (no 0/O, 1/I/L)
+  function newPin(strong) {                 // 6 digits; or, strong, 10 signs from STRONG (50 bits), each uniformly random
+    if (strong) { let s = ''; random(10).forEach(function (b) { s += STRONG[b & 31]; }); return s; }
     const a = random(12); let s = '';
     for (let i = 0; i < a.length && s.length < 6; i++) if (a[i] < 250) s += String(a[i] % 10);
     return s.length === 6 ? s : newPin();
+  }
+  function showPin(p) { p = String(p); return p.length === 10 ? p.slice(0, 5) + '-' + p.slice(5) : p; }
+  function readPin(text) {                  // what the receiver typed: 6 digits, or 10 signs with any dashes or spaces
+    const a = String(text).toUpperCase().replace(/[^0-9A-Z]/g, '');
+    return a.length === 10 ? a : String(text).replace(/\D/g, '');
   }
 
   async function hkdf(ikm, salt, info, bytes) {
@@ -216,7 +223,7 @@
 
   return { verifyRequest: verifyRequest, rich: rich, aesKey: aes, wrapKey: wrapKey, unwrapKey: unwrapKey, subKey: subKey, sealWith: sealWith, openWith: openWith, newBoxKey: newBoxKey,
     sealTo: sealTo, openFrom: openFrom, pack: pack, unpack: unpack, concat: concat,
-    room: room, sha256hex: sha256hex, jointPin: jointPin, jointLink: jointLink, parseJoint: parseJoint, split: split, combine: combine, parsePart: parsePart, PART: PART, TAG: TAG, b64u: b64u, unb64u: unb64u, hex: hex, random: random, newPin: newPin, linkKeys: linkKeys, pinTag: pinTag,
+    room: room, sha256hex: sha256hex, jointPin: jointPin, jointLink: jointLink, parseJoint: parseJoint, split: split, combine: combine, parsePart: parsePart, PART: PART, TAG: TAG, b64u: b64u, unb64u: unb64u, hex: hex, random: random, newPin: newPin, showPin: showPin, readPin: readPin, linkKeys: linkKeys, pinTag: pinTag,
     fileKey: fileKey, sealSmall: sealSmall, openSmall: openSmall, partCount: partCount, sealPart: sealPart, openPart: openPart,
     newDeviceKey: newDeviceKey, publicRaw: publicRaw, signRequest: signRequest, newId: function () { return hex(random(16)); } };
 });
