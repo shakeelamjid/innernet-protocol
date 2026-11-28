@@ -441,3 +441,25 @@ table.adds th { color: var(--dim); font-weight: 400; white-space: nowrap; font-s
 #artifacts .note { margin-top: 4px; }
 #handon-out code { overflow-wrap: anywhere; display: block; margin-top: 10px; }
 @media print { header, .wz-nav, #sent-card, #tally, .actions, #stored, form { display: none !important; } body { background: #fff; color: #000; } .card { border: 0; } }
+
+/* INNERNET Send: form builder, ways to pay, formatted notes, signatures */
+.formrows { display: grid; gap: 8px; margin: 8px 0; }
+.formrow { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 1.2fr) auto auto; gap: 8px; align-items: center; }
+.formrow .field { margin-top: 0; }
+.formrow .btn { margin-top: 0; }
+.formrow > input:last-child { grid-column: 1 / -1; }
+.feeline { font-size: .85rem; color: var(--text); border-left: 2px solid #fff; padding: 6px 12px; margin-top: 12px; background: var(--surface-2); }
+.payways { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 20px; margin-top: 16px; align-items: start; }
+.payways .btn { margin-top: 0; }
+.payways .qr { margin: 0 0 8px; display: block; width: max-content; }
+.shown.rich { white-space: normal; }
+.shown.rich h3, .shown.rich h4, .shown.rich h5 { margin: 14px 0 6px; }
+.shown.rich p { margin: 6px 0; }
+.shown.rich ul { margin: 6px 0 6px 20px; }
+.shown.rich a { color: #fff; text-decoration: underline; }
+.shown.rich hr { border: 0; border-top: 1px solid var(--border-2); margin: 14px 0; }
+table.adds .signed { font-weight: 500; margin-top: 4px; }
+table.adds .error { color: var(--bad, #ff6b6b); font-weight: 500; }
+.use.on { background: #fff; }
+.use.on strong { color: #000; } .use.on span { color: #333; }
+@media (max-width: 620px) { .formrow { grid-template-columns: 1fr 1fr; } .payways { grid-template-columns: 1fr; } }

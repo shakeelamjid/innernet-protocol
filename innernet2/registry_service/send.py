@@ -315,14 +315,12 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         Returns (tx, payer) or None."""
         url, token, to = settings.rpc[network], USDC[network].lower(), "0x" + "0" * 24 + (dest or payto)[2:].lower()
         try:
-            if tx:
-                receipt = rpc(url, "eth_getTransactionReceipt", [tx])
-                if not receipt:
-                    return None
+            receipt = rpc(url, "eth_getTransactionReceipt", [tx]) if tx else None
+            if receipt:
                 if receipt.get("status") != "0x1":
                     raise HTTPException(422, "that transaction failed on the chain")
                 logs = receipt.get("logs", [])
-            else:
+            else:                                          # no hash, or one the chain does not know yet: look for the amount itself
                 head = int(rpc(url, "eth_blockNumber", []), 16)
                 logs = rpc(url, "eth_getLogs", [{"address": USDC[network], "fromBlock": hex(max(0, head - SCAN_BLOCKS)),
                                                  "toBlock": hex(head), "topics": [TRANSFER_TOPIC, None, to]}])
@@ -578,7 +576,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
             if not isinstance(pl, dict) or pl.get("mode") not in ("each", "crowd", "period"):
                 raise HTTPException(422, "the payment lock is each, crowd or period")
             pay = {"mode": pl["mode"], "price": micro(pl.get("price")), "to": str(pl.get("to", ""))}
-            if not ADDRESS.match(pay["to"]):
+            if (strict or pay["to"]) and not ADDRESS.match(pay["to"]):
                 raise HTTPException(422, "the payment lock needs your receiving address (0x and 40 characters)")
             try:
                 pay["buyers"], pay["period"] = int(pl.get("buyers") or 1), int(pl.get("period_days") or 0) * DAY
@@ -805,7 +803,7 @@ def register(app, *, store, settings, P: str, guard, client_ip, limiter, page, r
         return {"on": lim["on"], "max_bytes": lim["max_bytes"], "note_bytes": NOTE_BYTES, "part": PART, "free_keep": lim["max_keep"],
                 "tier": "all" if lim["all_rules"] else "paid" if payto else "free", "pin_tries": PIN_TRIES,
                 "paid": {"on": bool(payto) and not lim["all_rules"], "max_bytes": lim["paid_max_bytes"], "max_keep": lim["paid_max_keep"],
-                         "to": payto, "network": NETWORK_NAMES.get(network, network), "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
+                         "to": payto, "network": NETWORK_NAMES.get(network, network), "listing_bps": LISTING_BPS, "terms": list(TERMS), "sizes": [lim["max_bytes"], SIZES[1] * MB, SIZES[2] * MB],
                          "grace": GRACE, "plan": [[usdc(prices()[f"plan_{r}_{t}"]) for t in TERMS] for r in range(3)],
                          "prices": {k: usdc(v) for k, v in prices().items()}}}
 

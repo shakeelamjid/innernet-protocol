@@ -51,6 +51,7 @@
             <label class="label" for="text">Your note. It is shown on the receiver's screen, once.</label>
             <textarea id="text" class="field area" rows="6" autocomplete="off" spellcheck="true"></textarea>
             <p class="msg" id="text-msg"></p>
+            <label class="check"><input id="o-rich" type="checkbox"> Formatted: lines starting with # are headings, - are list items, **bold**, *italic*, links are clickable</label>
           </div>
           <label class="label" for="from">Your name, shown before opening</label>
           <input id="from" class="field" maxlength="60" autocomplete="name">
@@ -71,10 +72,13 @@
                 <label class="check"><input id="o-collect" type="checkbox"><span><strong>Let others add to it</strong><b class="price" data-p="seat" data-s=" per person"></b></span></label>
                 <p>People with the link fill in your form and attach a file, sealed on their device. They can replace what they added until it opens. Tenders, quotations, client documents, exchanges, votes.</p>
                 <div class="sub" data-for="o-collect">
-                  <label class="label" for="o-fields">What should they fill in? One question per line.</label>
-                  <textarea id="o-fields" class="field area" rows="3" placeholder="Price&#10;Delivery in days&#10;Remarks"></textarea>
+                  <label class="label">The form they fill in</label>
+                  <div class="formrows" id="o-form"></div>
+                  <button class="btn btn-sm" id="o-form-add" type="button">Add a question</button>
+                  <textarea id="o-fields" hidden></textarea><input id="o-attach" type="checkbox" hidden>
+                  <div class="inline">They may attach up to <select id="o-files" class="field num"><option value="0">0</option><option value="1" selected>1</option><option value="2">2</option><option value="3">3</option></select> files (4 MB together)</div>
                   <div class="inline"><input id="o-seats" class="field num" type="number" min="1" max="200" value="5"> people can add</div>
-                  <label class="check"><input id="o-attach" type="checkbox" checked> they may attach one file (up to 4 MB)</label>
+                  <label class="check"><input id="o-sign" type="checkbox"> this is a document to sign: each person reads it, types their name and signs it with their device key</label>
                   <label class="label" for="o-audience">Who reads what was added?</label>
                   <select id="o-audience" class="field"><option value="owner">Only me</option><option value="all">Everyone with the link</option></select>
                   <label class="check"><input id="o-anon" type="checkbox"> do not ask for names (for votes and surveys)</label>
@@ -135,7 +139,8 @@
                   <div class="inline" id="o-pay-period-box" hidden>every <input id="o-pay-period" class="field num" type="number" min="1" max="365" value="30"> days</div>
                   <div class="inline">at most <input id="o-pay-buyers" class="field num" type="number" min="1" max="1000" value="10"> readers</div>
                   <label class="label" for="o-pay-to">Your receiving address on Base (public address only)</label>
-                  <input id="o-pay-to" class="field" placeholder="0x…" autocomplete="off" spellcheck="false"></div>
+                  <input id="o-pay-to" class="field" placeholder="0x…" autocomplete="off" spellcheck="false">
+                  <p class="feeline" id="o-pay-fee"></p></div>
               </div>
               <div class="addon">
                 <label class="check"><input id="o-duress" type="checkbox"><span><strong>Duress PIN</strong><b class="price" data-p="duress"></b></span></label>
@@ -289,9 +294,14 @@
           <div class="copyable"><code id="pay-exact" class="big"></code><button class="btn btn-sm" type="button" data-copy="pay-exact">Copy</button></div>
           <label class="label">To this address (USDC on <span id="pay-net2"></span> only)</label>
           <div class="copyable"><code id="pay-to"></code><button class="btn btn-sm" type="button" data-copy="pay-to">Copy</button></div>
-          <div class="actions">
-            <button class="btn btn-light" id="pay-wallet" type="button">Pay with the wallet in this browser</button>
-            <button class="btn" id="pay-cancel" type="button">Cancel</button>
+          <div class="payways">
+            <div><div class="qr" id="pay-qr"></div><a class="btn btn-sm" id="pay-open">Open in a wallet app</a><p class="note">Scan with a phone wallet, or tap on a phone.</p></div>
+            <div>
+              <button class="btn btn-light" id="pay-wallet" type="button">Pay with the wallet in this browser</button>
+              <label class="label" for="pay-tx">Paid another way? Paste the transaction hash</label>
+              <input id="pay-tx" class="field" placeholder="0x…" autocomplete="off" spellcheck="false">
+              <div class="actions"><button class="btn" id="pay-check" type="button">Check this transaction</button><button class="btn" id="pay-cancel" type="button">Cancel</button></div>
+            </div>
           </div>
           <p class="msg" id="pay-msg" role="status"></p>
           <p class="note">Keep this page open. Nothing is uploaded until the payment is seen on the chain. The price is held until <span id="pay-by"></span>.</p>

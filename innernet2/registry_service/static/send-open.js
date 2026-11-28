@@ -7,6 +7,7 @@
   const $ = function (id) { return document.getElementById(id); };
   const path = location.pathname.match(/\/send\/(?:o\/([0-9a-f]{32})|n\/([a-z0-9-]+))\/?$/);
   let id = path && path[1], secret = null, keys = null, busy = false, steps = null, isNote = false, token = null;
+  let afterOpen = null;
   let joint = false, held = false, due = 0, autoPin = null, info = null, roomCall = null, roomNeed = 0, opened = null;
 
   function say(text, err) { $('msg').textContent = text || ''; $('msg').classList.toggle('error', !!err); }
@@ -116,10 +117,15 @@
         const d = await who();
         buying = await (await St.api('POST', '/files/' + id + '/buy', Object.assign({ auth: C.b64u(keys.auth), device_pub: d.pub, amount: crowd ? $('buy-amount').value : undefined }, await C.signRequest(d.device, 'buy', id)))).json();
         $('buy-exact').textContent = buying.amount; $('buy-to').textContent = buying.to; $('buy-net').textContent = buying.network_name;
-        $('buy-how').hidden = false; $('buy-wallet').hidden = !window.ethereum; $('buy-go').hidden = true;
+        $('buy-how').hidden = false; $('buy-wallet').hidden = !window.ethereum; $('buy-go').hidden = true; St.payWays($('buy-qr'), $('buy-open'), buying);
         $('buy-msg').textContent = 'Waiting for the payment…';
         watchPay();
       } catch (e) { $('buy-msg').textContent = e.message; $('buy-go').disabled = false; }
+    };
+    $('buy-check').onclick = function () {
+      const t = $('buy-tx').value.trim().toLowerCase();
+      if (!/^0x[0-9a-f]{64}$/.test(t)) { $('buy-msg').textContent = 'A transaction hash is 0x followed by 64 characters.'; return; }
+      buying.tx = t; $('buy-msg').textContent = 'Checking that transaction on the chain…';
     };
     $('buy-wallet').onclick = async function () {
       try {
@@ -295,7 +301,7 @@
     if (onScreen) {
       $('view').hidden = false; $('save').hidden = true;
       if (pic) { $('pic').src = URL.createObjectURL(r.blob); $('pic').hidden = false; }
-      else { $('shown').textContent = await r.blob.text(); $('shown').hidden = false; if (m.card) $('shown').className = 'shown card-' + m.card; }
+      else { const t = await r.blob.text(); if (m.rich) { $('shown').textContent = ''; $('shown').append(C.rich(t, document)); $('shown').className = 'shown rich'; } else $('shown').textContent = t; $('shown').hidden = false; if (m.card) $('shown').className += ' card-' + m.card; }
       if (m.view_only && m.mark) { $('mark').textContent = (m.mark + ' · ' + St.when(Date.now() / 1000) + '   ').repeat(40); $('mark').hidden = false; }
       $('facts').textContent = 'Opened and checked on this device. It is shown only here.';
     } else if (m.view_only) {
@@ -314,6 +320,7 @@
     if (info.extras && info.extras.record) $('rec').hidden = false;
     if (r.rel.last) setTimeout(function () { steps.burn(); }, 900);
     if (!onScreen && !m.view_only) $('save').click();
+    if (afterOpen) afterOpen();
     if (m.view_secs) {                                    // the view timer: after this, the page lets go of it
       let left = m.view_secs;
       const t = setInterval(function () {
@@ -337,52 +344,73 @@
   /* Others add to it: a form the sender wrote, filled in here, sealed here. */
   async function collect() {
     const c = info.collect, d = await who();
-    let form = { fields: [], file: false };
+    let form = { fields: [], files: 0 };
     try { if (c.form) form = await C.openSmall(keys.preview, id, 'form', c.form); } catch (e) { /* no form: a file only */ }
+    const fields = (form.fields || []).map(function (f) { return typeof f === 'string' ? { q: f, type: 'text' } : f; }), maxFiles = form.files != null ? form.files : (form.file ? 1 : 0);
     $('co-fields').textContent = '';
-    const inputs = form.fields.map(function (q, i) {
-      const l = el('label', q, 'label'), f = el('input', null, 'field'); f.id = 'co-q' + i; l.setAttribute('for', f.id); f.maxLength = 500; f.autocomplete = 'off';
+    const inputs = fields.map(function (q, i) {
+      const l = el('label', q.q + (q.req ? ' (required)' : ''), 'label');
+      let f;
+      if (q.type === 'long') { f = el('textarea', null, 'field area'); f.rows = 3; f.maxLength = 4000; }
+      else if (q.type === 'choice' || q.type === 'yes') { f = el('select', null, 'field'); [''].concat(q.type === 'yes' ? ['Yes', 'No'] : q.opts || []).forEach(function (v) { const op = el('option', v || 'Choose…'); op.value = v; f.append(op); }); }
+      else { f = el('input', null, 'field'); f.type = q.type === 'number' ? 'number' : q.type === 'date' ? 'date' : 'text'; if (q.type === 'number') f.step = 'any'; f.maxLength = 500; f.autocomplete = 'off'; }
+      f.id = 'co-q' + i; l.setAttribute('for', f.id);
       $('co-fields').append(l, f); return f;
     });
-    $('co-file-box').hidden = !form.file;
+    $('co-file-box').hidden = !maxFiles; $('co-file').multiple = maxFiles > 1;
+    $('co-file-l').textContent = maxFiles > 1 ? 'Attach up to ' + maxFiles + ' files (4 MB together)' : 'Attach one file (up to 4 MB)';
+    $('co-agree-box').hidden = !form.sign;
+    async function docHash() { return opened ? C.sha256hex(new Uint8Array(await opened.blob.arrayBuffer())) : null; }
     async function state() { return (await St.api('POST', '/files/' + id + '/adds/list', { auth: C.b64u(keys.auth), device_pub: d.pub })).json(); }
     async function paint() {
       const s = await state(), open = Date.now() / 1000 < s.closes_at && !info.locked && !(s.revealed && info.open_after);
-      $('co-title').textContent = s.mine ? 'You have added yours' : 'Add yours';
+      $('co-title').textContent = form.sign ? (s.mine ? 'You have signed' : 'Sign it') : s.mine ? 'You have added yours' : 'Add yours';
       $('co-text').textContent = s.count + ' of ' + s.seats + ' have added. ' + (open ? 'You can add, or replace what you added, until ' + St.when(s.closes_at) + '.' : 'It is closed: nothing can be added or changed now.') +
         (info.open_after ? ' Everything added stays sealed until ' + St.when(info.open_after) + ', then opens ' + (s.audience === 'all' ? 'for everyone with this link.' : 'for the sender only.') : s.audience === 'owner' ? ' Only the sender can read what you add.' : '') +
         (s.reveal_count && !s.revealed ? ' It opens once ' + s.reveal_count + ' have added.' : '');
-      $('co-form').hidden = !open; $('co-go').textContent = s.mine ? 'Seal and replace mine' : 'Seal and add';
+      $('co-form').hidden = !open || (form.sign && !opened); $('co-go').textContent = form.sign ? (s.mine ? 'Sign again' : 'Sign') : s.mine ? 'Seal and replace mine' : 'Seal and add';
+      if (form.sign) $('co-text').textContent = s.count + ' of ' + s.seats + ' have signed. ' + (opened ? 'Your signature is made with this device\u2019s key over the exact document you opened, and everyone with the link can check it.' : 'Open the document above first; then you can sign it.');
       $('co-mine').textContent = '';
       if (s.mine) $('co-mine').append(el('p', 'Your entry is number ' + s.mine.entry + ', received ' + St.when(s.mine.updated_at) + (s.mine.changes ? ', changed ' + s.mine.changes + (s.mine.changes === 1 ? ' time' : ' times') : '') + '. Fingerprint ' + s.mine.sha256.slice(0, 16) + '…', 'note'));
       $('co-all').textContent = '';
       if (s.may_read && s.entries) {
         const b = el('button', 'Read what everyone added (' + s.entries.length + ')', 'btn'); b.type = 'button';
+        b.textContent = form.sign ? 'Show and check the signatures (' + s.entries.length + ')' : b.textContent;
         b.addEventListener('click', async function () {
           b.disabled = true;
-          const shared = await C.subKey(secret, id, 'adds'), table = el('table', null, 'adds');
+          const shared = await C.subKey(secret, id, 'adds'), table = el('table', null, 'adds'), dh = await docHash();
           for (const e of s.entries) {
             const got = C.unpack(await C.openWith(shared, id, await St.bytes('POST', '/files/' + id + '/adds/' + e.entry, { auth: C.b64u(keys.auth) })));
-            const tr = el('tr'), td = el('td'); tr.append(el('th', '#' + e.entry + ' · ' + St.when(e.received_at) + (e.changes ? ' · changed ' + e.changes + '×' : '')));
-            Object.keys(got.obj.answers || {}).forEach(function (k) { td.append(el('div', k + ': ' + got.obj.answers[k])); });
-            if (got.obj.file) { const sv = el('button', 'Save ' + got.obj.file.name, 'btn btn-sm'); sv.type = 'button'; sv.addEventListener('click', function () { St.download(got.obj.file.name, new Blob([got.file], { type: got.obj.file.type })); }); td.append(sv); }
-            tr.append(td); table.append(tr);
+            const tr = el('tr'); tr.append(el('th', '#' + e.entry + ' · ' + St.when(e.received_at) + (e.changes ? ' · changed ' + e.changes + '×' : '')), await St.entryCell(id, got, dh));
+            table.append(tr);
           }
           $('co-all').textContent = ''; $('co-all').append(table);
         });
         $('co-all').append(b);
+        if (form.sign) b.click();
       }
       return s;
     }
     $('co-form').onsubmit = async function (ev) {
       ev.preventDefault();
-      const answers = {}; form.fields.forEach(function (q, i) { answers[q] = inputs[i].value.trim(); });
-      const file = form.file && $('co-file').files[0];
-      if (!file && !Object.keys(answers).some(function (k) { return answers[k]; })) { $('co-msg').textContent = 'Fill in at least one answer.'; return; }
-      if (file && file.size > 4000000) { $('co-msg').textContent = 'The attached file is larger than 4 MB.'; return; }
+      const answers = {}; let missing = '';
+      fields.forEach(function (q, i) { answers[q.q] = String(inputs[i].value).trim(); if (q.req && !answers[q.q] && !missing) missing = q.q; });
+      const files = maxFiles ? Array.prototype.slice.call($('co-file').files) : [];
+      function stop(t) { $('co-msg').textContent = t; $('co-msg').classList.add('error'); }
+      if (missing) return stop('"' + missing + '" is required.');
+      if (!files.length && !form.sign && !Object.keys(answers).some(function (k) { return answers[k]; })) return stop('Fill in at least one answer.');
+      if (files.length > maxFiles) return stop('At most ' + maxFiles + (maxFiles === 1 ? ' file.' : ' files.'));
+      if (files.reduce(function (n, f) { return n + f.size; }, 0) > 4000000) return stop('The attached files are larger than 4 MB together.');
+      if (form.sign && !$('co-agree').checked) return stop('Tick the box to say you have read it and agree.');
       $('co-go').disabled = true; $('co-msg').classList.remove('error'); $('co-msg').textContent = 'Sealing on this device…';
       try {
-        const packed = C.pack({ answers: answers, file: file ? { name: file.name, type: file.type || 'application/octet-stream' } : null }, file ? new Uint8Array(await file.arrayBuffer()) : null);
+        const obj = { answers: answers, files: files.map(function (f) { return { name: f.name, type: f.type || 'application/octet-stream', size: f.size }; }) };
+        if (form.sign) {                                   // a signature by this device's key over the exact document and the signer's name
+          const name = answers[fields[0].q], doc = await docHash(), g = await C.signRequest(d.device, 'sign:' + doc + ':' + C.b64u(new TextEncoder().encode(name)), id);
+          obj.sign = { name: name, doc: doc, ts: g.ts, sig: g.sig, pub: d.pub };
+        }
+        const bufs = []; for (const f of files) bufs.push(new Uint8Array(await f.arrayBuffer()));
+        const packed = C.pack(obj, bufs.length ? C.concat.apply(null, bufs) : null);
         const sealed = form.pub ? await C.sealTo(C.unb64u(form.pub), id, packed) : await C.sealWith(await C.subKey(secret, id, 'adds'), id, packed);
         const sig = await C.signRequest(d.device, 'add', id);
         const r = await fetch(St.BASE + '/send/api/files/' + id + '/adds', { method: 'PUT', body: sealed, credentials: 'omit', headers: { 'X-Innernet': '1', 'Content-Type': 'application/octet-stream',
@@ -398,6 +426,7 @@
       $('co-go').disabled = false;
     };
     $('collect').hidden = false;
+    afterOpen = function () { paint().catch(function () {}); };
     const s = await paint();
     if (!s.revealed && (info.open_after || s.reveal_count)) setInterval(function () { paint().catch(function () {}); }, 10000);
   }

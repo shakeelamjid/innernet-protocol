@@ -53,6 +53,26 @@
     if (pay) m.pay = { mode: $('o-pay-mode').value, price: $('o-pay-price').value, to: $('o-pay-to').value.trim(), buyers: Math.max(1, parseInt($('o-pay-buyers').value, 10) || 1), target: $('o-pay-target').value, period_days: Math.max(1, parseInt($('o-pay-period').value, 10) || 30) };
     return m;
   }
+  /* The form others fill in: a list of questions, each with a kind of answer. */
+  const KINDS = [['text', 'Short text'], ['long', 'Long text'], ['number', 'Number'], ['date', 'Date'], ['choice', 'Choice from a list'], ['yes', 'Yes or no']];
+  function addRow(f) {
+    f = typeof f === 'string' ? { q: f } : (f || {});
+    const row = el('div', null, 'formrow'), q = el('input', null, 'field'), k = el('select', null, 'field'), opts = el('input', null, 'field'), req = el('label', null, 'check'), box = el('input'), rm = el('button', 'Remove', 'btn btn-sm');
+    q.placeholder = 'Question'; q.value = f.q || ''; q.maxLength = 80; q.setAttribute('aria-label', 'Question');
+    KINDS.forEach(function (x) { const o = el('option', x[1]); o.value = x[0]; k.append(o); }); k.value = f.type || 'text'; k.setAttribute('aria-label', 'Kind of answer');
+    opts.placeholder = 'Choices, separated by commas'; opts.value = (f.opts || []).join(', '); opts.hidden = k.value !== 'choice';
+    box.type = 'checkbox'; box.checked = !!f.req; req.append(box, document.createTextNode(' required')); rm.type = 'button';
+    k.addEventListener('change', function () { opts.hidden = k.value !== 'choice'; });
+    rm.addEventListener('click', function () { row.remove(); });
+    row.append(q, k, req, rm, opts); $('o-form').append(row);
+  }
+  function setFields(list) { $('o-form').textContent = ''; list.forEach(addRow); }
+  function formRows() {
+    return Array.prototype.map.call($('o-form').children, function (r) {
+      const i = r.querySelectorAll('input.field'), type = r.querySelector('select').value;
+      return { q: i[0].value.trim(), type: type, req: r.querySelector('input[type=checkbox]').checked, opts: type === 'choice' ? i[1].value.split(',').map(function (t) { return t.trim(); }).filter(Boolean) : [] };
+    }).filter(function (f) { return f.q; }).slice(0, 20);
+  }
   function names() { return $('o-names').value.split(/\n|,/).map(function (t) { return t.trim().slice(0, 40); }).filter(Boolean).slice(0, 20); }
   function opts() {
     const many = $('o-many').checked;
@@ -107,6 +127,12 @@
     $('named-box').hidden = lock() !== 'named';
     $('o-pay-target-box').hidden = $('o-pay-mode').value !== 'crowd'; $('o-pay-period-box').hidden = $('o-pay-mode').value !== 'period';
     $('o-pay-price-l').textContent = $('o-pay-mode').value === 'crowd' ? 'at least, per person' : $('o-pay-mode').value === 'period' ? 'per reader, per period' : 'per reader';
+    (function () {
+      const mode = $('o-pay-mode').value, price = Number($('o-pay-price').value) || 0, n = Math.max(1, parseInt($('o-pay-buyers').value, 10) || 1), bps = (lim.paid.listing_bps || 500) / 10000;
+      const take = mode === 'crowd' ? Number($('o-pay-target').value) || 0 : price * n, fee = Math.max(0.1, take * bps);
+      $('o-pay-fee').textContent = (mode === 'crowd' ? 'Target ' + take.toFixed(2) + ' USDC, all of it paid to your address.' : price.toFixed(2) + ' USDC × up to ' + n + ' readers = up to ' + take.toFixed(2) + ' USDC, all of it paid to your address.') +
+        ' INNERNET fee: ' + (bps * 100) + '% of that = ' + fee.toFixed(2) + ' USDC, paid by you now with this send. Readers pay only the price.';
+    })();
     $('o-split').checked = lock() === 'keys';
     $('keys-box').hidden = !$('o-split').checked;
     if ($('o-split').checked) $('o-forward').checked = false;
@@ -154,6 +180,7 @@
     ['seal', 'Certificate that cannot be faked', 'A printed QR opens the original, with a signed record and your domain.'],
     ['first', 'First to open wins', 'Sent to many, opens for one.'],
     ['custody', 'Evidence or sample custody', 'Handed from person to person, every hand recorded.'],
+    ['sign', 'Sign a contract', 'Each party reads it, signs with their own key, and everyone gets a signed record.'],
     ['year', 'Keep it a year', 'Long storage with take-back and a read receipt.']];
   function recipe(name) {
     const now = Math.floor(Date.now() / 1000);
@@ -181,7 +208,15 @@
     if (name === 'feed') { pickTerm(365); lockIs('open'); tick('o-pay', 'o-versions', 'o-summary'); $('o-pay-mode').value = 'period'; $('o-versions-n').value = 12; }
     if (name === 'seal') { pickTerm(365); lockIs('open'); tick('o-qr', 'o-record', 'o-origin', 'o-viewonly'); }
     if (name === 'first') { lockIs('open'); }
+    if (name === 'sign') { pickTerm(90); lockIs('open'); tick('o-collect', 'o-record', 'o-sign'); $('o-audience').value = 'all'; $('o-anon').checked = false; $('o-attach').checked = false; $('o-seats').value = 2; $('o-reveal').value = 0; $('o-fields').value = 'Full name\nTitle or company'; }
     if (name === 'custody') { pickTerm(90); tick('o-chain', 'o-record', 'o-receipt'); }
+    if ($('o-collect').checked) {                          // the preset's questions become the form
+      const typed = { tender: [{ q: 'Company', req: true }, { q: 'Price', type: 'number', req: true }, { q: 'Delivery in days', type: 'number' }, { q: 'Remarks', type: 'long' }],
+        vote: [{ q: 'Your answer', type: 'choice', opts: ['Yes', 'No', 'Abstain'], req: true }], sign: [{ q: 'Full name', req: true }, { q: 'Title or company' }] };
+      setFields(typed[name] || lines('o-fields', 12)); $('o-files').value = $('o-attach').checked ? '1' : '0';
+    }
+    if (name !== 'sign') $('o-sign').checked = false;
+    document.querySelectorAll('#recipes .use').forEach(function (b) { b.classList.toggle('on', b.dataset.r === name); });
     tidy(); requote();
   }
 
@@ -219,7 +254,8 @@
     $('pay-amount').textContent = St.usdc(pay.amount); $('pay-exact').textContent = pay.amount;
     $('pay-net').textContent = pay.network_name; $('pay-net2').textContent = pay.network_name;
     $('pay-to').textContent = pay.to; $('pay-by').textContent = St.when(pay.pay_by);
-    $('pay-wallet').hidden = !window.ethereum; $('pay-wallet').disabled = false;
+    $('pay-wallet').hidden = !window.ethereum; $('pay-wallet').disabled = false; $('pay-tx').value = '';
+    St.payWays($('pay-qr'), $('pay-open'), pay);
     say('pay-msg', 'Waiting for the payment…');
     return new Promise(function (ok, bad) {
       let tx = null, stopped = false, t = null;
@@ -227,7 +263,8 @@
       async function look() {
         if (stopped) return;
         try {
-          const r = await act(id, 'pay', tx ? { tx: tx } : {});
+          const typed = $('pay-tx').value.trim().toLowerCase(), use = tx || (/^0x[0-9a-f]{64}$/.test(typed) ? typed : null);
+          const r = await act(id, 'pay', use ? { tx: use } : {});
           if (r.paid) return finish(ok, r);
           if (Date.now() / 1000 > pay.pay_by + 600) return finish(bad, new Error('the price was not paid in time; nothing was sent'));
         } catch (e) { if (e.status === 410 || e.status === 422) return finish(bad, e); say('pay-msg', e.message); }
@@ -235,6 +272,7 @@
       }
       stopPay = function () { finish(bad, new Error('cancelled; nothing was sent')); };
       $('pay-cancel').onclick = stopPay;
+      $('pay-check').onclick = function () { if (!/^0x[0-9a-fA-F]{64}$/.test($('pay-tx').value.trim())) return say('pay-msg', 'A transaction hash is 0x followed by 64 characters.', true); say('pay-msg', 'Checking that transaction on the chain…'); clearTimeout(t); look(); };
       $('pay-wallet').onclick = async function () {
         $('pay-wallet').disabled = true;
         try {
@@ -331,14 +369,14 @@
       const box = o.collect.audience === 'owner' ? await St.boxKey(id, true) : null;
       const pub = box ? C.b64u(new Uint8Array(await crypto.subtle.exportKey('raw', box.publicKey))) : null;
       o.collect = Object.assign({}, o.collect, { pub: pub, form: await C.sealSmall(keys.preview, id, 'form',
-        { fields: lines('o-fields', 12), file: $('o-attach').checked, anon: o.collect.anon, pub: pub }) });
+        { fields: formRows(), files: Number($('o-files').value) || 0, sign: $('o-sign').checked, anon: o.collect.anon, pub: pub }) });
     }
     const made = await (await St.api('POST', '/files', Object.assign({
       id: id, kind: c.kind, size: c.size + parts * C.TAG, parts: parts, auth_hash: keys.authHash, pin_tag: await C.pinTag(keys, pin),
       owner_pub: await C.publicRaw(device), keeper_share: C.b64u(share),
       preview: await C.sealSmall(keys.preview, id, 'preview', { from: from, note: $('note').value.trim() }),
       meta: await C.sealSmall(contentKey, id, 'meta', { name: c.name, type: c.type, size: c.size, kind: c.kind, mark: from,
-        view_only: ex.view_only || 0, view_secs: ex.view_secs || 0, presence: ex.presence || 0, card: ex.card || '' })
+        rich: c.kind === 'note' && $('o-rich').checked ? 1 : 0, view_only: ex.view_only || 0, view_secs: ex.view_secs || 0, presence: ex.presence || 0, card: ex.card || '' })
     }, o))).json();
     const link = base + C.b64u(secret) + (ex.pin_in_link ? '.' + pin : '');
     if (ex.origin) art.origin = { domain: ex.origin, line: await C.publicRaw(device) };
@@ -424,9 +462,7 @@
       const d = await St.deviceKey(), blob = await St.bytes('POST', '/files/' + rec.id + '/adds/' + e.entry, await C.signRequest(d, 'adds', rec.id));
       const got = C.unpack(box ? await C.openFrom(box, rec.id, blob) : await C.openWith(shared, rec.id, blob));
       const tr = el('tr'); tr.append(el('th', '#' + e.entry + ' · ' + St.when(e.received_at) + (e.changes ? ' · changed ' + e.changes + '×' : '')));
-      const td = el('td');
-      Object.keys(got.obj.answers || {}).forEach(function (k) { td.append(el('div', k + ': ' + got.obj.answers[k])); });
-      if (got.obj.file) { const b = el('button', 'Save ' + got.obj.file.name, 'btn btn-sm'); b.type = 'button'; b.addEventListener('click', function () { St.download(got.obj.file.name, new Blob([got.file], { type: got.obj.file.type })); }); td.append(b); }
+      const td = await St.entryCell(rec.id, got, null);
       tr.append(td); table.append(tr);
     }
     const old = into.parentNode.querySelector('table.adds'); if (old) old.remove();
@@ -570,6 +606,8 @@
         if (!$('from').value.trim()) return say('msg', 'Add your name, so the receiver knows who it is from.', true), false;
       }
       if ($('o-split').checked && names().length < 2) return say('msg', 'Split custody needs at least 2 names.', true), false;
+      if (at >= 1 && on('o-pay') && !/^0x[0-9a-fA-F]{40}$/.test($('o-pay-to').value.trim())) return say('msg', 'Add your receiving address for the payment lock (0x and 40 characters).', true), false;
+      if (at >= 1 && lock() === 'named' && lines('o-rnames', 20).length < 1) return say('msg', 'Name at least one person who gets a PIN.', true), false;
       if (quoted.error) return say('msg', quoted.error, true), false;
       say('msg', ''); return true;
     }
@@ -649,7 +687,11 @@
         renderSent();
       } catch (e) { say('msg', 'That is not a backup file.', true); }
     });
+    setFields(['Your name', 'Remarks']);
+    $('o-form-add').addEventListener('click', function () { addRow({}); });
     wizard();
+    const use = new URLSearchParams(location.search).get('use');
+    if (use && USES.some(function (u) { return u[0] === use; })) { recipe(use); say('msg', 'Started from “' + USES.filter(function (u) { return u[0] === use; })[0][1] + '”. Add what you are sending, then go through the steps.'); }
     $('recipes').addEventListener('click', function (e) { const b = e.target.closest('button'); if (b) recipe(b.dataset.r); });
     if (!lim.paid.on) $('recipes').querySelectorAll('button').forEach(function (b) { b.disabled = ['burn', 'first'].indexOf(b.dataset.r) < 0; });
     $('again').addEventListener('click', function () {

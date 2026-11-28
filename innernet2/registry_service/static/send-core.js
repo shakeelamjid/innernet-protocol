@@ -91,6 +91,38 @@
     return { ts: ts, sig: b64u(sig) };
   }
 
+  async function verifyRequest(pubRaw, action, id, ts, sig) {
+    try {
+      const key = await S.importKey('raw', unb64u(pubRaw), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify']);
+      return await S.verify({ name: 'ECDSA', hash: 'SHA-256' }, key, unb64u(sig), enc.encode(DOMAIN + '/' + action + '\n' + id + '\n' + ts));
+    } catch (e) { return false; }
+  }
+  /* Formatted text without HTML: "# heading", "- item", "**bold**", "*italic*", bare links, "---".
+     It is turned into page elements one by one, so nothing a sender writes can become markup or script. */
+  function rich(text, doc) {
+    const root = doc.createElement('div'); let list = null;
+    function inline(parent, line) {
+      line.split(/(\*\*[^*]+\*\*|\*[^*]+\*|https:\/\/[^\s<>"]+)/).forEach(function (bit) {
+        if (!bit) return;
+        let n;
+        if (/^\*\*[^*]+\*\*$/.test(bit)) { n = doc.createElement('strong'); n.textContent = bit.slice(2, -2); }
+        else if (/^\*[^*]+\*$/.test(bit)) { n = doc.createElement('em'); n.textContent = bit.slice(1, -1); }
+        else if (/^https:\/\//.test(bit)) { n = doc.createElement('a'); n.textContent = bit; n.href = bit; n.rel = 'noopener noreferrer'; n.target = '_blank'; }
+        else n = doc.createTextNode(bit);
+        parent.appendChild(n);
+      });
+    }
+    String(text).split(/\r?\n/).forEach(function (line) {
+      const h = line.match(/^(#{1,3})\s+(.*)$/), li = line.match(/^[-*]\s+(.*)$/);
+      if (li) { if (!list) { list = doc.createElement('ul'); root.appendChild(list); } const it = doc.createElement('li'); inline(it, li[1]); list.appendChild(it); return; }
+      list = null;
+      if (h) { const e = doc.createElement('h' + (h[1].length + 2)); inline(e, h[2]); root.appendChild(e); }
+      else if (/^-{3,}$/.test(line.trim())) root.appendChild(doc.createElement('hr'));
+      else if (line.trim()) { const e = doc.createElement('p'); inline(e, line); root.appendChild(e); }
+    });
+    return root;
+  }
+
   /* Split custody (Shamir, GF(2^8)): a secret cut into n parts, any k of which rebuild it; fewer than k
      reveal nothing. Done here, on the sender's device; no server ever sees a part. */
   const EXP = new Uint8Array(510), LOG = new Uint8Array(256);
@@ -182,7 +214,7 @@
     return { obj: JSON.parse(dec.decode(bytes.subarray(4, 4 + n))), file: bytes.subarray(4 + n) };
   }
 
-  return { aesKey: aes, wrapKey: wrapKey, unwrapKey: unwrapKey, subKey: subKey, sealWith: sealWith, openWith: openWith, newBoxKey: newBoxKey,
+  return { verifyRequest: verifyRequest, rich: rich, aesKey: aes, wrapKey: wrapKey, unwrapKey: unwrapKey, subKey: subKey, sealWith: sealWith, openWith: openWith, newBoxKey: newBoxKey,
     sealTo: sealTo, openFrom: openFrom, pack: pack, unpack: unpack, concat: concat,
     room: room, sha256hex: sha256hex, jointPin: jointPin, jointLink: jointLink, parseJoint: parseJoint, split: split, combine: combine, parsePart: parsePart, PART: PART, TAG: TAG, b64u: b64u, unb64u: unb64u, hex: hex, random: random, newPin: newPin, linkKeys: linkKeys, pinTag: pinTag,
     fileKey: fileKey, sealSmall: sealSmall, openSmall: openSmall, partCount: partCount, sealPart: sealPart, openPart: openPart,

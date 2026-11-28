@@ -121,7 +121,32 @@
     setTimeout(function () { URL.revokeObjectURL(a.href); }, 60000);
   }
   async function bytes(method, path, body, headers) { return new Uint8Array(await (await api(method, path, body, headers)).arrayBuffer()); }
-  window.InnernetSendStore = { boxKey: boxKey, download: download, bytes: bytes,
+  /* One contribution, shown: the answers, a signature (checked here), and the attached files. */
+  async function entryCell(id, got, docHash) {
+    const td = document.createElement('td'), o = got.obj;
+    function line(t, cls) { const d = document.createElement('div'); d.textContent = t; if (cls) d.className = cls; td.append(d); }
+    Object.keys(o.answers || {}).forEach(function (k) { if (o.answers[k] !== '') line(k + ': ' + o.answers[k]); });
+    if (o.sign) {
+      const g = o.sign, ok = await C.verifyRequest(g.pub, 'sign:' + g.doc + ':' + C.b64u(new TextEncoder().encode(g.name)), id, g.ts, g.sig);
+      line('Signed by ' + g.name + ' on ' + when(g.ts) + '.', 'signed');
+      line(ok ? 'The signature checks' + (docHash ? (g.doc === docHash ? ', and it is over this exact document.' : ', but it is over a different document than the one open here.') : '. Open the document to compare it.') : 'THE SIGNATURE DOES NOT CHECK.', ok && (!docHash || g.doc === docHash) ? 'dim' : 'error');
+      line('Signing key ' + g.pub.slice(0, 20) + '… · document SHA-256 ' + g.doc.slice(0, 16) + '…', 'dim');
+    }
+    let off = 0;
+    (o.files || (o.file ? [Object.assign({ size: got.file.length }, o.file)] : [])).forEach(function (f) {
+      const bytes = got.file.subarray(off, off + f.size); off += f.size;
+      const b = document.createElement('button'); b.type = 'button'; b.className = 'btn btn-sm'; b.textContent = 'Save ' + f.name + ' (' + size(f.size) + ')';
+      b.addEventListener('click', function () { download(f.name, new Blob([bytes], { type: f.type })); }); td.append(b);
+    });
+    return td;
+  }
+  /* The ways to pay an exact USDC amount: a QR and a link for a phone wallet (EIP-681). */
+  function payWays(qrEl, linkEl, pay) {
+    const uri = 'ethereum:' + pay.usdc + '@' + pay.chain_id + '/transfer?address=' + pay.to + '&uint256=' + pay.micro;
+    qrEl.textContent = ''; if (window.InnernetQR) qrEl.append(window.InnernetQR.svg(uri, 150));
+    linkEl.href = uri;
+  }
+  window.InnernetSendStore = { entryCell: entryCell, payWays: payWays, boxKey: boxKey, download: download, bytes: bytes,
     BASE: BASE, api: api, put: put, usdc: usdc, steps: steps, deviceKey: deviceKey, size: size, when: when, left: left, rulesLine: rulesLine,
     sent: function () { return run('sent', 'readonly', function (s) { return s.getAll(); }); },
     remember: function (rec) { return run('sent', 'readwrite', function (s) { return s.put(rec, rec.id); }); },

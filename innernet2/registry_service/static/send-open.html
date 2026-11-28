@@ -9,6 +9,7 @@
   <link rel="stylesheet" href="../../static/registry.css">
   <script src="../../static/send-core.js" defer></script>
   <script src="../../static/send-store.js" defer></script>
+  <script src="../../static/send-qr.js" defer></script>
   <script src="../../static/wallet.js" defer></script>
   <script src="../../static/send-open.js" defer></script>
 </head>
@@ -62,7 +63,15 @@
             <div class="copyable"><code id="buy-exact" class="big"></code><button class="btn btn-sm" type="button" data-copy="buy-exact">Copy</button></div>
             <label class="label">To the sender's address</label>
             <div class="copyable"><code id="buy-to"></code><button class="btn btn-sm" type="button" data-copy="buy-to">Copy</button></div>
-            <div class="actions"><button class="btn btn-light" id="buy-wallet" type="button">Pay with the wallet in this browser</button></div>
+            <div class="payways">
+              <div><div class="qr" id="buy-qr"></div><a class="btn btn-sm" id="buy-open">Open in a wallet app</a><p class="note">Scan with a phone wallet, or tap on a phone.</p></div>
+              <div>
+                <button class="btn btn-light" id="buy-wallet" type="button">Pay with the wallet in this browser</button>
+                <label class="label" for="buy-tx">Paid another way? Paste the transaction hash</label>
+                <input id="buy-tx" class="field" placeholder="0x…" autocomplete="off" spellcheck="false">
+                <div class="actions"><button class="btn" id="buy-check" type="button">Check this transaction</button></div>
+              </div>
+            </div>
           </div>
           <p class="msg" id="buy-msg" role="status"></p>
           <p class="note">The payment goes straight to the sender. Keep this page open until it is seen on the chain.</p>
@@ -109,7 +118,8 @@
         <p id="co-text"></p>
         <form id="co-form" novalidate>
           <div id="co-fields"></div>
-          <div id="co-file-box" hidden><label class="label" for="co-file">Attach one file (up to 4 MB)</label><input id="co-file" class="field file-field" type="file"></div>
+          <div id="co-file-box" hidden><label class="label" for="co-file" id="co-file-l">Attach a file</label><input id="co-file" class="field file-field" type="file" multiple></div>
+          <label class="check" id="co-agree-box" hidden><input id="co-agree" type="checkbox"> I have read the document above and I agree to it</label>
           <div class="actions"><button class="btn btn-light" id="co-go" type="submit">Seal and add</button></div>
         </form>
         <p class="msg" id="co-msg" role="status"></p>
